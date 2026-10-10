@@ -1,12 +1,14 @@
 #!/bin/sh
-# Rede pelo cabo USB do thunder: gadget configfs com RNDIS, aparelho em 172.16.42.1.
+# Rede pelo cabo USB: gadget configfs com RNDIS, aparelho em 172.16.42.1.
 # Roda no busybox do initramfs e no rootfs. Idempotente: se o gadget ja existe (o
 # initramfs o deixa montado ao fazer switch_root), so confere o UDC e o endereco.
 #
-# RNDIS, e nao NCM: o f_ncm no MUSB do MT6833 degrada em minutos (RTT de segundos,
-# ARP cai). O TCP do aparelho para o PC so funciona com o kernel corrigido
-# (kernel/patches/fix-u-ether-linearize-tx.patch): sem ele, o u_ether manda lixo no
-# lugar do payload em fragmentos de pagina.
+# RNDIS, e nao NCM: o f_ncm no MUSB do MT6833 (xiaomi-thunder) degrada em minutos (RTT
+# de segundos, ARP cai), e RNDIS e o que o PC reconhece sem configuracao. Kernels 4.19
+# com o u_ether antigo precisam de fix-u-ether-linearize-tx.patch (devices/xiaomi-thunder):
+# sem ele, o u_ether manda lixo no lugar do payload em fragmentos de pagina.
+#
+# Identidade do aparelho (fabricante, nome) em /etc/thunder/device.
 #
 # Uso: usb-gadget up      cria/ativa o gadget e configura a interface
 #      usb-gadget ifname  imprime o nome da interface de rede
@@ -17,6 +19,10 @@ G=$CONFIGFS/usb_gadget/g1
 FUNC=rndis.usb0
 ADDR=${THUNDER_USB_ADDR:-172.16.42.1}
 MTU=${THUNDER_USB_MTU:-1500}
+DEVICE_VENDOR="Thunder OS"
+DEVICE_NAME=device
+DEVICE_CODENAME=thunder
+[ -r /etc/thunder/device ] && . /etc/thunder/device
 
 log() {
 	echo "usb-gadget: $*"
@@ -31,15 +37,15 @@ serial() {
 		androidboot.serialno=*) echo "${arg#*=}"; return ;;
 		esac
 	done
-	echo thunder
+	echo "$DEVICE_CODENAME"
 }
 
 create() {
 	mkdir -p "$G" "$G/strings/0x409" "$G/configs/c.1/strings/0x409" || return 1
 	echo 0x1d6b > "$G/idVendor"          # Linux Foundation
 	echo 0x0104 > "$G/idProduct"         # Multifunction Composite Gadget
-	echo Xiaomi > "$G/strings/0x409/manufacturer"
-	echo "Redmi 10 5G (thunder-linux)" > "$G/strings/0x409/product"
+	echo "$DEVICE_VENDOR" > "$G/strings/0x409/manufacturer"
+	echo "$DEVICE_NAME (Thunder OS)" > "$G/strings/0x409/product"
 	serial > "$G/strings/0x409/serialnumber"
 	echo "USB network" > "$G/configs/c.1/strings/0x409/configuration"
 	mkdir -p "$G/functions/$FUNC" || return 1

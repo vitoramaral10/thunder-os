@@ -575,7 +575,7 @@ CONFIG_DRM_FBDEV_EMULATION=y
 #
 # CONFIG_BT_HCIVHCI e o transporte: o driver do chip (bt_drv_6833.ko) so
 # entrega um chardev, nao um hci_dev, entao um daemon em espaco de usuario faz
-# a ponte /dev/stpbt <-> /dev/vhci. Ver device-scripts/stpbt-vhci-bridge.py.
+# a ponte /dev/stpbt <-> /dev/vhci. Ver devices/xiaomi-thunder/bluetooth/stpbt-vhci-bridge.py.
 #
 # As dependencias de crypto (CMAC, ECDH, SHA256, ECB) sao 'select' do
 # CONFIG_BT no Kconfig e o olddefconfig as resolve sozinho.

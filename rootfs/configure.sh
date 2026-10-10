@@ -1,12 +1,12 @@
 #!/bin/bash
-# Configura o rootfs do Arch para o thunder. Roda DENTRO do chroot (tools/achroot.sh),
-# com o overlay, os pacotes, os modulos, o firmware e config ja copiados para
+# Configura o rootfs do Arch para o aparelho. Roda DENTRO do chroot (tools/achroot.sh),
+# com os overlays, os pacotes, os modulos, o firmware e config ja copiados para
 # /root/thunder-stage por tools/build-rootfs.sh. Idempotente.
 set -euo pipefail
 S=/root/thunder-stage
-KVER=4.19.191-perf
 pac() { pacman --noconfirm --needed --disable-sandbox "$@"; }
-. "$S/config"   # THUNDER_USER, THUNDER_PASSWORD
+# DEVICE*, KVER, THUNDER_{USER,PASSWORD,LOCALE,TIMEZONE,HOSTNAME}, DEVICE_{PACKAGES,SERVICES}
+. "$S/config"
 
 # OpenRC no lugar do systemd como PID 1 (substitui o systemd-sysvcompat; o pacote
 # systemd fica instalado e inerte porque o pacman depende dele).
@@ -15,12 +15,21 @@ pacman -U --noconfirm --ask 4 --disable-sandbox "$S"/packages/openrc-*.pkg.tar.*
 # Pacotes: busybox estatico (udhcpd, telnetd, initramfs), sudo, inetutils (hostname,
 # que o servico hostname do OpenRC chama).
 pac -S busybox sudo inetutils
+[ ${#DEVICE_PACKAGES[@]} -eq 0 ] || pac -S "${DEVICE_PACKAGES[@]}"
 
 # pacman no aparelho: o 4.19 nao tem Landlock.
 sed -i 's/^#DisableSandboxFilesystem/DisableSandboxFilesystem/' /etc/pacman.conf
 
-# Overlay (servicos, gadget USB, scripts de boot, fstab, hostname).
+# Overlay do nucleo (servicos, gadget USB, scripts de boot, fstab) e o do aparelho por
+# cima.
 cp -a "$S/overlay/." /
+[ ! -d "$S/device-overlay" ] || cp -a "$S/device-overlay/." /
+
+# Identidade do aparelho, lida pelo initramfs e pelo usb-gadget (busybox sh).
+mkdir -p /etc/thunder
+grep -E '^DEVICE(|_NAME|_VENDOR|_CODENAME)=' "$S/config" > /etc/thunder/device
+echo "$THUNDER_HOSTNAME" > /etc/hostname
+echo "hostname=\"$THUNDER_HOSTNAME\"" > /etc/conf.d/hostname
 
 # Modulos do kernel e firmware do aparelho.
 rm -rf "/usr/lib/modules/$KVER"
@@ -42,10 +51,14 @@ done
 chown -R "$THUNDER_USER:$THUNDER_USER" "/home/$THUNDER_USER/.ssh"
 
 # Locale, fuso, machine-id.
-sed -i 's/^#\(pt_BR.UTF-8 UTF-8\)/\1/; s/^#\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+for l in en_US.UTF-8 "$THUNDER_LOCALE"; do
+	grep -q "^#\?$l " /etc/locale.gen || { echo "locale desconhecido: $l" >&2; exit 1; }
+	sed -i "s/^#\($l \)/\1/" /etc/locale.gen
+done
 locale-gen
-echo 'LANG=pt_BR.UTF-8' > /etc/locale.conf
-ln -sf /usr/share/zoneinfo/America/Sao_Paulo /etc/localtime
+echo "LANG=$THUNDER_LOCALE" > /etc/locale.conf
+[ -f "/usr/share/zoneinfo/$THUNDER_TIMEZONE" ] || { echo "fuso desconhecido: $THUNDER_TIMEZONE" >&2; exit 1; }
+ln -sf "/usr/share/zoneinfo/$THUNDER_TIMEZONE" /etc/localtime
 [ -s /etc/machine-id ] || dbus-uuidgen > /etc/machine-id
 
 # OpenRC: log do boot em /var/log/rc.log; runlevels.
@@ -55,6 +68,6 @@ sed -i 's/^#\?rc_logger=.*/rc_logger="YES"/' /etc/rc.conf
 rc-update del dmesg sysinit 2>/dev/null || true
 for s in binfmt network staticroute; do rc-update del "$s" boot 2>/dev/null || true; done
 rc-update del netmount default 2>/dev/null || true
-for s in usb-network telnet-usb sshd touchscreen-wake local; do rc-update add "$s" default; done
+for s in usb-network telnet-usb sshd local "${DEVICE_SERVICES[@]}"; do rc-update add "$s" default; done
 
 rc-update show -v | grep -v '^ *[a-z-]* *|$' || true

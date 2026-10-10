@@ -29,7 +29,7 @@ image must load it explicitly through `modules-load` or an OpenRC service.
 
 ## What the backport consists of
 
-`kernel/patches/add-drm-panfrost-mt6833.patch` adds `drivers/gpu/drm/panfrost` as a module:
+`devices/xiaomi-thunder/patches/add-drm-panfrost-mt6833.patch` adds `drivers/gpu/drm/panfrost` as a module:
 
 - **panfrost from Linux 5.15.194**, with the G57 feature and errata tables and
   the reset, power sequencing and MMU lock-region fixes from 6.12. `GPU_ID`
@@ -62,7 +62,7 @@ Each of these looked like a panfrost problem and was a 4.19 difference:
    a non-master `card0` fd. 4.19 demands authentication for that, so a regular
    user gets `EACCES`. Root passes, because 4.19 authenticates
    `CAP_SYS_ADMIN` automatically, which hid the problem in every test run as
-   root. `kernel/patches/backport-drm-prime-ioctls-no-auth.patch` removes the flag as Linux 5.2
+   root. `devices/xiaomi-thunder/patches/backport-drm-prime-ioctls-no-auth.patch` removes the flag as Linux 5.2
    did.
 3. **Heap BOs have sparse page arrays.** 4.19's `drm_gem_put_pages` does not
    skip `NULL` pages, so freeing a heap BO oopsed.
@@ -74,7 +74,7 @@ Each of these looked like a panfrost problem and was a 4.19 difference:
 5. **The IRQs are named in capitals** (`"GPU"`, `"MMU"`, `"JOB"`) in the vendor
    device tree; panfrost asks for lowercase names.
 6. **`devfreq`'s `trans_stat` overflows a page** with gpufreq's 34 OPPs and
-   oopses on `cat`. `kernel/patches/fix-devfreq-trans-stat-overflow.patch` bounds it, and the
+   oopses on `cat`. `devices/xiaomi-thunder/patches/fix-devfreq-trans-stat-overflow.patch` bounds it, and the
    driver registers 12 of the 34 OPPs.
 7. **The 5.15 file operations use the core `drm_gem_mmap`**, which on 4.19
    leaves the VMA `PFNMAP` and never reaches the helper, so the first page

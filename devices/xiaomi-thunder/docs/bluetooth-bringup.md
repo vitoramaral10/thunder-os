@@ -11,7 +11,7 @@ independent places.
 
 **Status under Arch Linux ARM.** Every result here was measured on this kernel
 with the previous userland. The Arch image boots, but the services in
-`device/init.d/` are not yet installed or enabled in the
+`devices/xiaomi-thunder/init.d/` are not yet installed or enabled in the
 Arch image (they also need python3).
 
 ## Two holes, and neither is the chip
@@ -56,8 +56,8 @@ exposes `/dev/stpbt`.
 It is added to the connectivity drop as `bt_drv/` with a Makefile written for
 this tree (the upstream one points at `vendor/mediatek/kernel_modules` paths
 that do not exist here). It ships inside
-`kernel/connectivity/mtk-connectivity-gen4m-mt6833-2.tar.gz` and is grafted by
-`kernel/build.sh` (see [kernel.md](kernel.md#connectivity-graft)).
+`devices/xiaomi-thunder/connectivity/mtk-connectivity-gen4m-mt6833-2.tar.gz` and is grafted by
+`tools/build-kernel.sh` (see [kernel.md](kernel.md#connectivity-graft)).
 
 ## Why there is a userspace bridge
 
@@ -71,8 +71,8 @@ Searching the whole `bt/` tree for `hci_register_dev` finds it only in the
 `btmtk_main.c` of the conninfra-based variants.
 
 So the link is made in userspace, with the kernel's own `hci_vhci`:
-`device/bluetooth/stpbt-vhci-bridge.py` creates a virtual controller and shuttles
-packets both ways. `kernel/config-thunder.aarch64` sets `CONFIG_BT_HCIVHCI=y` for it.
+`devices/xiaomi-thunder/bluetooth/stpbt-vhci-bridge.py` creates a virtual controller and shuttles
+packets both ways. `devices/xiaomi-thunder/kernel-config` sets `CONFIG_BT_HCIVHCI=y` for it.
 
 ### The framing mismatch
 
@@ -157,7 +157,7 @@ bridge waits in `select()` and only calls `read()` when data is already there.
 A self-pipe joins the same `select()` for shutdown, which removed the threads
 entirely — one loop that can always exit and close its descriptors in order.
 
-This is also why the OpenRC service (`device/init.d/bluetooth-thunder`) sets `retry="SIGTERM/20"`: a `SIGKILL` would
+This is also why the OpenRC service (`devices/xiaomi-thunder/init.d/bluetooth-thunder`) sets `retry="SIGTERM/20"`: a `SIGKILL` would
 recreate the problem.
 
 ### 3. The address was MediaTek's placeholder
@@ -174,7 +174,7 @@ stored makes the controller report a different address; sending them reversed
 makes `Read_BD_ADDR` return exactly what is in nvram. HCI carries `BD_ADDR`
 least-significant byte first, while nvram stores display order.
 
-The `device/init.d/bluetooth-thunder` service extracts six bytes into `/lib/firmware/bt_addr.bin` on
+The `devices/xiaomi-thunder/init.d/bluetooth-thunder` service extracts six bytes into `/lib/firmware/bt_addr.bin` on
 first start (mounting `nvdata` **read-only**, always), and the bridge writes it
 with the MediaTek vendor command `0xFC1A`, then reads it back to confirm. It
 survives the `HCI_Reset` the kernel issues during init.

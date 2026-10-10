@@ -1,15 +1,15 @@
 # Kernel
 
 The kernel is Xiaomi's vendor 4.19.191 for the MT6833 (MiCode/Xiaomi_Kernel_OpenSource
-at commit `a40ceab8943703f33e935cb0b86d0f69aa2044dd`), built by `kernel/build.sh`.
+at commit `a40ceab8943703f33e935cb0b86d0f69aa2044dd`), built by `tools/build-kernel.sh`.
 This page catalogues what we change on top of it and why, and lists the kernel
 properties the userland has to live with. Revision numbers (`rNN`) are the kernel
 revisions in which a change first shipped.
 
 Build steps, in order: fetch and verify the tarball (sha512), graft the MediaTek
-connectivity drop, apply `kernel/patches/series` in order, strip `-Werror` from every
-Makefile/Kbuild, `oldconfig` from `kernel/config-thunder.aarch64`, cross-build with
-`aarch64-linux-gnu-`. Output goes to `build/kernel`: `boot/vmlinuz` (Image.gz),
+connectivity drop, apply `devices/xiaomi-thunder/patches/series` in order, strip `-Werror` from every
+Makefile/Kbuild, `oldconfig` from `devices/xiaomi-thunder/kernel-config`, cross-build with
+`aarch64-linux-gnu-`. Output goes to `build/xiaomi-thunder/kernel`: `boot/vmlinuz` (Image.gz),
 `boot/dtbs/mediatek/mt6833.dtb`, `lib/modules/4.19.191-perf`.
 
 ## Patches, in series order
@@ -167,16 +167,16 @@ in 2.7 s.
 ## Connectivity graft
 
 The Wi-Fi, Bluetooth and WMT drivers are not in the Xiaomi tree for this SoC in a usable
-form. `kernel/build.sh` replaces five directories under
+form. `tools/build-kernel.sh` replaces five directories under
 `drivers/misc/mediatek/connectivity/` (`wmt_drv`, `wmt_chrdev_wifi`, `wlan_drv_gen4m`,
-`connfem`, `bt_drv`) with the ones from `kernel/connectivity/mtk-connectivity-gen4m-mt6833-2.tar.gz`.
+`connfem`, `bt_drv`) with the ones from `devices/xiaomi-thunder/connectivity/mtk-connectivity-gen4m-mt6833-2.tar.gz`.
 
 - `common/` has to come from the same drop. The `struct wmt_platform_bridge` layout
   changes between generations, and mixing them fails silently at runtime. The build
   copies `connectivity_build_in_adapter.{c,h}` and `wmt_build_in_adapter.{c,h}` from the
   drop's `wmt_drv` into `common/`.
 - The Makefile that ships in the Xiaomi tree hard-codes the wrong chip
-  (`MTK_COMBO_CHIP=CONNAC`, `WLAN_CHIP_ID=6765`). `kernel/connectivity/Makefile-mt6833`
+  (`MTK_COMBO_CHIP=CONNAC`, `WLAN_CHIP_ID=6765`). `devices/xiaomi-thunder/connectivity/Makefile-mt6833`
   replaces it. It is based on the connectivity Makefile of the "camellian" drop (Xiaomi's
   4.14 kernel for the real MT6833 platform), and every local change is explained in
   a comment in the file.
@@ -198,7 +198,7 @@ form. `kernel/build.sh` replaces five directories under
     names from `wlan_service/` match with `readelf -sW`), and with the service off the
     tree does not link, because nothing in the drop includes the service headers outside
     `#if CONFIG_WLAN_SERVICE == 1`.
-- `kernel/connectivity/gen4m-mt6833-kernel419.diff` is applied inside the connectivity
+- `devices/xiaomi-thunder/connectivity/gen4m-mt6833-kernel419.diff` is applied inside the connectivity
   directory (`patch -p1 -d`). It adapts the drop to this kernel: a stub for
   `wlanoidListMode` when `CONFIG_WLAN_SERVICE != 1`; local definitions for
   `NL80211_WPA_VERSION_3` and `LIST_SEG_MAX`, which this tree lacks; the pm_qos mapping

@@ -56,7 +56,7 @@ Paths vary by ROM build; `debugfs -R "ls -l /firmware"` is the way to find
 them. On some builds the connectivity files are under `/firmware/` and on
 others under `/etc/firmware/`.
 
-Put everything in one flat directory (default `build/firmware`, or any
+Put everything in one flat directory (default `build/xiaomi-thunder/firmware`, or any
 directory exported as `$FIRMWARE`).
 
 ## Calibration NVRAM (MAC address and RF calibration)
@@ -74,13 +74,13 @@ Mount it read-only and never write to it. It holds the factory RF calibration
 for this specific radio; there is no way to regenerate it if you corrupt it.
 
 The Wi-Fi file is 2050 bytes, with the MAC address at offset 4. It is consumed
-by [`device/wifi/wifi-nvram-push.py`](../device/wifi/wifi-nvram-push.py), which
+by [`devices/xiaomi-thunder/wifi/wifi-nvram-push.py`](../wifi/wifi-nvram-push.py), which
 hands it to the driver at bring-up. The push is gated behind
 `/etc/thunder-wifi-nvram` and off by default, for reasons explained in
 [wifi-bringup.md](wifi-bringup.md#the-factory-mac-solved-mechanism-unusable-in-practice).
 
 The Bluetooth address lives in the same place, at `/APCFG/APRDEB/BT_Addr`: six
-bytes, same OUI as the Wi-Fi MAC. [`device/init.d/bluetooth-thunder`](../device/init.d/bluetooth-thunder)
+bytes, same OUI as the Wi-Fi MAC. [`devices/xiaomi-thunder/init.d/bluetooth-thunder`](../init.d/bluetooth-thunder)
 extracts it into `/lib/firmware/bt_addr.bin` on first start, again with the
 partition mounted read-only, and the bridge writes it to the controller.
 
@@ -89,14 +89,14 @@ this repository.
 
 ## Installing them
 
-[`tools/build-rootfs.sh`](../tools/build-rootfs.sh) takes the files from
-`$FIRMWARE` (default `build/firmware`) and installs them in
+[`tools/build-rootfs.sh`](../../../tools/build-rootfs.sh) takes the files from
+`$FIRMWARE` (default `build/xiaomi-thunder/firmware`) and installs them in
 `/usr/lib/firmware` of the root filesystem. The touch firmware is also staged
-into the initramfs by [`tools/build-boot.sh`](../tools/build-boot.sh), from the built rootfs. See
-[building.md](building.md).
+into the initramfs by [`tools/build-boot.sh`](../../../tools/build-boot.sh), from the built rootfs. See
+[building.md](../../../docs/building.md).
 
 `request_firmware()` searches that path, and
-[`device/wifi/wmt-daemon.py`](../device/wifi/wmt-daemon.py) reads the patch
+[`devices/xiaomi-thunder/wifi/wmt-daemon.py`](../wifi/wmt-daemon.py) reads the patch
 headers from it.
 
 ## Licensing

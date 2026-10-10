@@ -1,15 +1,17 @@
 #!/bin/bash
-# Grava o Arch no thunder pelo fastboot. Sem --sim, so mostra o plano.
+# Grava o Thunder OS no aparelho pelo fastboot. Sem --sim, so mostra o plano.
 #
 #   tools/flash.sh            mostra o que seria gravado
-#   tools/flash.sh --sim      grava vbmeta (verificacao desligada), boot e userdata
+#   tools/flash.sh --sim      grava vbmeta (verificacao desligada), boot e a raiz
 #   tools/flash.sh --sim --so-boot   grava so o boot.img (troca de kernel/initramfs)
 #
-# O userdata e APAGADO. O bootloader precisa estar desbloqueado; nada aqui o trava.
+# A particao da raiz (ROOT_PARTITION, em geral userdata) e APAGADA. O bootloader precisa
+# estar desbloqueado; nada aqui o trava. Confere o produto (FASTBOOT_PRODUCTS) antes.
 set -euo pipefail
 . "$(dirname "$0")/common.sh"
+require_device
 
-out=$BUILD/out
+out=$OUT
 sim=0
 so_boot=0
 for a in "$@"; do
@@ -37,25 +39,37 @@ wait_fastboot() {
 	return 1
 }
 
+echo "Aparelho: $DEVICE_VENDOR $DEVICE_NAME ($DEVICE)"
 echo "Plano:"
-[ "$so_boot" = 1 ] || echo "  vbmeta    <- vbmeta vazio com a verificacao desligada (flags 2)"
+[ "$so_boot" = 1 ] || [ "$FASTBOOT_DISABLE_VBMETA" != 1 ] ||
+	echo "  vbmeta    <- vbmeta vazio com a verificacao desligada (flags 2)"
 echo "  boot      <- $out/boot.img ($(stat -c %s "$out/boot.img") B)"
-[ "$so_boot" = 1 ] || echo "  userdata  <- $out/userdata.img ($(stat -c %s "$out/userdata.img") B)  APAGA O USERDATA"
+[ "$so_boot" = 1 ] || echo "  $ROOT_PARTITION  <- $out/userdata.img ($(stat -c %s "$out/userdata.img") B)  APAGA A PARTICAO"
 [ "$sim" = 1 ] || { echo "Nada gravado. Rode com --sim para gravar."; exit 0; }
 
 wait_fastboot || { echo "nenhum aparelho respondendo no fastboot" >&2; exit 1; }
-[ "$(var product)" = thunder ] || { echo "produto nao e thunder: $(var product)" >&2; exit 1; }
+product=$(var product)
+ok=0
+for p in "${FASTBOOT_PRODUCTS[@]}"; do [ "$product" = "$p" ] && ok=1; done
+[ "$ok" = 1 ] || { echo "produto '$product' nao e $DEVICE (${FASTBOOT_PRODUCTS[*]})" >&2; exit 1; }
 [ "$(var unlocked)" = yes ] || { echo "bootloader travado" >&2; exit 1; }
-slot=$(var current-slot)
-[ "$slot" = a ] || { echo "slot ativo e '$slot', esperado 'a'" >&2; exit 1; }
+suffix=
+if [ "$FASTBOOT_AB" = 1 ]; then
+	slot=$(var current-slot)
+	[ -n "$slot" ] || { echo "o aparelho nao informa current-slot; FASTBOOT_AB=0?" >&2; exit 1; }
+	# FASTBOOT_SLOT fixa o slot testado; vazio aceita o ativo.
+	[ -z "$FASTBOOT_SLOT" ] || [ "$slot" = "$FASTBOOT_SLOT" ] ||
+		{ echo "slot ativo e '$slot', esperado '$FASTBOOT_SLOT'" >&2; exit 1; }
+	suffix=_$slot
+fi
 
-if [ "$so_boot" != 1 ]; then
+if [ "$so_boot" != 1 ] && [ "$FASTBOOT_DISABLE_VBMETA" = 1 ]; then
 	avbtool make_vbmeta_image --flags 2 --padding_size 2048 --output "$out/vbmeta-disabled.img"
 	# A imagem ja traz a flag 2. As opcoes --disable-verity/--disable-verification do
 	# fastboot 37 recusam esta imagem ("Failed to find AVB_MAGIC at offset: 0").
-	fastboot flash "vbmeta_$slot" "$out/vbmeta-disabled.img"
+	fastboot flash "vbmeta$suffix" "$out/vbmeta-disabled.img"
 fi
-fastboot flash "boot_$slot" "$out/boot.img"
-[ "$so_boot" = 1 ] || fastboot flash userdata "$out/userdata.img"
+fastboot flash "boot$suffix" "$out/boot.img"
+[ "$so_boot" = 1 ] || fastboot flash "$ROOT_PARTITION" "$out/userdata.img"
 fastboot reboot
 echo "Gravado. Rede pelo cabo: 172.16.42.1 (ssh, ou telnet com login)."

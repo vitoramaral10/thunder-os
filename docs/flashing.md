@@ -1,7 +1,11 @@
 # Flashing
 
-> **Flashing erases `userdata`.** Everything on the internal storage is lost.
+> **Flashing erases the root partition** (`ROOT_PARTITION` in the device's
+> `device.sh`, usually `userdata`). Everything on the internal storage is lost.
 > Back up what you care about before you start.
+
+Device-specific notes (how to reach fastboot, tested slot, recovery quirks) are
+in the device's `README.md` under [`devices/`](../devices).
 
 ## Prerequisites
 
@@ -9,47 +13,46 @@
   `fastboot getvar unlocked` is not `yes`. Nothing in this project locks the
   bootloader, and you should never lock it: with a custom kernel and
   verification off, a locked bootloader will not boot.
-- **A/B device, slot a.** The script checks that the product is `thunder` and
-  that the current slot is `a`, and aborts otherwise.
-- **Keep the factory ROM archive** (the fastboot package from Xiaomi for your
-  region). It is the way back if anything goes wrong; see
+- **The right phone.** The script checks that `fastboot getvar product` is one
+  of the device's `FASTBOOT_PRODUCTS`, and, if the device sets `FASTBOOT_SLOT`,
+  that this slot is active. It aborts otherwise.
+- **Keep the factory ROM archive** (the vendor's fastboot package for your
+  model and region). It is the way back if anything goes wrong; see
   [Full recovery](#full-recovery-to-the-factory-rom).
 - `fastboot` and `avbtool` on the host, and the images built:
-  `build/out/boot.img` (`tools/build-boot.sh`) and `build/out/userdata.img`
-  (`tools/make-userdata.sh`).
+  `build/<device>/out/boot.img` (`tools/build-boot.sh`) and
+  `build/<device>/out/userdata.img` (`tools/make-userdata.sh`).
 - Battery above 50% and a cable you trust.
 
 ## tools/flash.sh
 
 ```sh
 tools/flash.sh                    # dry run: prints the plan, writes nothing
-tools/flash.sh --sim              # writes vbmeta, boot_a and userdata
-tools/flash.sh --sim --so-boot    # writes only boot_a (kernel/initramfs change)
+tools/flash.sh --sim              # writes vbmeta, boot and the root partition
+tools/flash.sh --sim --so-boot    # writes only boot (kernel/initramfs change)
 ```
 
 Boot the phone into fastboot first (see [Getting to
 fastboot](#getting-to-fastboot)). Always run the dry run first and read the
 plan.
 
-What `--sim` writes:
+What `--sim` writes (on A/B devices, `boot` and `vbmeta` get the active slot's
+suffix, e.g. `boot_a`):
 
 | Partition | Content | Note |
 |-----------|---------|------|
-| `vbmeta_a` | empty vbmeta with flags 2 | disables verity and verification (the flag is in the image; fastboot 37 rejects this image with `--disable-verity`) |
-| `boot_a` | `build/out/boot.img` | kernel, dtb and initramfs |
-| `userdata` | `build/out/userdata.img` | **erases all user data** |
+| `vbmeta` | empty vbmeta with flags 2 | disables verity and verification (the flag is in the image; fastboot 37 rejects this image with `--disable-verity`). Skipped if the device sets `FASTBOOT_DISABLE_VBMETA=0` |
+| `boot` | `build/<device>/out/boot.img` | kernel, dtb and initramfs |
+| `ROOT_PARTITION` | `build/<device>/out/userdata.img` | **erases all user data** |
 
-With `--so-boot` only `boot_a` is written; vbmeta and userdata are left alone,
+With `--so-boot` only `boot` is written; vbmeta and the root partition are left alone,
 so the installed system and its data survive. Use it when you only changed the
 kernel or the initramfs. The script reboots the device when it finishes.
 
 ## First boot
 
-First booted on 2026-10-10: OpenRC reaches the default runlevel about 20 s
-after power-on, and `ssh` works over the cable.
-
-- **Nothing appears on the screen.** There is no text console (the
-  framebuffer console caused a bootloop), so a black screen is normal.
+- **The screen may stay black.** Thunder OS does not need a console on the
+  panel, and on some kernels it is off on purpose. Use the cable.
 - **Connect the USB cable to the host.** The phone exposes an RNDIS network
   gadget (`1d6b:0104`). The host gets `172.16.42.2` by DHCP; the phone is
   `172.16.42.1`. Measured: 50 MB in 2.7 s over ssh.
@@ -57,10 +60,10 @@ after power-on, and `ssh` works over the cable.
 - Fallback: `telnet 172.16.42.1`, which asks for a login (root or
   `THUNDER_USER`, password `THUNDER_PASSWORD`, see [building.md](building.md)).
   It is a second way in if sshd does not start.
-- The first boot grows the root filesystem to fill `userdata`, so it takes
+- The first boot grows the root filesystem to fill its partition, so it takes
   longer than later boots.
 - **Set the clock.** There is no network time yet, and the RTC may be back in
-  2009 after the battery ran flat (OpenRC then warns about clock skew). From the
+  the past after the battery ran flat (OpenRC then warns about clock skew). From the
   host: `ssh root@172.16.42.1 "date -s @$(date +%s) && hwclock --systohc"`.
 
 ## Rescue shell
@@ -81,15 +84,16 @@ touch /run/continue
 ```
 
 Other cmdline parameters the initramfs reads: `thunder.root=` (partition name,
-default `userdata`) and `thunder.init=`. Set them through `CMDLINE` in
-`tools/build-boot.sh`. The last value wins, because the bootloader prepends its own
+default: the device's `ROOT_PARTITION`) and `thunder.init=`. Add them through
+`CMDLINE_EXTRA` when running `tools/build-boot.sh`. The last value wins, because the bootloader prepends its own
 arguments, including `root=/dev/ram`.
 
 ## Getting to fastboot
 
 - From the running system: `thunder-reboot bootloader` (installed as
   `/usr/local/bin/thunder-reboot`; it uses `LINUX_REBOOT_CMD_RESTART2`).
-- From a powered-off phone: hold **volume down** while powering on.
+- From a powered-off phone: the device's key combination, in its `README.md`
+  (often **volume down** while powering on).
 
 Check with `fastboot devices`.
 
@@ -103,13 +107,15 @@ Check with `fastboot devices`.
 
 If the system does not come up at all, boot into the rescue shell with
 `thunder.debug=1`. The rescue shell mounts pstore at `/sys/fs/pstore`; the root
-filesystem is not mounted there, so mount the `userdata` partition yourself to
+filesystem is not mounted there, so mount the root partition yourself to
 read `/var/log`.
 
 ## Full recovery to the factory ROM
 
-Extract the factory fastboot package and, with the phone in fastboot, run its
-`flash_all.sh`. **Do not use `flash_all_lock.sh`**: it relocks the bootloader.
+Extract the vendor's factory fastboot package and, with the phone in
+fastboot, run its flash script. **Never use a variant that relocks the
+bootloader** (Xiaomi's `flash_all_lock.sh`, for example): with verification
+off and a locked bootloader the phone may not boot at all.
 
 The factory flash restores vbmeta with verification enabled, so the custom
 kernel will not boot afterwards. To go back to this system, run

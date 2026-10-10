@@ -5,9 +5,11 @@
 # flag F para funcionar de dentro do chroot sem copiar o binario para la.
 #
 # Uso: tools/achroot.sh [comando...]        (padrao: bash -l)
-#      ROOTFS=/outro/dir tools/achroot.sh ...
+#      ROOTFS=/outro/dir tools/achroot.sh ...   (sem ROOTFS: o rootfs de $DEVICE)
 set -euo pipefail
 . "$(dirname "$0")/common.sh"
+# ROOTFS dado pelo chamador dispensa o aparelho (o build-rootfs.sh usa no buildroot).
+[ -n "${ROOTFS:-}" ] || require_device
 export ROOTFS QEMU
 [ -x "$QEMU" ] || { echo "sem $QEMU: rode tools/build-rootfs.sh" >&2; exit 1; }
 [ $# -gt 0 ] || set -- /bin/bash -l

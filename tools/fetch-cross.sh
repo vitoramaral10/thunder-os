@@ -1,6 +1,6 @@
 #!/bin/bash
 # Toolchain de cross-compilacao aarch64 e bc, extraidos dos pacotes oficiais do Arch para
-# $BUILD/cross, sem instalar nada no sistema. Usado pelo kernel/build.sh.
+# $BUILD/cross, sem instalar nada no sistema. Usado pelo tools/build-kernel.sh.
 set -euo pipefail
 . "$(dirname "$0")/common.sh"
 

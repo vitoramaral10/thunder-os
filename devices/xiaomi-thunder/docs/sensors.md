@@ -1,14 +1,14 @@
 # Brightness and sensors: slider, automatic brightness, fade, rotation, proximity
 
-Three kernel patches on the vendor 4.19 tree, all in `kernel/patches/` and
-applied by `kernel/build.sh` in the order of `kernel/patches/series`. The "Kernel
+Three kernel patches on the vendor 4.19 tree, all in `devices/xiaomi-thunder/patches/` and
+applied by `tools/build-kernel.sh` in the order of `devices/xiaomi-thunder/patches/series`. The "Kernel
 revision" column is the kernel revision (rNN) in which the change landed.
 
 | Patch | Kernel revision | What it gives |
 |---|---|---|
-| `kernel/patches/add-mtk-lcd-backlight-class.patch` | r35 | `/sys/class/backlight/lcd-backlight`, so a desktop brightness slider works |
-| `kernel/patches/add-mtk-hf-sensors-iio.patch` | r36, r38 | the light sensor (r36), the accelerometer and the proximity sensor (r38) as IIO devices, so automatic brightness, screen rotation and blanking near the face work |
-| `kernel/patches/fix-ktd3137-brightness-fade.patch` | r38 | a ~512 ms hardware fade instead of a visible jump |
+| `devices/xiaomi-thunder/patches/add-mtk-lcd-backlight-class.patch` | r35 | `/sys/class/backlight/lcd-backlight`, so a desktop brightness slider works |
+| `devices/xiaomi-thunder/patches/add-mtk-hf-sensors-iio.patch` | r36, r38 | the light sensor (r36), the accelerometer and the proximity sensor (r38) as IIO devices, so automatic brightness, screen rotation and blanking near the face work |
+| `devices/xiaomi-thunder/patches/fix-ktd3137-brightness-fade.patch` | r38 | a ~512 ms hardware fade instead of a visible jump |
 
 These results were proven on this kernel with the previous userland. The Arch
 image boots (console and SSH only), and there is no GUI at the moment, so
@@ -28,7 +28,7 @@ for `/sys/class/backlight`, so a desktop shell had nothing to control.
 
 The patch registers a `backlight_device` of type `raw` on top of the LED. Its
 `update_status` calls `led_set_brightness_sync()`, which keeps the existing
-follow-the-panel-blank logic (`kernel/patches/fix-mtk-backlight-follow-panel-blank.patch`)
+follow-the-panel-blank logic (`devices/xiaomi-thunder/patches/fix-mtk-backlight-follow-panel-blank.patch`)
 in one place. The level is clamped to a floor of `max / 100`, so a slider
 dragged to zero, or automatic brightness in a dark room, cannot black the screen
 out. A power daemon such as `gsd-power`, or logind's `SetBrightness`, would drive it from there.
@@ -40,7 +40,7 @@ the SCP co-processor, and the only kernel-side channel is MediaTek's
 `hf_manager`, which the Android sensor HAL reads through `/dev/hf_manager`.
 Nothing on a Linux desktop speaks that.
 
-`kernel/patches/add-mtk-hf-sensors-iio.patch` adds a small in-kernel `hf_manager` client that
+`devices/xiaomi-thunder/patches/add-mtk-hf-sensors-iio.patch` adds a small in-kernel `hf_manager` client that
 publishes the lux value as an IIO device named `als` with an
 `in_illuminance_input` channel. udev tags it `iio-poll-als`, `iio-sensor-proxy`
 picks it up, and a desktop's automatic brightness switch can use it.

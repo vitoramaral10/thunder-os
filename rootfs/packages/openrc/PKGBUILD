@@ -26,7 +26,7 @@ build() {
 		--sysconfdir=/etc \
 		-Dagetty='[]' \
 		-Daudit=disabled \
-		-Dbranding='"thunder-linux"' \
+		-Dbranding='"Thunder OS"' \
 		-Dpam=true \
 		-Dpkgconfig=true \
 		-Dselinux=disabled \

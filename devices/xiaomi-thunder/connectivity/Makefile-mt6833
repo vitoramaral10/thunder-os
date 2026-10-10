@@ -107,7 +107,7 @@ endif
     # Aqui: (a) o bloco roda sempre, porque as variaveis exportadas
     # (MTK_COMBO_CHIP, WLAN_CHIP_ID, CONNAC_VER, ...) sao necessarias tanto no
     # modo modulo quanto no build-in; (b) os symlinks e os $(error) sumiram,
-    # porque a arvore e copiada para ca por kernel/build.sh;
+    # porque a arvore e copiada para ca por tools/build-kernel.sh;
     # (c) CONFIG_WLAN_DRV_BUILD_IN fica DESLIGADO de proposito -- e ele que
     # cada sub-Kbuild consulta para escolher entre obj-y e obj-m.
     # -----------------------------------------------------------------------

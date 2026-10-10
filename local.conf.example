@@ -1,0 +1,9 @@
+# Copie para local.conf (ignorado pelo Git). Linhas CHAVE=valor, sem codigo shell;
+# uma variavel ja definida no ambiente vence a daqui.
+DEVICE=xiaomi-thunder
+#THUNDER_USER=me
+#THUNDER_PASSWORD=change-me
+#THUNDER_LOCALE=en_US.UTF-8
+#THUNDER_TIMEZONE=UTC
+#THUNDER_HOSTNAME=thunder
+#AUTHORIZED_KEYS=~/.ssh/id_ed25519.pub

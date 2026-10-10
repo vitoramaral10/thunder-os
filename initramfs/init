@@ -1,13 +1,14 @@
 #!/bin/busybox sh
-# Initramfs do thunder (Arch Linux ARM sobre o kernel 4.19 da Xiaomi).
+# Initramfs do Thunder OS (Arch Linux ARM sobre o kernel do aparelho).
 #
-# Monta o userdata (ext4, sem GPT aninhada) e passa para o init do Arch. Antes disso
+# Monta a raiz (ext4 direto na particao, sem GPT aninhada) e passa para o init do Arch. Antes disso
 # sobe a rede pelo cabo USB, que fica ativa depois do switch_root. Qualquer falha cai
 # num shell de resgate por telnet em 172.16.42.1, parado em loop e sem reboot.
 #
 # Parametros na cmdline (vale o ULTIMO valor: o LK poe os dele antes, inclusive
 # root=/dev/ram):
-#   thunder.root=<PARTNAME>  particao da raiz (padrao: userdata)
+#   thunder.root=<PARTNAME>  particao da raiz (padrao: userdata; o build-boot.sh poe o
+#                            ROOT_PARTITION do aparelho)
 #   thunder.init=<caminho>   init da raiz (padrao: /usr/bin/init)
 #   thunder.debug=1          para no shell de resgate antes de montar a raiz
 

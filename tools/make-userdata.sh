@@ -1,15 +1,16 @@
 #!/bin/bash
-# Gera $BUILD/out/userdata.img: ext4 com o rootfs, sem root no host (mke2fs -d dentro do
+# Gera $WORK/out/userdata.img: ext4 com o rootfs, sem root no host (mke2fs -d dentro do
 # user namespace, para os donos sairem certos). O 10-resize-root.start cresce o fs ate o
-# fim do userdata no primeiro boot.
+# fim da particao no primeiro boot.
 #
-# Recursos: os padroes do e2fsprogs 1.47 menos orphan_file (entrou no 5.15; o ext4 do
-# 4.19 recusaria o mount) e metadata_csum_seed.
+# Recursos: os padroes do e2fsprogs 1.47 menos orphan_file (entrou no 5.15; o ext4 de
+# kernel de vendor 4.x recusaria o mount) e metadata_csum_seed.
 set -euo pipefail
 . "$(dirname "$0")/common.sh"
+require_device
 
 SIZE=${SIZE:-4G}
-img=$BUILD/out/userdata.img
+img=$OUT/userdata.img
 
 rm -f "$img"
 truncate -s "$SIZE" "$img"
