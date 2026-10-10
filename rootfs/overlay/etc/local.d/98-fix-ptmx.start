@@ -1,0 +1,6 @@
+#!/bin/sh
+# Este kernel tem varias instancias de devpts. O /dev/ptmx do devtmpfs (5:2) aloca o
+# terminal na instancia inicial, e /dev/pts e outra instancia: mestre e escravo nao se
+# falam ("PTY allocation request failed"). Aponta /dev/ptmx para o da instancia montada.
+ln -sf pts/ptmx /dev/ptmx
+chmod 666 /dev/pts/ptmx

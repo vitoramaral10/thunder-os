@@ -5,6 +5,11 @@ MT6833 connectivity, so everything here is downstream: MediaTek's `wmt_drv` /
 `wlan_drv_gen4m` stack on a 4.19 vendor kernel, plus a replacement for the
 Android userspace daemon that normally drives it.
 
+**Status under Arch Linux ARM.** The results below were measured on this
+kernel with the previous userland. The Arch image boots, but the Wi-Fi
+service is not wired into it yet (see
+[Bringing it up at boot](#bringing-it-up-at-boot)).
+
 Four separate problems had to be solved, and three of them produced the *same*
 symptom. That is the useful lesson: the failure the log reports is often three
 layers above the cause.
@@ -25,8 +30,8 @@ It does not run from flash. At every power-on the AP must:
 
 Steps 2 and 3 are the ones that bite. On Android, step 2 is driven from
 userspace by a launcher daemon that answers ioctls on `/dev/stpwmt`. There is
-no such daemon on postmarketOS, so this port ships
-[`device-scripts/wmt-daemon.py`](../device-scripts/wmt-daemon.py).
+no such daemon here, so this project ships
+[`device/wifi/wmt-daemon.py`](../device/wifi/wmt-daemon.py).
 
 ## Symptom 1 — `hw_check fail:-14`, and the red herring
 
@@ -200,8 +205,8 @@ mtk_emimpu_set_apc(&region, DOMAIN_CONN, MTK_EMIMPU_NO_PROTECTION);  /* 2 */
 mtk_emimpu_set_protection(&region);
 ```
 
-It was compiled out of this port with `#define CONSYS_ENABLE_EMI_MPU 0`, on the
-reasoning that `mtk_emimpu_*` comes from `emimpu.c`, built by `CONFIG_MTK_EMI`,
+It had been compiled out with `#define CONSYS_ENABLE_EMI_MPU 0` (the drop in
+`kernel/connectivity/` now ships it as `1`), on the reasoning that `mtk_emimpu_*` comes from `emimpu.c`, built by `CONFIG_MTK_EMI`,
 which is off.
 
 That reasoning was wrong, and this is the most transferable lesson here. There
@@ -215,7 +220,7 @@ obj-$(CONFIG_MTK_EMI)       += emimpu.o
 
 Both include the same `<memory/mediatek/emi.h>` and export the same symbols.
 `CONFIG_MTK_EMI` is indeed off — but `CONFIG_MEDIATEK_EMI=y` comes from the
-**base defconfig** and never appears in the pmaports config fragment. On the
+**base defconfig** and never appears in `kernel/config-thunder.aarch64`. On the
 running kernel:
 
 ```
@@ -232,8 +237,8 @@ them.
 
 > **Check the effective config (`/proc/config.gz`) and the effective symbol
 > table (`/proc/kallsyms`, including `__ksymtab_*`) before concluding that a BSP
-> API does not exist.** The pmaports config fragment is not the effective
-> config.
+> API does not exist.** `kernel/config-thunder.aarch64` is not the
+> effective config.
 
 ## Result
 
@@ -257,7 +262,6 @@ download completes intact — which also shows that the
 - **The factory MAC and RF calibration are available but not enabled by
   default.** See [the section below](#the-factory-mac-solved-mechanism-unusable-in-practice).
 - `opfunc_wlan_probe: not implemented yet hifType: 0x2` — harmless so far.
-- Bluetooth does not work — see [the section below](#bluetooth).
 
 ## The factory MAC: solved mechanism, unusable in practice
 
@@ -286,8 +290,8 @@ payload. The handler is registered in `initWlan()`, so the module only needs to
 be loaded, not powered on.
 
 This is the same shape of problem as the ROM patches: another piece of the
-Android launcher that postmarketOS does not have.
-[`device-scripts/wifi-nvram-push.py`](../device-scripts/wifi-nvram-push.py)
+Android launcher that is missing here.
+[`device/wifi/wifi-nvram-push.py`](../device/wifi/wifi-nvram-push.py)
 implements it.
 
 The source is the `nvdata` partition (ext4), file `/APCFG/APRDEB/WIFI`, 2050
@@ -352,27 +356,27 @@ since the driver's own logging is unavailable.
 
 The bring-up is not something the kernel does on its own — the CONNSYS
 subsystem has no firmware of its own and the whole sequence in this document
-has to run on every boot. `device-scripts/init.d/wifi-thunder` is the OpenRC
-service that does it:
-
-```sh
-rc-update add wifi-thunder default
-```
+has to run on every boot. `device/init.d/wifi-thunder` is the OpenRC
+service that does it. It lives in `device/init.d/`; wiring it into the Arch
+image is still pending: python3, the helpers from `device/wifi/` installed in
+`/usr/local/bin/` (the service runs `/usr/local/bin/sobe-wifi.sh`), and
+`rc-update add wifi-thunder default`.
 
 Two details that are not obvious:
 
 - It runs **`before networkmanager`**, so NM finds the interface already
   present instead of racing the driver.
 - Success is judged by **`/sys/class/net/wlan0` existing**, not by the script's
-  exit code. `sobe-wifi.sh` has expected failures along the way — the second
+  exit code. `device/wifi/sobe-wifi.sh` has expected failures along the way — the second
   `SET_PATCH_NUM` ioctl legitimately returns EPERM, for instance — so the exit
   code would give false negatives.
 - **NetworkManager must leave `ap0`, `wlan1` and `p2p0` alone.** gen4m creates
   all four interfaces, but only `wlan0` is a real station. Otherwise
   `nmcli dev wifi connect` can bind the profile to `ap0` and fail with
   `The Wi-Fi network could not be found` while the network is right there in
-  the scan. `device-scripts/xiaomi-thunder-wifi.conf` marks the other three
-  unmanaged; it goes in `/etc/NetworkManager/conf.d/`.
+  the scan. `device/wifi/xiaomi-thunder-wifi.conf` marks the other three
+  unmanaged; it goes in `/etc/NetworkManager/conf.d/` if NetworkManager is
+  used.
 
 ## Measured performance
 
@@ -424,5 +428,5 @@ It now works. See [bluetooth-bringup.md](bluetooth-bringup.md).
 - `rmmod wmt_drv` wedges the module in `Unloading` and blocks OpenRC shutdown;
   `sync; echo b > /proc/sysrq-trigger` is then the only way out.
 - Iterating on a module-only change does **not** need a flash: the `.ko` can be
-  pulled out of the built `.apk` and copied onto the device, as long as vermagic
-  matches. See [building.md](building.md).
+  taken from `build/kernel/lib/modules/4.19.191-perf` and copied onto the
+  device, as long as vermagic matches. See [building.md](building.md).

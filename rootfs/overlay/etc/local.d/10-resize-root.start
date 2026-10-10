@@ -1,0 +1,9 @@
+#!/bin/sh
+# Primeiro boot: a imagem gravada e menor que o userdata; cresce o ext4 ate o fim da
+# particao, online. Roda uma vez so.
+marker=/var/lib/thunder/root-resized
+[ -e "$marker" ] && exit 0
+dev=$(findmnt -no SOURCE /)
+if resize2fs "$dev"; then
+	mkdir -p "${marker%/*}" && touch "$marker"
+fi

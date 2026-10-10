@@ -1,149 +1,84 @@
-# postmarketOS on the Xiaomi `thunder` (Redmi 10 5G / POCO M4 5G)
+# thunder-linux
 
-A downstream postmarketOS port for the MediaTek **MT6833** (Dimensity 700)
-handset that Xiaomi ships as **Redmi 10 5G** in some markets and **POCO M4 5G**
-in others. Both share the codename `thunder` (also seen as `light`).
+**thunder-linux** runs Arch Linux ARM on the MediaTek **MT6833** (Dimensity 700) handset that Xiaomi
+sells as **Redmi 10 5G** and **POCO M4 5G** (codename `thunder`, also `light`).
 
-The headline result of this port: **Wi-Fi and Bluetooth both work**, on a SoC
-whose connectivity subsystem has no mainline support at all. Getting there took
-reconstructing MediaTek's `gen4m` connectivity stack for this SoC, writing a
-minimal replacement for the Android userspace daemon that drives it, and then
-bridging a driver that only speaks to Android's stack into BlueZ. Those two
-write-ups — [docs/wifi-bringup.md](docs/wifi-bringup.md) and
-[docs/bluetooth-bringup.md](docs/bluetooth-bringup.md) — are the part of this
-repository most likely to be useful to someone else.
+The phone runs Xiaomi's 4.19 vendor kernel with our patches, a small initramfs
+written for this project, and the stock Arch Linux ARM userland with
+**OpenRC** as PID 1. There is no newer kernel for this SoC: mainline has no
+support for any phone Dimensity, and MediaTek never published a newer BSP.
 
-> **Status: work in progress.** This is a downstream port on a vendor 4.19
-> kernel. It is not upstream-ready and is not a daily driver.
+> **Status: boots.** Since 2026-10-10 the phone boots Arch Linux ARM with
+> OpenRC and is reachable over SSH on the USB cable. The rest of the hardware
+> support below was proven on this kernel with an earlier userland and is not
+> wired into the Arch image yet.
 
-The device page on the official wiki is
-**[Xiaomi POCO M4 5G / Redmi 10 5G (xiaomi-thunder)](https://wiki.postmarketos.org/wiki/Xiaomi_POCO_M4_5G_/_Redmi_10_5G_(xiaomi-thunder))**.
+## What works on this kernel
 
-## What works
+| Component | Kernel | Arch image | Notes |
+|---|---|---|---|
+| Boot, storage, USB network | works | works | RNDIS gadget, phone at `172.16.42.1`, SSH over the cable |
+| Display | works | no GUI yet | no text console on screen: see [docs/kernel.md](docs/kernel.md) |
+| Touchscreen | works | wake service included | needs the Novatek firmware from your phone |
+| GPU (Mali-G57) | works | not wired | panfrost backported to 4.19, see [docs/gpu-bringup.md](docs/gpu-bringup.md) |
+| Wi-Fi | works | not wired | gen4m stack rebuilt for MT6833, see [docs/wifi-bringup.md](docs/wifi-bringup.md) |
+| Bluetooth | works | not wired | BR/EDR and LE, no audio yet, see [docs/bluetooth-bringup.md](docs/bluetooth-bringup.md) |
+| Battery and charging | works | — | fuel gauge algorithm runs in the kernel |
+| Sensors | works | not wired | light, accelerometer, proximity as IIO, see [docs/sensors.md](docs/sensors.md) |
+| Speaker | works | not wired | |
+| Modem, cameras | not started | | |
 
-| Component | State | Notes |
-|---|---|---|
-| Display | works | |
-| GPU | **works** | Mali-G57 on the mainline panfrost driver, backported to the vendor 4.19 kernel since `r32`; Phosh composes in GLES through Mesa. DVFS 390–955 MHz and power-off when idle. No Vulkan — see [gpu-bringup.md](docs/gpu-bringup.md) |
-| Touchscreen | works | needs the proprietary Novatek NT36672C firmware, see below |
-| Wi-Fi | **works** | brought up at boot by an OpenRC service. 2.4/5 GHz, WPA2 and WPA3, ~133 Mbit/s measured over LAN. The factory MAC and RF calibration are available but off by default — see [wifi-bringup.md](docs/wifi-bringup.md#the-factory-mac-solved-mechanism-unusable-in-practice) |
-| Audio (speaker) | works | headphone path written but untested |
-| USB networking | works | RNDIS, the usual pmOS `172.16.42.1` |
-| Battery | **works** | charges, and since kernel `r26` the fuel gauge reports a level: it counts down unplugged and survives a reboot. Since `r31` it reaches 100% when charging ends. The Gauge Master 3.0 algorithm runs in the kernel instead of Android's `fuelgauged` — see [phosh-greeter.md](docs/phosh-greeter.md), blockers 9 and 14 |
-| Phosh | **works** | the device boots into the greeter and the session stays up. The screen blanks and locks on idle or with the power button, with the backlight off, and the touchscreen works again on wake. The scale is fixed at 3, which keeps software rendering usable. Power off and Restart work from the menu since kernel `r30`. Rendered on the GPU since `r32`; no brightness control yet — see [phosh-greeter.md](docs/phosh-greeter.md) |
-| Bluetooth | **works** | brought up at boot by an OpenRC service. Scanning and pairing verified against a Linux host, BR/EDR and LE, coexisting with Wi-Fi. Factory address read from `nvdata` at run time. **Audio does not play** — A2DP negotiates and the link carries the stream, but the device has no audio session to consume it; see [bluetooth-bringup.md](docs/bluetooth-bringup.md#audio-negotiates-but-nothing-plays) |
-| Modem | not started | |
-| Cameras | not started | |
+"Not wired" means the driver works, but the service that brings it up is not
+in the Arch image yet.
 
-The device boots into the Phosh greeter, and `wifi-thunder` brings the radio
-up before NetworkManager, so it associates on its own. Weston is still
-available as a fallback through its OpenRC service, `weston-thunder`, which is
-no longer in the boot sequence.
+## Why OpenRC and not systemd
 
-## Security note: read before installing this
-
-This is a **bring-up port**, not a hardened system. Two things you are opting
-into by installing it as-is:
-
-- **`device-xiaomi-thunder` enables a passwordless root telnet on the USB
-  link.** SSH with key authentication works over Wi-Fi, but over the USB link
-  the SSH key exchange stalls — the RNDIS link loses large TCP segments — so
-  telnet is the only way in over the cable, and the recovery path when Wi-Fi
-  is down. It listens on the point-to-point USB network
-  (`172.16.42.0/24`), which is not routed, so a remote attacker cannot reach
-  it — but **anyone who plugs a cable into the device gets root, with no
-  password and no prompt.** The `post-install` script marks it TEMPORARY and it
-  should be removed once SSH works over the cable too. If that trade is not acceptable to
-  you, strip that section from
-  `pmaports/device-xiaomi-thunder/device-xiaomi-thunder.post-install` before
-  building.
-- **Verified boot is disabled** during flashing (see
-  [docs/flashing.md](docs/flashing.md)), because an unsigned `boot.img` is
-  otherwise rejected. The device will boot anything you give it afterwards.
-
-Neither is a defect to report — both are deliberate, and both are the normal
-state of a downstream port at this stage. They are written down here so the
-choice is yours and not a surprise.
-
-## What is deliberately **not** in this repository
-
-No proprietary firmware blobs. Specifically absent:
-
-- `nt36672c_tm_01_ts_fw.bin` and `nt36672c_tm_01_ts_mp.bin` — Novatek
-  touchscreen firmware
-- the MediaTek connectivity firmware (`soc2_2_ram_{mcu,wifi,bt}_*.bin`,
-  `WIFI_RAM_CODE_*`)
-- MediaTek/Xiaomi audio parameter XML
-- any stock ROM image or partition dump
-
-These are extracted from the stock ROM of your own device.
-[docs/vendor-firmware.md](docs/vendor-firmware.md) explains how to get them,
-and the packaging expects you to drop them in yourself.
-
-The MediaTek connectivity **source** tarball
-(`pmaports/linux-xiaomi-thunder/mtk-connectivity-gen4m-mt6833-1.tar.gz`) *is*
-included: it is 763 files of GPL-2.0 kernel source, zero binaries, assembled
-from public vendor trees.
+Arch's systemd (262) does not run on a 4.19 kernel. It calls `close_range`
+(Linux 5.9) and `waitid(P_PIDFD)` (5.4) with no fallback, since systemd 260
+raised its baseline to 5.10, and this kernel has `CONFIG_FHANDLE` off.
+`systemd-udevd` hits the same walls. OpenRC has no such dependency and is
+already proven on this kernel. The `systemd` package stays installed but
+inert, because `pacman` depends on it.
 
 ## Layout
 
 ```
-pmaports/linux-xiaomi-thunder/   kernel package: APKBUILD, config, patches
-pmaports/device-xiaomi-thunder/  device package (minus the firmware blobs)
-device-scripts/                  what runs on the device itself
-docs/                            build, flash, Wi-Fi and Bluetooth bring-up, vendor firmware
-docs/diario-pt/                  the raw debugging journal, in Portuguese
-tools/                           artifact verification before flashing
-wiki/                            source of the published postmarketOS wiki page
+kernel/       build.sh, config, patches/ (applied in patches/series order),
+              connectivity/ (MediaTek Wi-Fi/BT driver source graft)
+initramfs/    init: mounts userdata, falls back to a rescue shell over USB
+rootfs/       overlay/ (services, USB gadget, boot scripts), configure.sh,
+              finalize.sh, packages/ (OpenRC PKGBUILD, glib patches)
+device/       Wi-Fi and Bluetooth bring-up daemons, their OpenRC services,
+              thunder-reboot
+tools/        rootless build pipeline and flashing
+docs/         build, flash, kernel catalogue, hardware bring-up write-ups
 ```
 
-`docs/diario-pt/` is kept in the language it was written in. It is a working
-log, not polished documentation: every dead end, every wrong assumption and
-every register dump, in order. If the English write-ups leave you short, the
-answer is probably in there.
+Everything generated (kernel tree, rootfs, images, toolchain) goes to `build/`,
+which is not versioned.
 
 ## Getting started
 
-1. [docs/vendor-firmware.md](docs/vendor-firmware.md) — extract the blobs from
-   your own device first, nothing else works without them
-2. [docs/building.md](docs/building.md) — build with pmbootstrap
-3. [docs/flashing.md](docs/flashing.md) — **read this before flashing**, it
-   wipes `userdata`
-4. [docs/building.md#installing-the-device-scripts](docs/building.md#installing-the-device-scripts)
-   — the packages do not install `device-scripts/`, and without them the device
-   boots to a bare console with no compositor and no Wi-Fi
+1. [docs/vendor-firmware.md](docs/vendor-firmware.md): copy the proprietary
+   firmware from your own phone's factory ROM. It is never in this repository.
+2. [docs/building.md](docs/building.md): build the kernel, the rootfs and the
+   images. No root needed on the host.
+3. [docs/flashing.md](docs/flashing.md): **read before flashing**. It erases
+   `userdata` and disables verified boot.
 
-## The postmarketOS wiki page
+## Security notes
 
-This port has a page on the official wiki:
-**[Xiaomi POCO M4 5G / Redmi 10 5G (xiaomi-thunder)](https://wiki.postmarketos.org/wiki/Xiaomi_POCO_M4_5G_/_Redmi_10_5G_(xiaomi-thunder))**
-
-`wiki/xiaomi-thunder.mediawiki` in this repository is the source of that page.
-It covers the four kernel patches the port needs, the `deviceinfo` parameters
-(including the 4096-byte sector geometry), flashing on an A/B device with
-verified boot disabled, and the open issues.
-
-**Keep the two in sync in this direction: edit the file here, then paste it
-into the wiki.** If you edit the wiki directly, copy the result back into this
-file, or the next paste from here silently reverts your change.
-
-Two things the wiki's `Template:Infobox device` will bite you with, both of
-which cost time on the first upload:
-
-- `booting = yes` is required, or the template **hides the entire feature
-  table** — the page renders with hardware specs only and nothing about what
-  works.
-- Unknown parameter names fail silently. It is `status_screen` (not
-  `status_display`), `status_touch` (not `status_touchscreen`) and
-  `releaseyear` (not `released`). A wrong name renders as nothing, with no
-  warning.
-
-Feature values are `Y` / `P` / `N` / `-` (not applicable) or blank (untested).
-Since this port is not in pmaports, the page sets `packaged = no` and leaves
-`category` empty.
+- **Verified boot is disabled** when flashing, since the bootloader rejects an
+  unsigned `boot.img` otherwise. The phone will boot anything after that.
+- **The rescue shell has no password.** If the initramfs cannot mount the root
+  filesystem, or `thunder.debug=1` is on the command line, it opens a root
+  telnet shell on the USB link (`172.16.42.1`). It never listens on Wi-Fi, and
+  it stops when the system boots.
+- **The image ships a provisional password** (`THUNDER_PASSWORD`, default
+  `147147`) for root and the user, used by the telnet login on the USB link.
+  Change it with `passwd` on first login.
 
 ## Licensing
 
-See [LICENSING.md](LICENSING.md). Short version: kernel patches and the
-connectivity source are GPL-2.0, the packaging follows pmaports (GPL-3.0), and
-the scripts written for this port are GPL-3.0.
+See [LICENSING.md](LICENSING.md). Kernel patches and the connectivity source
+are GPL-2.0; everything written for this project is GPL-3.0.

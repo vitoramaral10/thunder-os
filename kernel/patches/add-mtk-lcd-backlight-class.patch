@@ -1,0 +1,85 @@
+Registra a luz de fundo do painel (LED lcd-backlight) tambem como
+/sys/class/backlight/lcd-backlight, tipo raw: sem isso o Phosh nao tem
+controle de brilho. Escreve pelo nucleo de LED, entao as duas visoes ficam
+em sincronia e o blank do painel (r27) continua segurando o nivel em 0.
+Piso de ~1% para a barra no zero nao apagar a tela.
+
+--- a/drivers/misc/mediatek/leds/leds-mtk-disp.c	2026-09-26 22:30:30.033950741 -0300
++++ b/drivers/misc/mediatek/leds/leds-mtk-disp.c	2026-09-26 22:30:59.707484586 -0300
+@@ -18,6 +18,7 @@
+ 
+ #include "leds-mtk-disp.h"
+ #include <drm/drm_notifier_odm.h>
++#include <linux/backlight.h>
+ 
+ #ifdef CONFIG_LM3697_SUPPORT
+ #include <linux/mfd/ti-lmu-backlight.h>
+@@ -469,6 +470,60 @@
+ 	.notifier_call = mtk_leds_panel_blank,
+ };
+ 
++/*
++ * The panel's backlight only shows up as the LED class device lcd-backlight,
++ * and desktops look for /sys/class/backlight: without it Phosh has no
++ * brightness slider. Expose the same LED as a raw backlight device. Writes go
++ * through the LED core, so both sysfs views stay in sync and the blank
++ * handling above still holds the level while the panel is off.
++ *
++ * Level 0 would turn the backlight off with the panel still on, which a
++ * brightness slider must not do; turning it off is the panel blank's job.
++ * Clamp to a floor of about 1% instead.
++ */
++#define MTK_BL_MIN_LEVEL_DIV	100
++
++static int mtk_leds_bl_update_status(struct backlight_device *bd)
++{
++	struct mtk_led_data *led = bl_get_data(bd);
++	int level = bd->props.brightness;
++	int floor = max(1, bd->props.max_brightness / MTK_BL_MIN_LEVEL_DIV);
++
++	level = clamp(level, floor, bd->props.max_brightness);
++	led_set_brightness_sync(&led->conf.cdev, level);
++	return 0;
++}
++
++static int mtk_leds_bl_get_brightness(struct backlight_device *bd)
++{
++	struct mtk_led_data *led = bl_get_data(bd);
++
++	return led->conf.cdev.brightness;
++}
++
++static const struct backlight_ops mtk_leds_bl_ops = {
++	.update_status = mtk_leds_bl_update_status,
++	.get_brightness = mtk_leds_bl_get_brightness,
++};
++
++static void mtk_leds_register_backlight(struct device *dev,
++	struct mtk_led_data *led)
++{
++	struct backlight_properties props = {
++		.type = BACKLIGHT_RAW,
++		.max_brightness = led->conf.cdev.max_brightness,
++		.brightness = led->conf.cdev.brightness,
++		.power = FB_BLANK_UNBLANK,
++	};
++	struct backlight_device *bd;
++
++	bd = devm_backlight_device_register(dev, "lcd-backlight", dev, led,
++		&mtk_leds_bl_ops, &props);
++	if (IS_ERR(bd))
++		pr_notice("cannot register backlight device: %ld\n",
++			PTR_ERR(bd));
++}
++
+ /****************************************************************************
+  * driver functions
+  ***************************************************************************/
+@@ -514,6 +569,7 @@
+ 			struct mtk_led_data, desp);
+ 		if (drm_register_client(&mtk_leds_panel_nb))
+ 			pr_notice("cannot follow panel blank events\n");
++		mtk_leds_register_backlight(dev, panel_bl);
+ 	}
+ 
+ 	pr_info("probe end ---");

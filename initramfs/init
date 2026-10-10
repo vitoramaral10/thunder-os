@@ -1,0 +1,143 @@
+#!/bin/busybox sh
+# Initramfs do thunder (Arch Linux ARM sobre o kernel 4.19 da Xiaomi).
+#
+# Monta o userdata (ext4, sem GPT aninhada) e passa para o init do Arch. Antes disso
+# sobe a rede pelo cabo USB, que fica ativa depois do switch_root. Qualquer falha cai
+# num shell de resgate por telnet em 172.16.42.1, parado em loop e sem reboot.
+#
+# Parametros na cmdline (vale o ULTIMO valor: o LK poe os dele antes, inclusive
+# root=/dev/ram):
+#   thunder.root=<PARTNAME>  particao da raiz (padrao: userdata)
+#   thunder.init=<caminho>   init da raiz (padrao: /usr/bin/init)
+#   thunder.debug=1          para no shell de resgate antes de montar a raiz
+
+/bin/busybox mkdir -p /bin /proc /sys /dev /run /tmp /newroot
+/bin/busybox --install -s /bin
+export PATH=/bin
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts
+mount -t tmpfs -o mode=0755,nosuid,nodev run /run
+
+log() {
+	echo "thunder-initramfs: $*" > /dev/kmsg
+	echo "thunder-initramfs: $*"
+}
+
+param() {
+	v=$2
+	for a in $(cat /proc/cmdline); do
+		case $a in
+		"$1"=*) v=${a#*=} ;;
+		esac
+	done
+	echo "$v"
+}
+
+rescue_net() {
+	/usr/lib/thunder/usb-gadget up || return 1
+	dev=$(/usr/lib/thunder/usb-gadget ifname)
+	[ -n "$dev" ] || return 1
+	if ! pidof udhcpd >/dev/null; then
+		sed "s/^interface .*/interface $dev/" /etc/udhcpd-usb.conf > /run/udhcpd-usb.conf
+		touch /run/udhcpd-usb.leases
+		udhcpd /run/udhcpd-usb.conf
+	fi
+	pidof telnetd >/dev/null || telnetd -b 172.16.42.1:23 -l /bin/sh
+}
+
+# Farol de diagnostico: manda por UDP ao PC (172.16.42.2:9999, sempre da porta 9999), em
+# loop, o fim do pstore (o console do boot anterior: a causa de um reset) e o dmesg. Nao
+# depende de sessao: o TCP do aparelho para o PC ja travou neste enlace, e o firewall do
+# PC so aceita estes datagramas como resposta a um que ele mandou antes para a 9999.
+# Datagramas de 800 B, um por read(), para nao fragmentar.
+beacon() {
+	while :; do
+		{
+			echo "== thunder uptime $(cat /proc/uptime)"
+			for f in /sys/fs/pstore/*; do
+				[ -f "$f" ] || continue
+				echo "== $f"
+				tail -c 8000 "$f"
+			done
+			echo "== dmesg"
+			dmesg | tail -n 80
+		} > /run/beacon.txt
+		rm -f /run/beacon.part.*
+		split -b 800 /run/beacon.txt /run/beacon.part.
+		for p in /run/beacon.part.*; do
+			cat "$p"
+			sleep 0.05
+		done | nc -u -w 1 -p 9999 172.16.42.2 9999 2>/dev/null
+		sleep 1
+	done
+}
+
+rescue() {
+	log "$1"
+	mkdir -p /sys/fs/pstore
+	mountpoint -q /sys/fs/pstore || mount -t pstore pstore /sys/fs/pstore
+	if [ "$(param thunder.debug 0)" = 1 ] && ! [ -e /run/beacon.pid ]; then
+		beacon &
+		echo $! > /run/beacon.pid
+	fi
+	rescue_net || log "rede USB nao subiu; tentando de novo a cada 5 s"
+	log "resgate: telnet 172.16.42.1 (sem senha); 'touch /run/continue' segue o boot;" \
+		"'thunder-reboot bootloader' vai para o fastboot"
+	rm -f /run/continue
+	# Sem rede nao ha como entrar: insiste no gadget enquanto o telnetd nao estiver no ar.
+	n=0
+	while [ ! -e /run/continue ]; do
+		sleep 1
+		n=$((n + 1))
+		if [ $((n % 5)) = 0 ] && ! pidof telnetd >/dev/null; then
+			rescue_net
+		fi
+	done
+}
+
+find_part() {
+	for u in /sys/class/block/*/uevent; do
+		if grep -qx "PARTNAME=$1" "$u"; then
+			sed -n 's/^DEVNAME=//p' "$u"
+			return 0
+		fi
+	done
+	return 1
+}
+
+mount_root() {
+	i=0
+	while ! dev=$(find_part "$ROOT"); do
+		i=$((i + 1))
+		[ "$i" -ge 30 ] && { log "particao $ROOT nao apareceu em 30 s"; return 1; }
+		sleep 1
+	done
+	log "raiz em /dev/$dev ($ROOT)"
+	mount -t ext4 -o rw,noatime "/dev/$dev" /newroot || { log "mount de /dev/$dev falhou"; return 1; }
+	if [ ! -x "/newroot$INIT" ]; then
+		log "$INIT nao existe na raiz"
+		umount /newroot
+		return 1
+	fi
+}
+
+ROOT=$(param thunder.root userdata)
+INIT=$(param thunder.init /usr/bin/init)
+
+/usr/lib/thunder/usb-gadget up || log "rede USB nao subiu"
+
+[ "$(param thunder.debug 0)" = 1 ] && rescue "thunder.debug=1: parado antes de montar a raiz"
+while ! mount_root; do
+	rescue "nao montou a raiz"
+done
+
+killall udhcpd telnetd 2>/dev/null
+for m in /dev /proc /sys /run; do
+	mount --move "$m" "/newroot$m"
+done
+log "switch_root para $INIT"
+exec switch_root /newroot "$INIT"

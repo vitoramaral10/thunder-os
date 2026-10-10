@@ -3,25 +3,33 @@
 The Mali-G57 MC2 in MT6833 is a Valhall **Job Manager** GPU (arch 9.0.9,
 `GPU_ID` 0x9093). The vendor kernel drives it with Arm's proprietary kbase
 (`/dev/mali0`, DDK r32p1), and its only userspace is the Android blob. Nothing
-free talks to kbase, so Phosh rendered on the CPU.
+free talks to kbase, so a desktop session would render on the CPU.
 
 This port runs the mainline **panfrost** DRM driver instead, backported to the
 vendor 4.19 kernel. Mesa's panfrost gallium driver then works unmodified, and
-phoc composes with GLES through Mesa's `kmsro` path: the display stays on
-`mediatek-drm` (`card0`), rendering goes to panfrost (`renderD128`).
+a compositor (phoc, in the tests below) composes with GLES through Mesa's
+`kmsro` path: the display stays on `mediatek-drm` (`card0`), rendering goes to
+panfrost (`renderD128`).
+
+**Status under Arch Linux ARM.** Every result in this document was measured on
+this kernel with the previous userland and its Mesa build. The Arch image ships
+a different Mesa build, and GPU rendering under Arch is untested. There is no
+GUI in the Arch image yet. Also pending: panfrost is a module and nothing loads
+it automatically (module autoloading does not work on this kernel), so the Arch
+image must load it explicitly through `modules-load` or an OpenRC service.
 
 ## Why panfrost and not the alternatives
 
 | Option | Why not |
 |---|---|
-| Arm's Linux `libmali` | no public build for Valhall JM G57. Rockchip's mirrors carry G610 (CSF) and Bifrost only; MediaTek's Genio build (r41) sits behind an NDA |
-| The Android blob through libhybris | the ABI matches the kernel, but phoc takes EGL/GBM from Mesa, so it would not accelerate Phosh, and it needs binder and gralloc |
+| Arm's Linux `libmali` | no public build for Valhall JM G57. Rockchip's mirrors carry G610 (CSF) and Bifrost only; MediaTek's Genio build (DDK r41) sits behind an NDA |
+| The Android blob through libhybris | the ABI matches the kernel, but phoc takes EGL/GBM from Mesa, so it would not accelerate the compositor, and it needs binder and gralloc |
 | Mesa talking to kbase directly | the only prior work covers Bifrost/Midgard JM and G610 CSF, never G57 |
 | panfrost | the upstream driver already runs this exact GPU (MT8370, G57 MC2 JM) and Mesa supports it |
 
 ## What the backport consists of
 
-`add-drm-panfrost-mt6833.patch` adds `drivers/gpu/drm/panfrost` as a module:
+`kernel/patches/add-drm-panfrost-mt6833.patch` adds `drivers/gpu/drm/panfrost` as a module:
 
 - **panfrost from Linux 5.15.194**, with the G57 feature and errata tables and
   the reset, power sequencing and MMU lock-region fixes from 6.12. `GPU_ID`
@@ -54,7 +62,7 @@ Each of these looked like a panfrost problem and was a 4.19 difference:
    a non-master `card0` fd. 4.19 demands authentication for that, so a regular
    user gets `EACCES`. Root passes, because 4.19 authenticates
    `CAP_SYS_ADMIN` automatically, which hid the problem in every test run as
-   root. `backport-drm-prime-ioctls-no-auth.patch` removes the flag as Linux 5.2
+   root. `kernel/patches/backport-drm-prime-ioctls-no-auth.patch` removes the flag as Linux 5.2
    did.
 3. **Heap BOs have sparse page arrays.** 4.19's `drm_gem_put_pages` does not
    skip `NULL` pages, so freeing a heap BO oopsed.
@@ -66,7 +74,7 @@ Each of these looked like a panfrost problem and was a 4.19 difference:
 5. **The IRQs are named in capitals** (`"GPU"`, `"MMU"`, `"JOB"`) in the vendor
    device tree; panfrost asks for lowercase names.
 6. **`devfreq`'s `trans_stat` overflows a page** with gpufreq's 34 OPPs and
-   oopses on `cat`. `fix-devfreq-trans-stat-overflow.patch` bounds it, and the
+   oopses on `cat`. `kernel/patches/fix-devfreq-trans-stat-overflow.patch` bounds it, and the
    driver registers 12 of the 34 OPPs.
 7. **The 5.15 file operations use the core `drm_gem_mmap`**, which on 4.19
    leaves the VMA `PFNMAP` and never reaches the helper, so the first page
@@ -74,6 +82,8 @@ Each of these looked like a panfrost problem and was a 4.19 difference:
    helper's file-level mmap instead.
 
 ## Measured
+
+All of this was measured with the previous userland (see the status note above).
 
 - Mesa 26.2 reports `Mali-G57 MC2 (Panfrost)`, OpenGL ES and OpenGL 3.1.
 - phoc in GLES with a full-screen EGL client: 60 fps (302 page flips in 5 s),
@@ -91,11 +101,11 @@ Each of these looked like a panfrost problem and was a 4.19 difference:
 - No GPU memory leak on 5.15: over 15 runs of glmark2, one minute each with
   the process exiting in between, `Shmem` stayed at 6.2 MB and `Slab`
   returned to its baseline after each run.
-- System suspend (`s2idle`, woken by the RTC): with panfrost loaded and the
-  greeter composing in GLES, 3 of 3 cycles suspended and resumed, and the GPU
+- System suspend (`s2idle`, woken by the RTC): with panfrost loaded and a
+  compositor rendering in GLES, 3 of 3 cycles suspended and resumed, and the GPU
   rendered afterwards. panfrost suspends in about 0.5 ms and resumes in about
-  1 ms. The same cycle also works with panfrost unloaded and with the greeter
-  on pixman.
+  1 ms. The same cycle also works with panfrost unloaded and with the
+  compositor on pixman.
 
 ## Still open
 

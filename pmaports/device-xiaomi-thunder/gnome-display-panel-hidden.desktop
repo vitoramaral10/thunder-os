@@ -1,9 +1,0 @@
-[Desktop Entry]
-# Esconde o painel Tela do Configuracoes do GNOME na sessao do Phosh.
-# A escala fica fixa em 3 pelo /etc/phosh/phoc.ini: mudar para uma escala
-# fracionaria pelo painel faz o phoc redimensionar cada quadro em software
-# e trava a interface. Hidden=true e o jeito do freedesktop de apagar uma
-# entrada sem editar o arquivo do pacote.
-Type=Application
-Name=Display
-Hidden=true

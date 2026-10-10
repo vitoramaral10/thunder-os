@@ -9,6 +9,11 @@ BT driver needs are already exported by the loaded `wmt_drv`.
 What was missing was everything *above* the radio, and it was missing in two
 independent places.
 
+**Status under Arch Linux ARM.** Every result here was measured on this kernel
+with the previous userland. The Arch image boots, but the services in
+`device/init.d/` are not yet installed or enabled in the
+Arch image (they also need python3).
+
 ## Two holes, and neither is the chip
 
 **The kernel had no Bluetooth at all.** The vendor `light_defconfig` leaves
@@ -50,7 +55,9 @@ exposes `/dev/stpbt`.
 
 It is added to the connectivity drop as `bt_drv/` with a Makefile written for
 this tree (the upstream one points at `vendor/mediatek/kernel_modules` paths
-that do not exist here). See `pmaports/linux-xiaomi-thunder/`.
+that do not exist here). It ships inside
+`kernel/connectivity/mtk-connectivity-gen4m-mt6833-2.tar.gz` and is grafted by
+`kernel/build.sh` (see [kernel.md](kernel.md#connectivity-graft)).
 
 ## Why there is a userspace bridge
 
@@ -64,8 +71,8 @@ Searching the whole `bt/` tree for `hci_register_dev` finds it only in the
 `btmtk_main.c` of the conninfra-based variants.
 
 So the link is made in userspace, with the kernel's own `hci_vhci`:
-`device-scripts/stpbt-vhci-bridge.py` creates a virtual controller and shuttles
-packets both ways. Enable `CONFIG_BT_HCIVHCI` for it.
+`device/bluetooth/stpbt-vhci-bridge.py` creates a virtual controller and shuttles
+packets both ways. `kernel/config-thunder.aarch64` sets `CONFIG_BT_HCIVHCI=y` for it.
 
 ### The framing mismatch
 
@@ -150,13 +157,13 @@ bridge waits in `select()` and only calls `read()` when data is already there.
 A self-pipe joins the same `select()` for shutdown, which removed the threads
 entirely — one loop that can always exit and close its descriptors in order.
 
-This is also why the init script sets `retry="SIGTERM/20"`: a `SIGKILL` would
+This is also why the OpenRC service (`device/init.d/bluetooth-thunder`) sets `retry="SIGTERM/20"`: a `SIGKILL` would
 recreate the problem.
 
 ### 3. The address was MediaTek's placeholder
 
 The controller comes up as `00:00:46:67:61:01` — identical on every unit
-running this port, which would stop two of the same phone from coexisting on
+running this project, which would stop two of the same phone from coexisting on
 one paired host.
 
 The real address lives in the `nvdata` partition at `/APCFG/APRDEB/BT_Addr`,
@@ -167,7 +174,7 @@ stored makes the controller report a different address; sending them reversed
 makes `Read_BD_ADDR` return exactly what is in nvram. HCI carries `BD_ADDR`
 least-significant byte first, while nvram stores display order.
 
-`bluetooth-thunder` extracts six bytes into `/lib/firmware/bt_addr.bin` on
+The `device/init.d/bluetooth-thunder` service extracts six bytes into `/lib/firmware/bt_addr.bin` on
 first start (mounting `nvdata` **read-only**, always), and the bridge writes it
 with the MediaTek vendor command `0xFC1A`, then reads it back to confirm. It
 survives the `HCI_Reset` the kernel issues during init.
@@ -224,8 +231,8 @@ no profile. That is expected, not a radio failure.
 Worth being precise about, because "Bluetooth works" could suggest more than
 was measured.
 
-`pipewire-spa-bluez` is required and is **not** pulled in by default. With it
-installed the phone advertises Audio Sink, Audio Source and Handsfree in both
+PipeWire's BlueZ plugin (`libspa-bluez5.so`, in Arch's `pipewire-audio`) is
+required and was **not** pulled in by default. With it installed the phone advertises Audio Sink, Audio Source and Handsfree in both
 roles, a host connects with `Active Profile: a2dp-sink`, the host's PipeWire
 opens a sink for the phone and streams to it (`RUNNING`), and BlueZ on the
 phone creates a real transport:
@@ -248,8 +255,9 @@ The trail leaves Bluetooth and enters the session layer. On this device there
 is no user session at all: `/run/user/` did not exist, PipeWire had to be
 started by hand as root, there is no session D-Bus
 (`telephony.c: failed to get session dbus connection`), no logind seat
-(WirePlumber skips `monitor.bluez.seat-monitoring`), and no UPower. Weston runs
-as root outside any session and PipeWire is not started at boot. In that
+(WirePlumber skips `monitor.bluez.seat-monitoring`), and no UPower. The earlier
+test image ran its compositor as root outside any session, and PipeWire was not
+started at boot. In that
 hand-built stack local playback did not open a PCM either, so the failure is
 not specific to Bluetooth.
 

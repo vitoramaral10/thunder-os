@@ -1,0 +1,164 @@
+diff --color -urN a/wlan_drv_gen4m/common/wlan_oid.c b/wlan_drv_gen4m/common/wlan_oid.c
+--- a/wlan_drv_gen4m/common/wlan_oid.c	2026-09-20 20:17:59.674406256 -0300
++++ b/wlan_drv_gen4m/common/wlan_oid.c	2026-09-20 20:17:59.700065691 -0300
+@@ -17211,6 +17211,16 @@
+ uint32_t wlanoidListMode(IN struct ADAPTER *prAdapter,
+ 			 IN void *pvQueryBuffer, IN uint32_t u4QueryBufferLen,
+ 			 OUT uint32_t *pu4QueryInfoLen) {
++#if (CONFIG_WLAN_SERVICE != 1)
++	/* thunder: nicCmdEventListmode so e declarado sob CONFIG_WLAN_SERVICE == 1
++	 * (nic_cmd_event.h), mas o corpo desta funcao o usa sem guarda. O
++	 * wlan_service nao entra neste build (MTK_WLAN_SERVICE_PATH nao definido,
++	 * Makefile linha 912 -> CONFIG_WLAN_SERVICE=0). Stub em vez de guardar a
++	 * funcao inteira, para nao precisar mexer no chamador em
++	 * os/linux/gl_hook_api.c:4689.
++	 */
++	return WLAN_STATUS_NOT_SUPPORTED;
++#else
+ 	uint8_t *pCmdBuf = NULL;
+ 	uint32_t rStatus = WLAN_STATUS_SUCCESS;
+ 
+@@ -17244,5 +17254,6 @@
+ 
+ 	kalMemFree(pCmdBuf, VIR_MEM_TYPE, u4QueryBufferLen);
+ 	return rStatus;
++#endif /* CONFIG_WLAN_SERVICE */
+ }
+ 
+diff --color -urN a/wlan_drv_gen4m/os/linux/gl_cfg80211.c b/wlan_drv_gen4m/os/linux/gl_cfg80211.c
+--- a/wlan_drv_gen4m/os/linux/gl_cfg80211.c	2026-09-20 21:03:42.638156379 -0300
++++ b/wlan_drv_gen4m/os/linux/gl_cfg80211.c	2026-09-20 21:03:42.688368892 -0300
+@@ -82,6 +82,17 @@
+ #include "gl_vendor.h"
+ #include "gl_p2p_os.h"
+ 
++/* thunder: NL80211_WPA_VERSION_3 (WPA3/SAE) nao existe no uapi deste kernel --
++ * include/uapi/linux/nl80211.h so declara VERSION_1 e VERSION_2 no
++ * "enum nl80211_wpa_versions". O upstream acrescentou VERSION_3 = 1 << 2 numa
++ * serie posterior, e a Xiaomi tinha retroportado no drop de origem. Definir com
++ * o mesmo valor do upstream mantem a semantica; o #ifndef e seguro aqui porque
++ * o simbolo esta completamente ausente nesta arvore.
++ */
++#ifndef NL80211_WPA_VERSION_3
++#define NL80211_WPA_VERSION_3 (1 << 2)
++#endif
++
+ /*******************************************************************************
+  *                              C O N S T A N T S
+  *******************************************************************************
+diff --color -urN a/wlan_drv_gen4m/os/linux/include/gl_qa_agent.h b/wlan_drv_gen4m/os/linux/include/gl_qa_agent.h
+--- a/wlan_drv_gen4m/os/linux/include/gl_qa_agent.h	2026-09-20 19:37:13.529605583 -0300
++++ b/wlan_drv_gen4m/os/linux/include/gl_qa_agent.h	2026-09-20 19:37:13.572601814 -0300
+@@ -399,6 +399,15 @@
+ 	uint32_t CmdOffset;
+ };
+ 
++/* thunder: LIST_SEG_MAX vive em wlan_service/glue/osal/include/net_adaption.h,
++ * que so entra no build quando MTK_WLAN_SERVICE_PATH esta definido (build do
++ * Android). Esta struct nao e usada em lugar nenhum da arvore; definir o valor
++ * localmente evita arrastar o wlan_service inteiro.
++ */
++#ifndef LIST_SEG_MAX
++#define LIST_SEG_MAX 100
++#endif
++
+ struct PARAM_LIST_MODE_STATUS {
+ 	uint16_t    u2Status;
+ 	uint32_t    u4ExtId;
+diff --color -urN a/wlan_drv_gen4m/os/linux/plat/mt6833/plat_priv.c b/wlan_drv_gen4m/os/linux/plat/mt6833/plat_priv.c
+--- a/wlan_drv_gen4m/os/linux/plat/mt6833/plat_priv.c	2026-09-20 19:37:13.525524022 -0300
++++ b/wlan_drv_gen4m/os/linux/plat/mt6833/plat_priv.c	2026-09-20 21:27:23.579288725 -0300
+@@ -6,8 +6,20 @@
+ 
+ #if KERNEL_VERSION(5, 4, 0) <= CFG80211_VERSION_CODE
+ /*TODO kernel 5.4 boost CPU */
++#include <linux/pm_qos.h>
+ #elif KERNEL_VERSION(4, 19, 0) <= CFG80211_VERSION_CODE
++/* thunder: este ramo mapeia pm_qos_* para mtk_pm_qos_* logo abaixo. NAO incluir
++ * <linux/pm_qos.h> aqui: com os #define ativos, "struct pm_qos_request" vira
++ * "struct mtk_pm_qos_request" e colide com a definicao de mtk-pm-qos.h
++ * (redefinition of struct / conflicting types).
++ * E preciso tambem trazer cpu_ctrl.h (CPU_KIR_WIFI, struct cpu_ctrl_data,
++ * update_userlimit_cpu_freq) e topo_ctrl.h (topo_ctrl_get_nr_clusters), que o
++ * drop so incluia no ramo antigo. Os tres -I ja existem no Makefile do gen4m
++ * (linhas 490, 491, 497).
++ */
+ #include <linux/soc/mediatek/mtk-pm-qos.h>
++#include <cpu_ctrl.h>
++#include <topo_ctrl.h>
+ #define pm_qos_add_request(_req, _class, _value) \
+ 		mtk_pm_qos_add_request(_req, _class, _value)
+ #define pm_qos_update_request(_req, _value) \
+@@ -17,16 +29,41 @@
+ #define pm_qos_request mtk_pm_qos_request
+ #define PM_QOS_DDR_OPP MTK_PM_QOS_DDR_OPP
+ #define ppm_limit_data cpu_ctrl_data
++/* thunder: o "enum ddr_opp" de mtk-pm-qos.h esta atras de
++ * #if defined(CONFIG_MACH_MT6761) || MT6765 || MT6779 -- o MT6833 nao esta na
++ * lista, entao DDR_OPP_0 e DDR_OPP_UNREQ nao sao declarados. Os valores sao os
++ * mesmos que o enum daria: 0 = pedir a maior frequencia de DRAM, e UNREQ = o
++ * default publicado pelo proprio header (definido sem guarda).
++ */
++#ifndef DDR_OPP_0
++#define DDR_OPP_0 0
++#endif
++#ifndef DDR_OPP_UNREQ
++#define DDR_OPP_UNREQ MTK_PM_QOS_DDR_OPP_DEFAULT_VALUE
++#endif
+ #else
+ #include <cpu_ctrl.h>
+ #include <topo_ctrl.h>
+ #include <helio-dvfsrc-opp.h>
+-#endif
+ #include <linux/pm_qos.h>
++#endif
+ 
+ #include "precomp.h"
+ #include "wmt_exp.h"
+ 
++/* thunder: este kernel nao tem set_task_util_min_pct (escala 0..100), que o drop
++ * espera e declara em gl_kal.h:1847. Ele tem o equivalente em escala 0..1024,
++ * set_task_util_min(), definido e EXPORT_SYMBOL em kernel/sched/core.c:1236 e
++ * declarado em drivers/misc/mediatek/performance/fpsgo_v3/fbt/include/
++ * fbt_cpu_platform.h:23. Mapear converte a unidade e preserva o comportamento
++ * (o driver so chama com 100 = boost total e 0 = liberar), em vez de anular o
++ * ajuste de escalonador.
++ */
++extern int set_task_util_min(pid_t pid, unsigned int util_min);
++#undef set_task_util_min_pct
++#define set_task_util_min_pct(_pid, _pct) \
++	set_task_util_min((_pid), (unsigned int)(((_pct) * 1024u) / 100u))
++
+ #ifdef CONFIG_WLAN_MTK_EMI
+ #if KERNEL_VERSION(5, 4, 0) <= CFG80211_VERSION_CODE
+ #include <soc/mediatek/emi.h>
+diff --color -urN a/wmt_drv/common_main/platform/mtk_wcn_consys_hw.c b/wmt_drv/common_main/platform/mtk_wcn_consys_hw.c
+--- a/wmt_drv/common_main/platform/mtk_wcn_consys_hw.c	2026-09-20 22:37:35.711891980 -0300
++++ b/wmt_drv/common_main/platform/mtk_wcn_consys_hw.c	2026-09-20 22:37:35.756440871 -0300
+@@ -86,12 +86,20 @@
+ 
+ struct platform_device *g_pdev;
+ 
+-#ifdef ALLOCATE_CONNSYS_EMI_FROM_KO
+-phys_addr_t gConEmiPhyBase;
+-EXPORT_SYMBOL(gConEmiPhyBase);
+-unsigned long long gConEmiSize;
+-EXPORT_SYMBOL(gConEmiSize);
+-#endif
++/* thunder: NAO definir nem exportar aqui. O connadp, que e' embutido no vmlinux
++ * (obj-$(CONFIG_MTK_COMBO)), ja' define e exporta os dois. Definir de novo faz o
++ * insmod recusar o modulo com "exports duplicate symbol gConEmiPhyBase
++ * (owned by kernel)".
++ *
++ * O header mtk_wcn_consys_hw.h:452-453 ja' os declara extern, entao
++ * wmt_allocate_connsys_emi() continua ATRIBUINDO normalmente -- e' o mesmo
++ * armazenamento, agora o do kernel. Assim o valor correto (vindo do
++ * of_reserved_mem_lookup do no "memory-region" do proprio wifi@18000000)
++ * prevalece, independente de o RESERVEDMEM_OF_DECLARE do connadp ter disparado.
++ *
++ * Vantagem sobre remover a definicao do lado do connadp: aquilo exigiria
++ * reflashear o kernel; isto vale com o vmlinux ja' gravado.
++ */
+ 
+ UINT32 gps_lna_pin_num = 0xffffffff;
+ 

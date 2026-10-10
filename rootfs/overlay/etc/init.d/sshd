@@ -1,0 +1,18 @@
+#!/usr/bin/openrc-run
+# OpenSSH sem systemd. As chaves de host nascem no primeiro start.
+
+description="Servidor OpenSSH"
+
+command=/usr/bin/sshd
+command_args="-D ${SSHD_OPTS:-}"
+supervisor=supervise-daemon
+
+depend() {
+	use net logger
+	after usb-network
+}
+
+start_pre() {
+	ssh-keygen -A || return 1
+	/usr/bin/sshd -t || return 1
+}

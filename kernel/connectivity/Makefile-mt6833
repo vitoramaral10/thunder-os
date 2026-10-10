@@ -1,0 +1,261 @@
+#
+# Copyright (C) 2015 MediaTek Inc.
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 2 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# ---------------------------------------------------------------------------
+# xiaomi-thunder (MT6833) -- r17
+#
+# Base: drivers/misc/mediatek/connectivity/Makefile do drop "camellian"
+# (kernel 4.14 da Xiaomi, plataforma MT6833 real), NAO o Makefile que vem no
+# tarball light-u-oss -- aquele hardcoda MTK_COMBO_CHIP=CONNAC e
+# WLAN_CHIP_ID=6765, que sao os valores errados para este SoC.
+#
+# Toda alteracao local esta marcada com "thunder:".
+# ---------------------------------------------------------------------------
+
+# Connectivity combo driver
+# If KERNELRELEASE is defined, we've been invoked from the
+# kernel build system and can use its language.
+ifneq ($(KERNELRELEASE),)
+    subdir-ccflags-y += -I$(srctree)/
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include/clkbuf_v1
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/base/power/include/clkbuf_v1/$(MTK_PLATFORM)
+# thunder: os -Werror que o camellian punha nestas 4 linhas foram removidos.
+# E drop 4.14 compilado em 4.19; alem disso downstreamkernel_prepare ja
+# varre o builddir inteiro tirando -Werror de Makefile/Kbuild.
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/$(MTK_PLATFORM)/include
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat
+ifeq ($(CONFIG_MTK_PMIC_CHIP_MT6359),y)
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/pmic/include/mt6359
+endif
+ifeq ($(CONFIG_MTK_PMIC_NEW_ARCH),y)
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/pmic/include
+endif
+    subdir-ccflags-y += -I$(srctree)/drivers/mmc/core
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci/$(MTK_PLATFORM)
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/eccci/
+    subdir-ccflags-y += -I$(srctree)/drivers/clk/mediatek/
+    subdir-ccflags-y += -I$(srctree)/drivers/pinctrl/mediatek/
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/power_throttling/
+
+# thunder: clkbuf. O Makefile do alvo aponta para
+# drivers/misc/mediatek/clkbuf/src; o camellian aponta para
+# base/power/include/clkbuf_v1. As duas arvores existem neste kernel e sao
+# geracoes diferentes: clkbuf/src declara mtk_register_clk_buf()/
+# enum CLK_BUF_TYPE, enquanto clkbuf_v1 declara clk_buf_ctrl()/
+# enum CLK_BUF_SWCTRL_STATUS_T -- e clk_buf_ctrl() (a funcao que o adapter
+# chama) so tem implementacao em base/power/clkbuf_v1/mt6853/mtk_clkbuf_hw.c.
+# Logo o camellian esta certo e ficamos so com clkbuf_v1.
+# Na pratica o ponto e inerte nesta revisao: o unico consumidor e
+# connectivity_build_in_adapter.c, todo ele atras de
+# #ifdef CONNADP_HAS_CLOCK_BUF_CTRL, que nao lista CONFIG_MACH_MT6833.
+# Se algum dia MT6833 entrar naquela lista, sera preciso tambem
+# CONFIG_MTK_BASE_POWER=y, senao vira undefined reference a clk_buf_ctrl.
+
+# thunder: redirecionamento de includes.
+# wmt_chrdev_wifi/Makefile e wlan_drv_gen4m/Makefile procuram os headers do
+# wmt_drv em connectivity/common/common_main/... , que e o layout do repo
+# vendor/mediatek/kernel_modules. Aqui a arvore foi enxertada em
+# connectivity/wmt_drv/, entao apontamos os mesmos diretorios pelo caminho real.
+# connectivity/common/ continua sendo o adapter (connadp), como no kernel.
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/wmt_drv/common_main/include
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/wmt_drv/common_main/linux/include
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/wmt_drv/common_main/core/include
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/wmt_drv/common_main/platform/include
+    subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/connectivity/wmt_drv/debug_utility
+
+    # -----------------------------------------------------------------------
+    # connadp: adapter build-in. Fica SEMPRE embutido (obj-y via
+    # CONFIG_MTK_COMBO=y). E ele que hospeda o struct wmt_platform_bridge e
+    # os EXPORT_SYMBOL que wmt_drv.ko consome -- nao pode virar modulo.
+    # -----------------------------------------------------------------------
+    MODULE_NAME := connadp
+    obj-$(CONFIG_MTK_COMBO) += $(MODULE_NAME).o
+
+    $(MODULE_NAME)-objs += common/connectivity_build_in_adapter.o
+    $(MODULE_NAME)-objs += common/wmt_build_in_adapter.o
+    $(MODULE_NAME)-objs += power_throttling/adapter.o
+    $(MODULE_NAME)-objs += power_throttling/core.o
+# thunder: test.o condicionado, como no Makefile do alvo. O camellian o inclui
+# sempre, mas aqui power_throttling/ e do alvo e test.c depende de
+# CONFIG_CONN_PWR_DEBUG.
+    ifeq ($(CONFIG_CONN_PWR_DEBUG),y)
+        $(MODULE_NAME)-objs += power_throttling/test.o
+    endif
+
+    ifeq ($(CONFIG_MTK_COMBO), y)
+        ccflags-y += -D CFG_CONNADP_BUILD_IN
+    endif
+
+    # -----------------------------------------------------------------------
+    # thunder: bloco de dispatch por chip.
+    #
+    # No original tudo isto estava dentro de
+    # "ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)" e criava symlinks para
+    # $(srctree)/../vendor/mediatek/kernel_modules/... , abortando com
+    # $(error) se o diretorio nao existisse.
+    #
+    # Aqui: (a) o bloco roda sempre, porque as variaveis exportadas
+    # (MTK_COMBO_CHIP, WLAN_CHIP_ID, CONNAC_VER, ...) sao necessarias tanto no
+    # modo modulo quanto no build-in; (b) os symlinks e os $(error) sumiram,
+    # porque a arvore e copiada para ca por kernel/build.sh;
+    # (c) CONFIG_WLAN_DRV_BUILD_IN fica DESLIGADO de proposito -- e ele que
+    # cada sub-Kbuild consulta para escolher entre obj-y e obj-m.
+    # -----------------------------------------------------------------------
+    $(info $$CONFIG_MTK_COMBO_CHIP is [${CONFIG_MTK_COMBO_CHIP}])
+    MTK_PLATFORM_ID := $(patsubst CONSYS_%,%,$(subst ",,$(CONFIG_MTK_COMBO_CHIP)))
+    $(info MTK_PLATFORM_ID is [${MTK_PLATFORM_ID}])
+
+    ifneq (,$(filter $(CONFIG_MTK_COMBO_CHIP), "CONSYS_6877"))
+        export MTK_COMBO_CHIP=CONNAC2X2_SOC5_0
+        export CONNAC_VER=2_0
+    else ifneq (,$(filter $(CONFIG_MTK_COMBO_CHIP), "CONSYS_6885" "CONSYS_6893"))
+        export MTK_COMBO_CHIP=CONNAC2X2_SOC3_0
+        export CONNAC_VER=2_0
+    else ifneq (,$(filter $(CONFIG_MTK_COMBO_CHIP), "CONSYS_6833"))
+        # <- este e o caminho do xiaomi-thunder
+        export MTK_COMBO_CHIP=SOC2_1X1
+        export CONNAC_VER=1_0
+    else ifneq (,$(filter $(CONFIG_MTK_COMBO_CHIP), "CONSYS_6779" "CONSYS_6873" "CONSYS_6853"))
+        export MTK_COMBO_CHIP=SOC2_2X2
+        export CONNAC_VER=1_0
+    else
+        export MTK_COMBO_CHIP=CONNAC
+        export CONNAC_VER=1_0
+    endif
+
+    # MTK_PLATFORM vem de drivers/misc/mediatek/Makefile e vale "mt6853"
+    # (CONFIG_MTK_PLATFORM do light_defconfig). TARGET_BOARD_PLATFORM_WMT e
+    # que seleciona o arquivo de plataforma do connsys: mt6833.
+    export MTK_PLATFORM_WMT=$(MTK_PLATFORM)
+    export TARGET_BOARD_PLATFORM_WMT=$(patsubst CONSYS_%,mt%,$(subst ",,$(CONFIG_MTK_COMBO_CHIP)))
+
+    # for gen4m options
+    export CONFIG_MTK_COMBO_WIFI_HIF=axi
+    export WLAN_CHIP_ID=$(MTK_PLATFORM_ID)
+    export MTK_ANDROID_WMT=y
+
+    # thunder: BT_PLATFORM e lido pelo Makefile de bt_drv/ para montar o nome do
+    # modulo (bt_drv_6833.ko). MTK_PLATFORM_ID ja foi derivado acima de
+    # CONFIG_MTK_COMBO_CHIP ("CONSYS_6833" -> 6833).
+    export BT_PLATFORM=$(MTK_PLATFORM_ID)
+    export MTK_ANDROID_EMI=y
+
+    # thunder: wlan_service LIGADO.
+    #
+    # wlan_drv_gen4m/Makefile:889 usa
+    # "ifneq ($(findstring wlan_service,$(MTK_WLAN_SERVICE_PATH)),)" para ligar
+    # de uma vez tres coisas: -DCONFIG_WLAN_SERVICE=1 (linha 896; senao 0, linha
+    # 912), os quatro -I do servico (898-901) e os seis .o (903-908). O valor
+    # e usado como "SERVICE_DIR := $(MTK_WLAN_SERVICE_PATH)" e concatenado sem
+    # separador ("$(SERVICE_DIR)agent/agent.o", "-I$(src)/$(SERVICE_DIR)include"),
+    # entao precisa ser relativo a $(src) e terminar em barra.
+    #
+    # POR QUE LIGAR, e nao remendar com stub:
+    #
+    # (a) O .ko de FABRICA tem o servico dentro. Conferido com readelf -sW no
+    #     wlan_drv_gen4m.ko do firmware de fabrica: 189 nomes de funcao de
+    #     wlan_service/ casam, entre eles 56/56 de net_adaption_gen4m.c, 13/13
+    #     de sys_adaption_gen4m.c, 97/103 de operation_gen4m.c e 72/75 de
+    #     service_test.c. "strings" ainda mostra hqa_listmode_* e os typeids de
+    #     CFI de "struct service_test". Ou seja, CONFIG_WLAN_SERVICE=1 e a
+    #     configuracao que a Xiaomi usou.
+    #
+    # (b) Com o servico DESLIGADO a arvore simplesmente nao fecha, porque nada
+    #     no drop inclui os headers do servico fora de "#if CONFIG_WLAN_SERVICE
+    #     == 1" -- acrescentar so o -I nao resolveria nada. Os tres erros ja
+    #     vistos (LIST_SEG_MAX, nicCmdEventListmode, GNU_PACKED) tem essa mesma
+    #     causa, e ainda faltava pelo menos "struct list_mode_event
+    #     g_HqaListModeStatus;" em os/linux/gl_qa_agent.c:86, que esta sob
+    #     CFG_SUPPORT_QA_TOOL (=1 por config.h:233) e NAO sob
+    #     CONFIG_WLAN_SERVICE, mas cujo tipo so existe em
+    #     wlan_service/glue/osal/include/net_adaption.h:1218.
+    #
+    # Ligar fecha os quatro de uma vez: gl_os.h:283 passa a incluir agent.h,
+    # que puxa service_test.h -> operation.h -> net_adaption.h ->
+    # sys_adaption.h, e e de la que vem GNU_PACKED (sys_adaption.h:33),
+    # LIST_SEG_MAX (net_adaption.h:1215) e struct list_mode_event.
+    #
+    # Risco conferido antes de ligar: os seis .c do servico so chamam para fora
+    # kalMemAlloc/Cmp/Move/Set/Zero, ASSERT e dumpMemory32, todos em
+    # sys_adaption_gen4m.c, que e o unico que inclui precomp.h/gl_kal.h. As
+    # chamadas sem declaracao (mt_Trigger_Sounding_Packet,
+    # mt_asic_pcie_aspm_dym_ctrl, set_pcie_aspm_dym_ctrl_cap,
+    # mt_engine_apply_pwr_offset, BOARD_IS_5G_ONLY) estao todas dentro de
+    # "#if 0". Os apelidos de tipo de sys_adaption.h (u_int32, boolean, ...)
+    # viram globais, mas o unico uso fora de wlan_service/ e
+    # gl_hook_api.c:4422, que ja esta dentro de um bloco CONFIG_WLAN_SERVICE.
+    #
+    # Verificacao no log da proxima compilacao: devem aparecer as linhas
+    # "SERVICE_DIR is [{wlan_service/}]" e "$MTK_WLAN_SERVICE is [{...}]"
+    # (Makefile do gen4m, linhas 892 e 910).
+    export MTK_WLAN_SERVICE_PATH=wlan_service/
+
+    WLAN_IP_SET_1_SERIES := 6765 6761 6885 6893
+    WLAN_IP_SET_2_SERIES := 3967 6785
+    WLAN_IP_SET_3_SERIES := 6779 6873 6853
+    ifneq ($(filter $(WLAN_IP_SET_3_SERIES), $(WLAN_CHIP_ID)),)
+        $(info WIFI_IP_SET is 3)
+        export WIFI_IP_SET=3
+    else ifneq ($(filter $(WLAN_IP_SET_2_SERIES), $(WLAN_CHIP_ID)),)
+        $(info WIFI_IP_SET is 2)
+        export WIFI_IP_SET=2
+    else
+        $(info WIFI_IP_SET is 1)
+        export WIFI_IP_SET=1
+    endif
+
+    # -----------------------------------------------------------------------
+    # thunder: descida nos subdiretorios.
+    #
+    # "obj-y += <dir>/" apenas manda o kbuild descer; quem decide obj-y x obj-m
+    # e o Kbuild/Makefile de dentro:
+    #   wmt_drv/Kbuild:119          CONFIG_WLAN_DRV_BUILD_IN != y -> obj-m
+    #   wmt_chrdev_wifi/Makefile:54 CONFIG_WLAN_DRV_BUILD_IN != y -> obj-m
+    #   wlan_drv_gen4m/Makefile:538 CONFIG_WLAN_DRV_BUILD_IN != y -> obj-m
+    #   connfem/Kbuild:41           CONFIG_MTK_EXTRA_CONN_DRV_BUILD_IN != y -> obj-m
+    # Nenhum desses simbolos esta no config-xiaomi-thunder.aarch64, entao os
+    # quatro saem como .ko.
+    #
+    # ARMADILHA VERIFICADA (nao e problema, mas conferir se o Makefile mudar):
+    # wlan_drv_gen4m/Makefile:534 tem "obj-$(CONFIG_MTK_COMBO_WIFI) += ...".
+    # Se fosse alcancada, com CONFIG_MTK_COMBO_WIFI=y o objeto cairia em obj-y e
+    # scripts/Makefile.lib:17 ("obj-m := $(filter-out $(obj-y),$(obj-m))")
+    # descartaria o obj-m da linha 544 -- driver embutido em silencio.
+    # Nao acontece: o ifeq da linha 531 compara CONFIG_MTK_WIFI_ONLY (vazio) com
+    # $(filter ,m y) (vazio), da verdadeiro, e o ramo tomado e
+    # "obj-$(CONFIG_MTK_WIFI_ONLY) += ..." == "obj- += ...", que o kbuild ignora.
+    #
+    # NAO definir MTK_WCN_REMOVE_KERNEL_MODULE nem MTK_WCN_BUILT_IN_DRIVER:
+    # sao exatamente os defines do modo embutido.
+    # -----------------------------------------------------------------------
+    obj-y += wmt_drv/
+    obj-y += wmt_chrdev_wifi/
+    obj-y += wlan_drv_gen4m/
+    obj-y += connfem/
+
+    # thunder: bt_drv/ -- driver de caractere do Bluetooth (/dev/stpbt).
+    # Sai como .ko pelo mesmo motivo dos outros quatro: seu Makefile testa
+    # CONFIG_WLAN_DRV_BUILD_IN, que nao esta no config deste aparelho.
+    # Nao depende de CONFIG_MTK_COMBO_BT: aquele simbolo so controla, no
+    # Kconfig do vendor, se wmt_drv chama mtk_wcn_stpbt_drv_init() na deteccao
+    # de chip. Aqui o modulo e carregado normalmente pelo modprobe.
+    obj-y += bt_drv/
+
+# Otherwise we were called directly from the command line;
+# invoke the kernel build system.
+else
+    KERNELDIR ?= /lib/modules/$(shell uname -r)/build
+    PWD  := $(shell pwd)
+default:
+	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
+endif

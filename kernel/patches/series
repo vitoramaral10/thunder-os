@@ -1,0 +1,27 @@
+# Ordem de aplicacao (patch -p1 na raiz do fonte da Xiaomi, depois do enxerto da
+# conectividade). Linha com # e comentario.
+fix-selinux-host-includes.patch
+fix-external-inline-declarations.patch
+use-system-cpio.patch
+fix-gcc-modern-compat.patch
+fix-sia81xx-vla.patch
+build-mt6833-dtb.patch
+fix-u-serial-null-close.patch
+fix-mtk-gem-ion-null.patch
+fix-mtk-gem-prime-import-fallback.patch
+fix-mtk-plane-disable-without-layer-blob.patch
+fix-mtk-ipv6-optr-sysctl-netns-leak.patch
+fix-mtk-gauge-kernel-algo.patch
+fix-mtk-gauge-charge-full-uisoc.patch
+fix-mtk-backlight-follow-panel-blank.patch
+fix-nvt-touch-follow-panel-blank.patch
+fix-panel-mode-clock-refresh.patch
+backport-procfs-fdinfo-ptrace-read.patch
+backport-drm-prime-ioctls-no-auth.patch
+add-drm-panfrost-mt6833.patch
+fix-devfreq-trans-stat-overflow.patch
+add-mtk-lcd-backlight-class.patch
+add-mtk-hf-sensors-iio.patch
+fix-ktd3137-brightness-fade.patch
+fix-mt6360-transmit-buffer-overflow.patch
+fix-u-ether-linearize-tx.patch

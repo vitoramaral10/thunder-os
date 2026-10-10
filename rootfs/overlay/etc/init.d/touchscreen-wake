@@ -1,0 +1,53 @@
+#!/usr/bin/openrc-run
+# Acorda o controlador de toque Novatek NT36672C do Xiaomi Redmi 10 5G
+# (xiaomi-thunder). Independente de compositor.
+#
+# Por que isto existe:
+#   O driver NVT-ts termina o probe com bTouchIsAwake = 0 e WAKEUP_GESTURE 1
+#   (nt36xxx.h:84), o que desvia TODA interrupcao para o decodificador de
+#   gesto — o parser de coordenadas nunca roda. bTouchIsAwake so vira 1 em
+#   nvt_ts_resume(), chamado apenas pelo notificador de framebuffer em
+#   FB_EVENT_BLANK/FB_BLANK_UNBLANK. Como o kernel deste port nao tem
+#   CONFIG_FRAMEBUFFER_CONSOLE, nada emite esse evento.
+#
+#   Escrever 0 em /sys/class/graphics/fb0/blank dispara nvt_ts_resume(), que
+#   faz nvt_update_firmware(), nvt_check_fw_reset_state(), nvt_irq_enable(true)
+#   e bTouchIsAwake = 1 de uma vez so.
+#
+#   Depende de /usr/lib/firmware/nt36672c_tm_01_ts_fw.bin, que vem
+#   no rootfs e no initramfs. Sem o arquivo o request_firmware
+#   falha com -ENOENT e o IC fica no bootloader, sem nunca levantar a IRQ.
+
+description="Unblank do fb0 para acordar o touchscreen Novatek NT36672C"
+
+: "${blank_node:=/sys/class/graphics/fb0/blank}"
+
+depend() {
+	after udev
+	before display-manager greetd xdm
+}
+
+start() {
+	ebegin "Acordando o touchscreen NT36672C via $blank_node"
+
+	if [ ! -e "$blank_node" ]; then
+		ewarn "$blank_node nao existe; touchscreen pode ficar inativo"
+		eend 0
+		return 0
+	fi
+
+	# Idempotente: fb_blank() reemite o evento mesmo se o valor ja for 0, e
+	# nvt_ts_resume() ignora a chamada quando o IC ja esta acordado.
+	if ! echo 0 > "$blank_node" 2>/dev/null; then
+		ewarn "falha ao escrever em $blank_node; touchscreen pode ficar inativo"
+	fi
+
+	# Nunca falhar o boot por causa do toque.
+	eend 0
+	return 0
+}
+
+stop() {
+	# Nada a desfazer: apagar a tela de proposito so atrapalharia.
+	return 0
+}

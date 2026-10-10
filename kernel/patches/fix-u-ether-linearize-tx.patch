@@ -1,0 +1,43 @@
+From: thunder
+Subject: [PATCH] u_ether: linearize the skb on the single-packet TX path
+
+eth_start_xmit() sends skb->data with skb->len bytes when packet
+aggregation (multi_pkt_xfer) is off, which only works for a linear skb.
+MediaTek's u_ether sets NETIF_F_SG and NETIF_F_GSO, and this 4.19 tree no
+longer drops SG for devices without checksum offload, so TCP builds skbs
+whose payload sits in page fragments: the first ~2 KB of each write is in
+the linear head, the rest is not. The gadget then sends the bytes that
+follow the head in memory instead of the payload.
+
+On the host, the TCP checksum fails, conntrack marks the segment INVALID
+and a stateful firewall drops it. Symptom: over the USB link, ping and the
+first segments of a TCP connection pass, then the stream stalls (the SSH
+key exchange never completes, a 20 KB send delivers exactly the first
+1024 bytes). Wi-Fi was unaffected because its driver handles fragments.
+
+Found on 2026-10-10 with the host logging "[UFW BLOCK] ... SRC=172.16.42.1
+... PROTO=TCP SPT=22" for replies of a connection the host had opened,
+while 300 back-to-back 1400-byte pings came back intact.
+
+---
+--- a/drivers/usb/gadget/function/u_ether.c	2026-10-10 17:42:02.565778123 -0300
++++ b/drivers/usb/gadget/function/u_ether.c	2026-10-10 17:42:02.578813489 -0300
+@@ -742,6 +742,18 @@
+ 		return NETDEV_TX_OK;
+ 	}
+ 
++	/*
++	 * The single-packet path below hands skb->data with skb->len bytes to
++	 * the controller, which is only right for a linear skb. This driver sets
++	 * NETIF_F_SG, so TCP queues its payload in page fragments, and whatever
++	 * follows the linear head in memory goes out on the wire instead.
++	 */
++	if (!multi_pkt_xfer && skb_linearize(skb)) {
++		dev_kfree_skb_any(skb);
++		dev->net->stats.tx_dropped++;
++		return NETDEV_TX_OK;
++	}
++
+ 	/* apply outgoing CDC or RNDIS filters */
+ 	if (skb && !is_promisc(cdc_filter)) {
+ 		u8		*dest = skb->data;
