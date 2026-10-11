@@ -1,0 +1,44 @@
+# bubblewrap como o do Arch, mas sem assumir um kernel minimo.
+#
+# O Arch compila com -D assume_kernel=<linux-lts> (6.18), e isso apaga em tempo de
+# compilacao o fallback de openat2 em safe_openat.c (USE_OPENAT_FALLBACK). openat2 so
+# existe no Linux 5.6+: no kernel de vendor 4.19 todo bind mount do bwrap morre com
+# "Can't open source /usr: Function not implemented". Quem cai junto e o glycin (os
+# carregadores de imagem do GTK rodam dentro do bwrap): sem ele o squeekboard aborta ao
+# carregar o primeiro icone SVG. Sem assume_kernel a escolha entre openat2 e o caminho
+# antigo e feita em tempo de execucao.
+#
+# Nome proprio com provides/conflicts: satisfaz quem depende de bubblewrap, e um
+# pacman -Syu nao o troca de volta pelo do Arch.
+#
+# Fonte: a tag v0.13.0, assinada por Simon McVittie (chave primaria
+# DA98F25C0871C49A59EAFF2C4DE8FF2A63C7CC90, a mesma que o Arch aceita), conferida no PC
+# em 2026-10-11 e fixada aqui pelo commit, para o build nao precisar de chaves GPG.
+pkgname=bubblewrap-thunder
+_name=bubblewrap
+pkgver=0.13.0
+_commit=719a4fd474d44b26906bcf2b1b0fb6eddd8d56d0
+pkgrel=1
+pkgdesc='Unprivileged sandboxing tool (Thunder OS: sem assume_kernel, roda em kernel 4.19)'
+url='https://github.com/containers/bubblewrap'
+arch=(aarch64)
+license=(LGPL-2.1-or-later)
+depends=(glibc libcap libgcc)
+makedepends=(bash-completion docbook-xsl git libxslt meson)
+provides=("bubblewrap=$pkgver")
+conflicts=(bubblewrap)
+source=("$_name::git+$url#commit=$_commit")
+b2sums=('SKIP')
+
+build() {
+	local meson_options=(
+		# sem -D assume_kernel: o fallback de openat2 fica compilado
+		-D selinux=disabled
+	)
+	arch-meson $_name build "${meson_options[@]}"
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+}
