@@ -26,7 +26,8 @@ done
 
 # Pacotes: busybox estatico (udhcpd, telnetd, initramfs), sudo, inetutils (hostname,
 # que o servico hostname do OpenRC chama).
-pac -S busybox sudo inetutils
+# android-tools e python: o mkbootimg do boot-deploy (kernel atualizado pelo pacman).
+pac -S busybox sudo inetutils android-tools python
 # Do aparelho, do perfil de interface e os extras escolhidos no instalador; com Wi-Fi,
 # wpa_supplicant e dhcpcd (sem udev, o NetworkManager nao gerencia a interface).
 extra=("${DEVICE_PACKAGES[@]}" "${PROFILE_PACKAGES[@]}" "${EXTRA_PACKAGES[@]}")
@@ -49,12 +50,12 @@ grep -E '^THUNDER_PROFILE=' "$S/config" >> /etc/thunder/device
 echo "$THUNDER_HOSTNAME" > /etc/hostname
 echo "hostname=\"$THUNDER_HOSTNAME\"" > /etc/conf.d/hostname
 
-# Modulos do kernel e firmware do aparelho.
-rm -rf "/usr/lib/modules/$KVER"
-mkdir -p /usr/lib/modules /usr/lib/firmware
-cp -a "$S/modules/$KVER" /usr/lib/modules/
-depmod "$KVER"
+# Firmware do aparelho, e o kernel como pacote (linux-<aparelho>): modulos, kernel e
+# layout do boot.img. Com THUNDER_IMAGE_BUILD=1 o hook do pacote so roda o depmod; o
+# boot.img da imagem e montado no PC (tools/build-boot.sh).
+mkdir -p /usr/lib/firmware
 cp -a "$S/firmware/." /usr/lib/firmware/
+THUNDER_IMAGE_BUILD=1 pacman -U --noconfirm --disable-sandbox "$S"/packages/kernel/*.pkg.tar.*
 
 # Usuarios: root e $THUNDER_USER com a senha provisoria (trocar com passwd), chave SSH.
 if id alarm >/dev/null 2>&1; then userdel -r alarm; fi
@@ -89,7 +90,7 @@ sed -i 's/^#\?rc_logger=.*/rc_logger="YES"/' /etc/rc.conf
 rc-update del dmesg sysinit 2>/dev/null || true
 for s in binfmt network staticroute; do rc-update del "$s" boot 2>/dev/null || true; done
 rc-update del netmount default 2>/dev/null || true
-for s in usb-network telnet-usb sshd local "${DEVICE_SERVICES[@]}" "${PROFILE_SERVICES[@]}"; do
+for s in usb-network telnet-usb sshd ntp-client local "${DEVICE_SERVICES[@]}" "${PROFILE_SERVICES[@]}"; do
 	rc-update add "$s" default
 done
 

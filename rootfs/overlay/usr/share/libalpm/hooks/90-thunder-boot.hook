@@ -1,0 +1,11 @@
+# Kernel novo (pacote linux-<aparelho>): grava o boot.img no aparelho.
+[Trigger]
+Type = Path
+Operation = Install
+Operation = Upgrade
+Target = usr/lib/thunder/kernel/*
+
+[Action]
+Description = Gravando o boot.img do Thunder OS...
+When = PostTransaction
+Exec = /usr/lib/thunder/boot-deploy

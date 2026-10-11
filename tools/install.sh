@@ -39,6 +39,8 @@ else
 	"$t/build-kernel.sh"
 	echo "$want" > "$stamp"
 fi
+# O pacote do kernel (linux-<aparelho>) e rapido de refazer e e o que a imagem instala.
+"$t/package-kernel.sh"
 
 step firmware "Firmware da ROM de fabrica"
 if [ ${#FIRMWARE_FILES[@]} -eq 0 ]; then

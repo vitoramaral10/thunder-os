@@ -1,0 +1,89 @@
+#!/bin/bash
+# Monta o initramfs e o boot.img do Thunder OS. A mesma receita roda no PC
+# (tools/build-boot.sh, raiz = o rootfs montado) e no aparelho (boot-deploy, raiz = /),
+# entao o boot.img sai igual nos dois lugares.
+#
+# Uso: thunder-mkboot <raiz> <pasta do kernel> <saida.img> [initramfs.cpio.gz]
+#   <raiz>            de onde vem o conteudo do initramfs: init, busybox estatico,
+#                     usb-gadget, udhcpd-usb.conf, /etc/thunder/device, thunder-reboot e
+#                     o firmware de INITRAMFS_FIRMWARE
+#   <pasta do kernel> vmlinuz, dtb (se o aparelho usa) e boot.conf (BOOTIMG_ARGS,
+#                     CMDLINE, INITRAMFS_FIRMWARE), do pacote linux-<aparelho>
+# CMDLINE_EXTRA no ambiente vai no fim da cmdline (ex.: thunder.debug=1).
+set -euo pipefail
+
+root=${1:?uso: thunder-mkboot <raiz> <pasta do kernel> <saida.img> [initramfs]}
+kdir=${2:?pasta do kernel}
+out=${3:?saida}
+ramdisk=${4:-}
+
+BOOTIMG_ARGS=() CMDLINE= INITRAMFS_FIRMWARE=()
+. "$kdir/boot.conf"
+cmdline="$CMDLINE${CMDLINE_EXTRA:+ $CMDLINE_EXTRA}"
+
+stage=$(mktemp -d)
+trap 'rm -rf "$stage"' EXIT
+
+install -Dm755 "$root/usr/lib/thunder/initramfs/init" "$stage/init"
+install -Dm755 "$root/usr/bin/busybox" "$stage/bin/busybox"
+install -Dm755 "$root/usr/lib/thunder/usb-gadget" "$stage/usr/lib/thunder/usb-gadget"
+install -Dm644 "$root/etc/udhcpd-usb.conf" "$stage/etc/udhcpd-usb.conf"
+install -Dm644 "$root/etc/thunder/device" "$stage/etc/thunder/device"
+# Estatico: no resgate, "thunder-reboot bootloader" volta ao fastboot sem botao.
+install -Dm755 "$root/usr/local/bin/thunder-reboot" "$stage/bin/thunder-reboot"
+# Driver built-in que pede firmware no probe, antes do switch_root.
+for f in "${INITRAMFS_FIRMWARE[@]}"; do
+	install -Dm644 "$root/usr/lib/firmware/$f" "$stage/lib/firmware/$f"
+done
+mkdir -p "$stage"/{dev,proc,sys,run,tmp,newroot}
+# cpio newc escrito aqui mesmo (Python, que o mkbootimg ja exige): o conteudo vem dos
+# arquivos, mas inode (sequencial), dispositivo, dono e data saem fixos, entao o mesmo
+# conteudo da o mesmo cpio no PC (btrfs) e no aparelho (ext4). Inclui o /dev/console,
+# que nao da para criar sem root. gzip: o descompressor de initramfs que todo kernel de
+# vendor tem (CONFIG_RD_GZIP).
+rd=${ramdisk:-$stage.cpio.gz}
+python3 - "$stage" <<'PY' | gzip -9 -n > "$rd"
+import os, stat, sys
+
+root = sys.argv[1]
+out = sys.stdout.buffer
+ino = 0
+
+def entry(name, mode, data=b"", nlink=1, rdev=(0, 0)):
+    global ino
+    ino += 1
+    n = name.encode() + b"\0"
+    hdr = "070701" + "".join(f"{v:08x}" for v in (
+        ino, mode, 0, 0, nlink, 0, len(data), 0, 0, rdev[0], rdev[1], len(n), 0))
+    out.write(hdr.encode() + n + b"\0" * (-(110 + len(n)) % 4))
+    out.write(data + b"\0" * (-len(data) % 4))
+
+paths = []
+for d, dirs, files in os.walk(root):
+    for x in dirs + files:
+        paths.append(os.path.relpath(os.path.join(d, x), root))
+for rel in sorted(paths, key=lambda p: p.encode()):
+    full = os.path.join(root, rel)
+    st = os.lstat(full)
+    perm = stat.S_IMODE(st.st_mode)
+    if stat.S_ISDIR(st.st_mode):
+        entry(rel, stat.S_IFDIR | perm, nlink=2)
+    elif stat.S_ISREG(st.st_mode):
+        with open(full, "rb") as f:
+            entry(rel, stat.S_IFREG | perm, f.read())
+    else:
+        sys.exit(f"thunder-mkboot: tipo de arquivo nao suportado no initramfs: {rel}")
+entry("dev/console", stat.S_IFCHR | 0o600, rdev=(5, 1))
+entry("TRAILER!!!", 0)
+PY
+
+dtb=()
+[ -s "$kdir/dtb" ] && dtb=(--dtb "$kdir/dtb")
+mkbootimg "${BOOTIMG_ARGS[@]}" \
+	--kernel "$kdir/vmlinuz" \
+	--ramdisk "$rd" \
+	"${dtb[@]}" \
+	--cmdline "$cmdline" \
+	--output "$out"
+[ -n "$ramdisk" ] || rm -f "$rd"
+echo "boot.img: $out ($(stat -c %s "$out") B), cmdline: $cmdline"

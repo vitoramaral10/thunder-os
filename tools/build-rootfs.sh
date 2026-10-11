@@ -37,7 +37,8 @@ THUNDER_TIMEZONE=${THUNDER_TIMEZONE:-UTC}
 THUNDER_HOSTNAME=${THUNDER_HOSTNAME:-$DEVICE_CODENAME}
 pac="pacman --noconfirm --needed --disable-sandbox"
 
-[ -d "$KERNEL_OUT/lib/modules/$KVER" ] || { echo "sem modulos: rode tools/build-kernel.sh" >&2; exit 1; }
+KERNEL_PKG=$OUT/linux-$DEVICE.pkg.tar.zst
+[ -s "$KERNEL_PKG" ] || { echo "sem o pacote do kernel: rode tools/build-kernel.sh e tools/package-kernel.sh" >&2; exit 1; }
 for f in "${FIRMWARE_REQUIRED[@]}" "${INITRAMFS_FIRMWARE[@]}"; do
 	[ -s "$FIRMWARE/$f" ] || { echo "sem $f em $FIRMWARE (devices/$DEVICE/docs)" >&2; exit 1; }
 done
@@ -193,20 +194,24 @@ stage_config=$(
 	echo "LOCAL_PACKAGES=($(qa "${LOCAL_PACKAGES[@]}"))"
 )
 LOCAL_DIRS=$(for p in "${LOCAL_PACKAGES[@]}"; do printf '%s=%s\n' "$p" "${PKG_DIR[$p]}"; done)
-export stage_config THUNDER_PROFILE LOCAL_DIRS REBOOT_DIR repo KVER KERNEL_OUT FIRMWARE AUTHORIZED_KEYS DEVICE_DIR
+export stage_config THUNDER_PROFILE LOCAL_DIRS REBOOT_DIR repo KVER KERNEL_PKG FIRMWARE AUTHORIZED_KEYS DEVICE_DIR
 userns bash -c 'set -e
-	rm -rf "${S:?}"; mkdir -p "$S/packages" "$S/modules" "$S/firmware"
+	rm -rf "${S:?}"; mkdir -p "$S/packages/kernel" "$S/firmware"
 	cp -a "$repo/rootfs/overlay" "$S/overlay"
 	if [ -d "$DEVICE_DIR/overlay" ]; then cp -a "$DEVICE_DIR/overlay" "$S/device-overlay"; fi
 	pd=$repo/rootfs/profiles/$THUNDER_PROFILE
 	if [ -d "$pd/overlay" ]; then cp -a "$pd/overlay" "$S/profile-overlay"; fi
 	if [ -f "$pd/configure.sh" ]; then cp "$pd/configure.sh" "$S/profile-configure.sh"; fi
 	install -Dm755 "$REBOOT_DIR/thunder-reboot" "$S/overlay/usr/local/bin/thunder-reboot"
+	# A receita do boot.img vai para dentro da imagem: o aparelho remonta o boot.img
+	# sozinho quando o pacote do kernel atualiza (boot-deploy).
+	install -Dm755 "$repo/initramfs/init" "$S/overlay/usr/lib/thunder/initramfs/init"
+	install -Dm755 "$repo/initramfs/thunder-mkboot" "$S/overlay/usr/lib/thunder/thunder-mkboot"
+	cp "$(readlink -f "$KERNEL_PKG")" "$S/packages/kernel/"
 	while IFS="=" read -r p dir; do
 		[ -n "$p" ] || continue
 		mkdir -p "$S/packages/$p"; cp "$dir"/*.pkg.tar.* "$S/packages/$p/"
 	done <<< "$LOCAL_DIRS"
-	cp -a "$KERNEL_OUT/lib/modules/$KVER" "$S/modules/"
 	if [ -d "$FIRMWARE" ]; then cp -a "$FIRMWARE/." "$S/firmware/"; fi
 	if [ -n "$AUTHORIZED_KEYS" ]; then cp "$AUTHORIZED_KEYS" "$S/authorized_keys"; fi
 	printf "%s\n" "$stage_config" > "$S/config"

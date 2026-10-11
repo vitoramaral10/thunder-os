@@ -52,6 +52,9 @@ require_device() {
 	FASTBOOT_AB=1
 	FASTBOOT_SLOT=
 	FASTBOOT_DISABLE_VBMETA=1
+	# Como um kernel novo chega a particao boot: partition (o aparelho grava sozinho) ou
+	# fastboot (o aparelho prepara o boot.img e o PC grava pelo fastboot).
+	BOOT_DEPLOY=partition
 	FIRMWARE_REQUIRED=()
 	FIRMWARE_FILES=()
 	FIRMWARE_ROM_PARTITION=vendor

@@ -45,6 +45,10 @@ suffix, e.g. `boot_a`):
 | `boot` | `build/<device>/out/boot.img` | kernel, dtb and initramfs |
 | `ROOT_PARTITION` | `build/<device>/out/userdata.img` | **erases all user data** |
 
+To update only the kernel of a phone that already runs Thunder OS, prefer
+`tools/update-kernel.sh` (see [building.md](building.md#updating-the-kernel-without-reinstalling)):
+it keeps the kernel package in pacman in step with the boot partition.
+
 With `--so-boot` only `boot` is written; vbmeta and the root partition are left alone,
 so the installed system and its data survive. Use it when you only changed the
 kernel or the initramfs. The script reboots the device when it finishes.

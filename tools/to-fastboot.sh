@@ -8,7 +8,9 @@ if command -v adb >/dev/null && adb get-state 2>/dev/null | grep -qx device; the
 	adb reboot bootloader
 elif ping -c 1 -W 1 172.16.42.1 >/dev/null 2>&1; then
 	echo "ssh: thunder-reboot bootloader"
-	ssh -o BatchMode=yes -o ConnectTimeout=5 root@172.16.42.1 thunder-reboot bootloader || true
+	# O aparelho cai antes de responder: limite de tempo, senao o ssh espera minutos.
+	timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=5 -o ServerAliveInterval=2 \
+		-o ServerAliveCountMax=3 root@172.16.42.1 thunder-reboot bootloader </dev/null || true
 else
 	echo "nenhum aparelho no adb nem no SSH: entre no fastboot pelos botoes" >&2
 	exit 1

@@ -46,8 +46,13 @@ built-in touch driver loads it before the root is mounted.
   active slot is `a` (the only one tested).
 - **The screen stays black.** There is no text console: the framebuffer
   console caused a bootloop on this kernel. Use the USB cable.
-- **Clock:** the RTC may be back in 2009 after the battery ran flat. From the
-  host: `ssh root@172.16.42.1 "date -s @$(date +%s) && hwclock --systohc"`.
+- **Clock:** the RTC may be back in 2009 after the battery ran flat. The
+  `ntp-client` service fixes it (system clock and RTC) as soon as Wi-Fi is up.
+- **Kernel updates go through fastboot.** The bootloader turns on the UFS
+  power-on write protection for the boot partition, so Linux cannot write it
+  (`DATA PROTECT`, sense key 0x7) until the next power cycle.
+  `tools/update-kernel.sh` handles it: the phone builds the boot.img, the PC
+  flashes it over fastboot, about 35 s without buttons (`BOOT_DEPLOY=fastboot`).
 - **Factory recovery:** run the factory fastboot package's `flash_all.sh`.
   **Never `flash_all_lock.sh`**: it relocks the bootloader. Afterwards run a
   full `tools/flash.sh --sim` again, since the factory flash re-enables

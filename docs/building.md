@@ -108,6 +108,18 @@ tools/build-kernel.sh
 patches and config apply. `REBUILD=1` skips the preparation and rebuilds the
 tree already in `kernel-src/`, for quick iteration on a hand-applied change.
 
+### 2b. Kernel package
+
+```sh
+tools/package-kernel.sh
+```
+
+Packs the kernel as a pacman package, `build/<device>/out/linux-<device>-<version>-1-aarch64.pkg.tar.zst`:
+the modules, the kernel, the DTB and `boot.conf` (the boot.img layout from `device.sh`). The image
+installs it with pacman, so the phone can later be updated with `pacman` like any other package.
+No proprietary firmware goes in: the initramfs is assembled on the phone, from the firmware already
+there. `install.sh` runs this after the kernel step.
+
 ### 3. Firmware
 
 ```sh
@@ -172,11 +184,14 @@ The script re-extracts the tarball and replaces the device's rootfs on each run.
 tools/build-boot.sh
 ```
 
-Builds the initramfs from `initramfs/init` plus a static busybox,
+Runs `initramfs/thunder-mkboot`, the same recipe the phone runs when its kernel
+is updated: the initramfs comes from `initramfs/init` plus a static busybox,
 `thunder-reboot`, `/etc/thunder/device` and the device's `INITRAMFS_FIRMWARE`,
-all taken from the built rootfs, then packs `build/<device>/out/boot.img` with
-`mkbootimg` and the device's `BOOTIMG_ARGS` and `KERNEL_DTB`. The initramfs is
-gzip, the one initramfs decompressor every vendor kernel has.
+all taken from the built rootfs; the kernel, DTB and boot.img layout come from
+the kernel package tree (`build/<device>/kernel-pkg`). The cpio is written with
+fixed inodes, owners and dates, so the PC and the phone produce the same boot.img
+byte for byte. The initramfs is gzip, the one initramfs decompressor every vendor
+kernel has.
 
 The command line is the device's `CMDLINE`, then `thunder.root=<ROOT_PARTITION>`,
 then `CMDLINE_EXTRA` if you set it. Parameters understood by the init:
@@ -226,6 +241,31 @@ Runs steps 1 to 6 (and the flash, with `THUNDER_FLASH=1`), skipping the
 toolchain if present and the kernel if its inputs did not change since the last
 build. It prints `::step <id> <title>` before each step and `::done` or
 `::error <message>` at the end; this is what the graphical installer reads.
+
+## Updating the kernel without reinstalling
+
+```sh
+tools/update-kernel.sh            # build if needed, package, send, install
+tools/update-kernel.sh --reboot   # and reboot into it
+```
+
+For a phone already running Thunder OS on the cable. It installs the kernel
+package with pacman on the phone; the package's hook (`90-thunder-boot.hook`)
+runs `/usr/lib/thunder/boot-deploy`, which assembles the boot.img on the phone.
+What happens next depends on the device's `BOOT_DEPLOY`:
+
+- `partition`: the phone writes its own boot partition, keeping the previous
+  boot.img in `/var/lib/thunder/boot-previous.img` and checking the write by
+  sha256 (restoring the copy if it does not match).
+- `fastboot` (the thunder): the bootloader write-protects the boot partition, so
+  the phone leaves the boot.img pending, and the script copies it back, checks
+  its hash, sends the phone to fastboot (`thunder-reboot bootloader`), flashes
+  it, waits for SSH and checks the partition. About 35 s, no buttons, no data
+  touched.
+
+The boot tools (`init`, `thunder-mkboot`, `boot-deploy`, the hook) are copied
+from the repository on every run, so the boot.img always comes from the current
+recipe, and phones installed before the kernel package migrate on the first run.
 
 ## Next
 

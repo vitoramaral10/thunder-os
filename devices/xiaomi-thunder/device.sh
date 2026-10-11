@@ -39,6 +39,10 @@ ANDROID_DEVICES=(thunder light)
 FASTBOOT_AB=1
 FASTBOOT_SLOT=a
 FASTBOOT_DISABLE_VBMETA=1
+# O bootloader liga a protecao de escrita "power-on" do UFS na particao boot: de dentro
+# do Linux a escrita volta DATA PROTECT (sense key 0x7). Kernel novo so pelo fastboot
+# (tools/update-kernel.sh faz isso pelo cabo, sem botao).
+BOOT_DEPLOY=fastboot
 
 # Firmware proprietario: copiado da ROM de fabrica do usuario (tools/extract-firmware.sh),
 # nunca do repositorio. Todos ficam em /firmware do vendor.

@@ -102,6 +102,7 @@ because many bootloaders prepend their own arguments (including `root=`).
 | `FASTBOOT_AB` | `1` | `1` writes `boot_<slot>` and `vbmeta_<slot>`; `0` writes `boot` and `vbmeta` |
 | `FASTBOOT_SLOT` | empty | If set, `flash.sh` refuses unless that slot is active. Use it for the slot you tested |
 | `FASTBOOT_DISABLE_VBMETA` | `1` | Writes an empty vbmeta with verification disabled before `boot`. `0` for phones without AVB |
+| `BOOT_DEPLOY` | `partition` | How a kernel update reaches the boot partition. `partition`: the phone writes it. `fastboot`: the bootloader write-protects it (writes fail with `DATA PROTECT`, sense key 0x7), so `tools/update-kernel.sh` flashes it over fastboot. Test with a write of identical data before choosing `partition` |
 
 ### Root filesystem
 
