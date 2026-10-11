@@ -21,6 +21,13 @@ export HOME=${pw%%:*}
 export SHELL=${pw#*:}
 [ -n "$SHELL" ] || SHELL=/bin/sh
 
+# O supervise-daemon tambem nao passa o idioma: sem LANG o foot cai em C (sem UTF-8,
+# acento e cedilha quebram).
+if [ -r /etc/locale.conf ]; then
+	. /etc/locale.conf
+	export LANG
+fi
+
 phoc=$PPID
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$uid}
 export XDG_SESSION_TYPE=wayland
