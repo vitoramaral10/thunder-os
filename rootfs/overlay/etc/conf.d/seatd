@@ -1,0 +1,17 @@
+# Opcoes do servico seatd (/etc/init.d/seatd).
+
+# Nivel de log do seatd: silent, error, info ou debug. Use debug no bring-up
+# (o seatd escreve no stderr, que o servico grava em seatd_log).
+#seatd_loglevel="error"
+
+# Arquivo de log do seatd (stdout e stderr). Nao vai para syslog/dmesg.
+#seatd_log="/var/log/seatd.log"
+
+# Grupo dono de /run/seatd.sock (modo 0770). O grupo vem do sysusers do pacote
+# seatd do Arch (g seat); o usuario da imagem precisa estar nele.
+#seatd_group="seat"
+
+# 0 = seat sem VT (nenhum ioctl de tty, o menos arriscado no 4.19 de vendor).
+# 1 = seat preso ao VT ativo (VT_SETMODE, KD_GRAPHICS; exige CONFIG_VT=y, que existe).
+# Padrao 0 (PLAN.md passo 8); o teste VT-bound e do aparelho.
+#seatd_vtbound="0"

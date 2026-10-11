@@ -14,7 +14,7 @@ pac() {
 	return 1
 }
 # DEVICE*, KVER, THUNDER_{USER,PASSWORD,ROOT_PASSWORD,LOCALE,TIMEZONE,HOSTNAME,PROFILE},
-# DEVICE_{PACKAGES,SERVICES}, PROFILE_{PACKAGES,SERVICES}, EXTRA_PACKAGES, LOCAL_PACKAGES
+# DEVICE_{PACKAGES,SERVICES}, PROFILE_{PACKAGES,SERVICES,GROUPS}, EXTRA_PACKAGES, LOCAL_PACKAGES
 . "$S/config"
 
 # Pacotes nossos, na ordem. O primeiro e o OpenRC no lugar do systemd como PID 1
@@ -61,6 +61,12 @@ THUNDER_IMAGE_BUILD=1 pacman -U --noconfirm --disable-sandbox "$S"/packages/kern
 if id alarm >/dev/null 2>&1; then userdel -r alarm; fi
 id "$THUNDER_USER" >/dev/null 2>&1 || useradd -m -G wheel -s /bin/bash "$THUNDER_USER"
 printf 'root:%s\n%s:%s\n' "$THUNDER_ROOT_PASSWORD" "$THUNDER_USER" "$THUNDER_PASSWORD" | chpasswd
+# Grupos extras do perfil (seat, video, input, render...): os que faltam sao criados como
+# grupo de sistema; usermod -aG e idempotente.
+for g in ${PROFILE_GROUPS[@]+"${PROFILE_GROUPS[@]}"}; do
+	getent group "$g" >/dev/null || groupadd -r "$g"
+	usermod -aG "$g" "$THUNDER_USER"
+done
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
 chmod 440 /etc/sudoers.d/wheel
 # Chave SSH opcional: sem ela, o login e por senha.
@@ -90,8 +96,11 @@ sed -i 's/^#\?rc_logger=.*/rc_logger="YES"/' /etc/rc.conf
 rc-update del dmesg sysinit 2>/dev/null || true
 for s in binfmt network staticroute; do rc-update del "$s" boot 2>/dev/null || true; done
 rc-update del netmount default 2>/dev/null || true
-for s in usb-network telnet-usb sshd ntp-client local "${DEVICE_SERVICES[@]}" "${PROFILE_SERVICES[@]}"; do
-	rc-update add "$s" default
+# Entradas "servico" (runlevel default) ou "servico:runlevel" (ex.: udev:sysinit).
+# PROFILE_SERVICES pode vir sem definicao se o config for de um build-rootfs.sh antigo.
+for s in usb-network telnet-usb sshd ntp-client local "${DEVICE_SERVICES[@]}" \
+	${PROFILE_SERVICES[@]+"${PROFILE_SERVICES[@]}"}; do
+	rc-update add "${s%%:*}" "$([ "$s" = "${s#*:}" ] && echo default || echo "${s#*:}")"
 done
 
 # Wi-Fi: servicos na interface do aparelho e, se o instalador mandou, a rede ja salva.
@@ -116,6 +125,12 @@ if [ -n "$WIFI_INTERFACE" ]; then
 	chmod 600 "$wconf"
 	rc-update add wpa-supplicant default
 	rc-update add dhcpcd-wifi default
+fi
+
+# Schemas do GLib: overrides de overlay (ex.: 90-thunder-console.gschema.override) so valem
+# depois de compilar.
+if [ -d /usr/share/glib-2.0/schemas ]; then
+	glib-compile-schemas /usr/share/glib-2.0/schemas
 fi
 
 # Ajustes do perfil de interface que dependem do usuario ou dos pacotes ja instalados.

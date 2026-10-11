@@ -51,6 +51,7 @@ profile_file=$repo/rootfs/profiles/$THUNDER_PROFILE.sh
 [[ " ${DEVICE_PROFILES[*]} " == *" $THUNDER_PROFILE "* ]] ||
 	{ echo "$DEVICE nao aceita o perfil $THUNDER_PROFILE (${DEVICE_PROFILES[*]})" >&2; exit 1; }
 PROFILE_PACKAGES=() PROFILE_SERVICES=() PROFILE_LOCAL_PACKAGES=() PROFILE_BUILD_DEPENDS=()
+PROFILE_GROUPS=()
 PROFILE_STATUS=experimental PROFILE_BLOCKERS=
 . "$profile_file"
 if [ "${PROFILE_STATUS:-}" = planned ] && [ "${THUNDER_ALLOW_PLANNED:-0}" != 1 ]; then
@@ -190,6 +191,7 @@ stage_config=$(
 	echo "DEVICE_SERVICES=($(qa "${DEVICE_SERVICES[@]}"))"
 	echo "PROFILE_PACKAGES=($(qa "${PROFILE_PACKAGES[@]}"))"
 	echo "PROFILE_SERVICES=($(qa "${PROFILE_SERVICES[@]}"))"
+	echo "PROFILE_GROUPS=($(qa "${PROFILE_GROUPS[@]}"))"
 	echo "EXTRA_PACKAGES=($(qa "${EXTRA_PACKAGES[@]}"))"
 	echo "LOCAL_PACKAGES=($(qa "${LOCAL_PACKAGES[@]}"))"
 )

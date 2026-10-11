@@ -8,7 +8,7 @@ the USB cable, the device's firmware and services.
 | Profile | Status | What it is |
 |---|---|---|
 | `none` | tested | No interface. SSH and telnet over the USB cable |
-| `console` | planned | Full-screen terminal with an on-screen keyboard |
+| `console` | experimental | Full-screen terminal with an on-screen keyboard |
 | `phosh` | planned | GNOME's phone shell |
 | `plasma-mobile` | planned | KDE's phone shell |
 
@@ -25,7 +25,8 @@ working on them).
 | `PROFILE_STATUS` | `tested` (validated on a real phone), `experimental` (builds, not validated) or `planned` (missing base) |
 | `PROFILE_BLOCKERS` | For `planned`: what is missing, in one sentence |
 | `PROFILE_PACKAGES` | Arch packages installed in the image |
-| `PROFILE_SERVICES` | OpenRC services added to the `default` runlevel |
+| `PROFILE_SERVICES` | OpenRC services to enable. `name` goes to the `default` runlevel; `name:runlevel` picks another one (`udev:sysinit`) |
+| `PROFILE_GROUPS` | Supplementary groups of `THUNDER_USER` (`seat video input render`). Groups that do not exist yet are created with `groupadd -r` |
 | `PROFILE_LOCAL_PACKAGES` | Our own packages, `rootfs/packages/<name>/PKGBUILD`, built in order in the build chroot (each one is installed there before the next, so they can depend on each other) |
 | `PROFILE_BUILD_DEPENDS` | Arch packages the build chroot needs for them |
 
@@ -33,35 +34,53 @@ Optional files next to it, in `rootfs/profiles/<name>/`: `overlay/` (copied over
 `/` after the core overlay and before the device's) and `configure.sh` (run in
 the chroot at the end, with `THUNDER_USER` set).
 
-## Why the graphical profiles are not ready
+## The graphical base
 
 Every graphical session needs pieces that systemd normally provides, and
-systemd 262 does not run on the 4.19 vendor kernels. Researched on 2026-10-10
-(Alpine/postmarketOS, Artix and upstream sources); nothing below has been
-measured on a phone yet.
+systemd 262 (Arch's) wants kernel features the 4.19 vendor kernel lacks. The
+decision (build/research/gui/PLAN.md, 2026-10-11): **the kernel learns what
+systemd 262 needs, and Arch's binaries run unchanged.** Nothing below has been
+measured on a phone yet; the console profile is `experimental` until the plan's
+phone tests pass.
 
-**Common base, in order:**
+**Kernel backports** (`devices/xiaomi-thunder/patches/`), three small commits:
 
-1. Check on the phone whether Arch's `libsystemd` 262 loads at all on 4.19
-   (`sd_bus_open_system`, `sd_pid_get_session`). The answer decides whether
-   Arch's binary packages work as they are or need rebuilding against
-   `libelogind`, as Alpine and Artix do.
-2. **udev**: eudev 3.2.15 (maintained by Alpine, Devuan and Gentoo), packaged
-   with its own rootprefix and without its libudev, plus OpenRC `udev` and
-   `udev-trigger` services. libinput needs udev's `ID_INPUT_TOUCHSCREEN` to see
-   the touchscreen. Then check that `libinput list-devices` (libudev 262)
-   reads eudev's database.
-3. **elogind** 257.16 (`-Dcgroup-controller=openrc`) with its udev rules
-   (`70-uaccess`, `71-seat`, `73-seat-late`), a `logind.conf` like
-   postmarketOS's and `pam_elogind`. Needed by Phosh and Plasma; KWin only
-   talks to logind over D-Bus.
-4. The GPU: panfrost is backported to the thunder kernel but not loaded in
-   the image yet.
+1. `backport-statx-mount-id.patch`: `statx` with `STATX_MNT_ID` and
+   `STATX_ATTR_MOUNT_ROOT` (upstream `fa2fcf4f1df1` + `80340fe3605c`). Without it,
+   systemd's `chase()` fails with `EUNATCH`.
+2. `backport-waitid-pidfd.patch`: `waitid(P_PIDFD)` (`3695eae5fee0`). sd-event
+   reaps udev workers with it; without it the udevd loop dies on the first worker exit.
+3. `backport-close-range.patch`: `close_range(2)` with `flags=0` only
+   (`278a5fbaed89`). Every udev `PROGRAM` and `RUN{program}` needs it before `exec`.
 
-**console**: phoc + squeekboard + foot, under seatd, in a `dbus-run-session`.
-cage does not work: it has neither layer-shell nor input-method-v2, which
-squeekboard needs. The keyboard can be forced visible with
-`SQUEEKBOARD_DEBUG=force_show`.
+Changing the kernel struct changes the MODVERSIONS CRCs, so the out-of-tree
+modules are rebuilt with the kernel, as always.
+
+**Common base:**
+
+1. **udev**: Arch's own `systemd-udevd` 262 (`/usr/lib/systemd/systemd-udevd`) as
+   the OpenRC services `udev` (supervise-daemon, sysinit) and `udev-trigger`
+   (oneshot: `udevadm trigger --action=add`, then `udevadm settle`). libinput needs
+   udev's database (`/run/udev/data`) to accept a device, and the `input_id`
+   builtin tags the NT36672C touchscreen as `ID_INPUT_TOUCHSCREEN` by itself. The
+   rule `80-net-setup-link.rules` is masked (symlink to `/dev/null` in the overlay)
+   so udev never renames `usb0` or `wlan0`; whether `99-default.link` also has to
+   be masked is to be confirmed on the phone. Because libudev stays Arch's, every
+   package (wlroots, libinput, libgudev, NetworkManager, upower) sees a full udev.
+2. **seatd** as the seat manager (OpenRC service, `seat` group), and
+   `dbus-run-session` for the session bus.
+3. The GPU: panfrost is in the kernel build but not autoloaded in the image yet;
+   Mesa's `panfrost` driver comes from the `mesa` package.
+4. A logind is still missing for Phosh and Plasma (elogind is not in Arch ARM, and
+   KWin needs logind over D-Bus).
+
+If the udevd turns up another missing API on 4.19, plan B is libudev-zero loaded
+only by the session (see the plan).
+
+**console**: phoc + squeekboard + foot, under seatd, in a `dbus-run-session`,
+started at boot by the `thunder-console` service as `THUNDER_USER`. cage does not
+work: it has neither layer-shell nor input-method-v2, which squeekboard needs. The
+keyboard can be forced visible with `SQUEEKBOARD_DEBUG=force_show`.
 
 **phosh**: Arch's gnome-session 51 requires `systemd --user` (its builtin
 service manager was removed in 49). Alpine and postmarketOS stay on

@@ -1,0 +1,9 @@
+# Opcoes do servico udev (/etc/init.d/udev).
+
+# Argumentos extras do systemd-udevd; use --debug no bring-up (PLAN.md passos 5 e 12).
+#udev_opts="--debug"
+
+# Arquivo de log do udevd (stdout e stderr). Fica em /run (tmpfs) porque o servico sobe no
+# sysinit, antes de o / e o /var estarem garantidamente graveis. Some no reboot; copie
+# para outro lugar se precisar guardar.
+#udev_log="/run/udevd.log"

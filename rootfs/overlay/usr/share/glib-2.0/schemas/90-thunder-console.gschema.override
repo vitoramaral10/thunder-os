@@ -1,0 +1,4 @@
+# Sem isso o squeekboard acha que ha teclado fisico (padrao false) e nunca aparece.
+# Depois de instalar: glib-compile-schemas /usr/share/glib-2.0/schemas (configure.sh).
+[org.gnome.desktop.a11y.applications]
+screen-keyboard-enabled=true

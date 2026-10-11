@@ -1,0 +1,42 @@
+#!/usr/bin/openrc-run
+# seatd: gerente de seat para o compositor (libseat -> seatd). Sem logind, e o que
+# deixa o phoc, rodando como usuario comum, abrir /dev/dri/card0 e /dev/input/event*.
+# O Arch so entrega seatd.service; este e o equivalente em OpenRC.
+#
+# O socket /run/seatd.sock nasce 0770 com o grupo de -g; o controle de acesso e so
+# esse grupo. O grupo "seat" vem do sysusers do pacote seatd (g seat); o configure.sh
+# deve por o usuario da imagem em seat, video, input e render (perfil, nao aqui).
+#
+# SEATD_VTBOUND=0 (padrao, PLAN.md passo 8): seat sem VT. Teste no aparelho: subir com
+# 0, depois com 1 (CONFIG_VT=y, sem fbcon) e ver se o seat abre sem erro de tty, lendo
+# o seatd_log (padrao /var/log/seatd.log; use seatd_loglevel=debug no teste).
+
+description="seatd (gerente de seat)"
+
+: "${seatd_group:=seat}"
+: "${seatd_loglevel:=error}"
+: "${seatd_vtbound:=0}"
+: "${seatd_log:=/var/log/seatd.log}"
+
+command=/usr/bin/seatd
+command_args="-g ${seatd_group} -l ${seatd_loglevel}"
+supervisor=supervise-daemon
+# O seatd escreve no stderr; o supervise-daemon aponta stdio para /dev/null se nao houver
+# output_log/error_log, e o log do seatd se perderia.
+output_log="${seatd_log}"
+error_log="${seatd_log}"
+
+depend() {
+	need localmount
+	after udev-trigger
+}
+
+start_pre() {
+	if ! getent group "${seatd_group}" >/dev/null; then
+		eerror "grupo ${seatd_group} nao existe (sysusers do pacote seatd nao rodou?)"
+		return 1
+	fi
+	checkpath -f -m 0640 "${seatd_log}" || return 1
+	# O supervise-daemon herda o ambiente do script.
+	export SEATD_VTBOUND="${seatd_vtbound}"
+}

@@ -1,0 +1,9 @@
+# Sessao grafica do perfil console (phoc + squeekboard + foot).
+# console_user: usuario da sessao. Vazio = o primeiro usuario comum do /etc/passwd
+# (uid >= 1000), que e o THUNDER_USER da imagem.
+console_user=""
+# console_renderer: WLR_RENDERER do wlroots. "pixman" (software) isola problemas de GPU;
+# vazio = automatico (gles2 no panfrost, depois vulkan, depois pixman).
+console_renderer=""
+# console_phoc_config: phoc.ini (escala/rotacao do DSI-1). Arquivo ausente = padroes do phoc.
+console_phoc_config="/etc/phoc/thunder-console.ini"
