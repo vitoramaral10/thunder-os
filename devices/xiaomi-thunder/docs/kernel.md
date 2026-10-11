@@ -164,6 +164,32 @@ conntrack marked the segments INVALID and the firewall dropped them: ping and th
 USB). The patch linearizes the skb on that path. Measured after the fix: 50 MB over ssh
 in 2.7 s.
 
+### Backports for Arch's systemd 262 userland
+
+Arch's `systemd-libs` 262 (libudev, sd-event) and `systemd-udevd` assume a newer kernel
+and have no fallback for these four features. Without them libudev enumerated no
+devices on 4.19 (`udev_enumerate_scan_devices` returned `-EUNATCH`) and udevd failed
+on 192 devices, the touchscreen among them. With them, Arch's own udevd runs under
+OpenRC and tags the touchscreen (`ID_INPUT_TOUCHSCREEN=1`). Each was found and checked
+on the phone with a probe (`statx-mntid.py`, `waitid-pidfd.py`, `close-range.py`) or
+strace, and written from the upstream commit with two adversarial reviews.
+
+- **backport-statx-mount-id** (upstream fa2fcf4f1df1 + 80340fe3605c, 5.8): `statx`
+  returns `STATX_MNT_ID` and `STATX_ATTR_MOUNT_ROOT`. systemd's `chase()` needs the
+  mount ID to verify paths and does not fall back to `name_to_handle_at`.
+- **backport-waitid-pidfd** (3695eae5fee0, 5.4): `waitid(P_PIDFD)`. sd-event reaps
+  udevd's workers through pidfds.
+- **backport-close-range** (278a5fbaed89, 5.9, flags 0 only): `close_range` as
+  syscall 436, native and compat. Any non-zero flag returns `-EINVAL`, so callers that
+  ask for `CLOSE_RANGE_CLOEXEC` (OpenRC) fall back.
+- **backport-utimensat-empty-path** (44a3b8744405, 5.8): `utimensat(fd, "", ...,
+  AT_EMPTY_PATH)`. udevd touches tag files and device nodes this way; 4.19 returned
+  `EINVAL` and udevd dropped the whole event.
+
+Still missing and harmless: `faccessat2` (glibc falls back), `epoll_pwait2` (sd-event
+falls back), `openat2` (bubblewrap is rebuilt with its runtime fallback, see
+`rootfs/packages/bubblewrap-thunder`).
+
 ## Connectivity graft
 
 The Wi-Fi, Bluetooth and WMT drivers are not in the Xiaomi tree for this SoC in a usable

@@ -1,0 +1,46 @@
+Backport de 44a3b8744405 ("utimensat: AT_EMPTY_PATH support", Miklos Szeredi,
+Linux 5.8): utimensat(dfd, "", times, AT_EMPTY_PATH) passa a operar no proprio
+dfd (qualquer tipo de arquivo, inclusive O_PATH e symlink), como futimens().
+Qualquer flag fora de AT_SYMLINK_NOFOLLOW|AT_EMPTY_PATH continua -EINVAL, e o
+caminho utimensat(dfd, NULL, ...) (futimens) segue igual, mas agora recusa
+qualquer flag, nao so AT_SYMLINK_NOFOLLOW.
+
+Por que: o systemd-udevd 262 chama utimensat(fd, "", NULL, AT_EMPTY_PATH) para
+atualizar os arquivos de tag em /run/udev/tag e os device nodes; o 4.19 devolve
+EINVAL e o udevd loga "Failed to update tags under /run/udev/tag/: Invalid
+argument" e "Failed to process device, ignoring" (192 dispositivos medidos no
+aparelho, touchscreen incluido).
+
+Adaptado ao 4.19: nada alem de regenerar os hunks contra esta arvore. O
+do_utimes() daqui ja tem a mesma estrutura do 5.7 (fdget para filename == NULL,
+user_path_at() com retry de ESTALE), e LOOKUP_EMPTY ja e honrado por
+getname_flags() em fs/namei.c.
+
+diff -ruN a/fs/utimes.c b/fs/utimes.c
+--- a/fs/utimes.c
++++ b/fs/utimes.c
+@@ -126,13 +126,13 @@ long do_utimes(int dfd, const char __user *filename, struct timespec64 *times,
+ 		goto out;
+ 	}
+ 
+-	if (flags & ~AT_SYMLINK_NOFOLLOW)
++	if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
+ 		goto out;
+ 
+ 	if (filename == NULL && dfd != AT_FDCWD) {
+ 		struct fd f;
+ 
+-		if (flags & AT_SYMLINK_NOFOLLOW)
++		if (flags)
+ 			goto out;
+ 
+ 		f = fdget(dfd);
+@@ -148,6 +148,8 @@ long do_utimes(int dfd, const char __user *filename, struct timespec64 *times,
+ 
+ 		if (!(flags & AT_SYMLINK_NOFOLLOW))
+ 			lookup_flags |= LOOKUP_FOLLOW;
++		if (flags & AT_EMPTY_PATH)
++			lookup_flags |= LOOKUP_EMPTY;
+ retry:
+ 		error = user_path_at(dfd, filename, lookup_flags, &path);
+ 		if (error)

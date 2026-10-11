@@ -25,3 +25,7 @@ add-mtk-hf-sensors-iio.patch
 fix-ktd3137-brightness-fade.patch
 fix-mt6360-transmit-buffer-overflow.patch
 fix-u-ether-linearize-tx.patch
+backport-statx-mount-id.patch
+backport-waitid-pidfd.patch
+backport-close-range.patch
+backport-utimensat-empty-path.patch
