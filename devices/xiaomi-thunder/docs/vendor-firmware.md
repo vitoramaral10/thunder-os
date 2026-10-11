@@ -74,7 +74,7 @@ Mount it read-only and never write to it. It holds the factory RF calibration
 for this specific radio; there is no way to regenerate it if you corrupt it.
 
 The Wi-Fi file is 2050 bytes, with the MAC address at offset 4. It is consumed
-by [`devices/xiaomi-thunder/wifi/wifi-nvram-push.py`](../wifi/wifi-nvram-push.py), which
+by [`devices/xiaomi-thunder/overlay/usr/local/bin/wifi-nvram-push.py`](../overlay/usr/local/bin/wifi-nvram-push.py), which
 hands it to the driver at bring-up. The push is gated behind
 `/etc/thunder-wifi-nvram` and off by default, for reasons explained in
 [wifi-bringup.md](wifi-bringup.md#the-factory-mac-solved-mechanism-unusable-in-practice).
@@ -96,7 +96,7 @@ into the initramfs by [`tools/build-boot.sh`](../../../tools/build-boot.sh), fro
 [building.md](../../../docs/building.md).
 
 `request_firmware()` searches that path, and
-[`devices/xiaomi-thunder/wifi/wmt-daemon.py`](../wifi/wmt-daemon.py) reads the patch
+[`devices/xiaomi-thunder/overlay/usr/local/bin/wmt-daemon.py`](../overlay/usr/local/bin/wmt-daemon.py) reads the patch
 headers from it.
 
 ## Licensing

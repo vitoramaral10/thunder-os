@@ -8,6 +8,7 @@
 set -euo pipefail
 . "$(dirname "$0")/common.sh"
 require_device
+take_build_lock
 
 SIZE=${SIZE:-4G}
 img=$OUT/userdata.img

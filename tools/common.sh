@@ -19,8 +19,15 @@ fi
 BUILD=${BUILD:-$repo/build}
 QEMU=${QEMU:-$BUILD/tools/qemu-aarch64-static}
 BUILDROOT=${BUILDROOT:-$BUILD/buildroot}
+# Caches compartilhados entre aparelhos e instalacoes (tools/build-rootfs.sh):
+#   base/         Arch Linux ARM extraido, com keyring, atualizado, sem kernel generico
+#   packages/     nossos pacotes compilados, por nome e hash da receita
+#   pacman-cache/ pacotes baixados pelo pacman, montado no /var/cache/pacman/pkg do chroot
+BASE=${BASE:-$BUILD/base}
+LOCAL_PKGS=${LOCAL_PKGS:-$BUILD/packages}
+PACMAN_CACHE=${PACMAN_CACHE:-$BUILD/pacman-cache}
 
-mkdir -p "$BUILD"/{dl,tools}
+mkdir -p "$BUILD"/{dl,tools} "$PACMAN_CACHE"
 
 # Carrega devices/$DEVICE/device.sh e define os caminhos do aparelho. Os scripts que
 # dependem de aparelho chamam isto logo depois de carregar o common.sh.
@@ -41,13 +48,25 @@ require_device() {
 	ROOT_PARTITION=userdata
 	INITRAMFS_FIRMWARE=()
 	FASTBOOT_PRODUCTS=()
+	ANDROID_DEVICES=()
 	FASTBOOT_AB=1
 	FASTBOOT_SLOT=
 	FASTBOOT_DISABLE_VBMETA=1
 	FIRMWARE_REQUIRED=()
+	FIRMWARE_FILES=()
+	FIRMWARE_ROM_PARTITION=vendor
+	FIRMWARE_ROM_DIRS=(/firmware /etc/firmware /vendor/firmware)
 	DEVICE_PACKAGES=()
+	# Interface Wi-Fi de estacao; vazio = aparelho sem Wi-Fi (sem wpa_supplicant/dhcpcd).
+	WIFI_INTERFACE=
 	DEVICE_SERVICES=()
+	# Perfis de interface que o aparelho aceita (rootfs/profiles/); vazio = todos.
+	DEVICE_PROFILES=()
 	. "$DEVICE_DIR/device.sh"
+	if [ ${#DEVICE_PROFILES[@]} -eq 0 ]; then
+		local p
+		for p in "$repo"/rootfs/profiles/*.sh; do DEVICE_PROFILES+=("$(basename "$p" .sh)"); done
+	fi
 
 	local v missing=
 	for v in DEVICE_NAME DEVICE_VENDOR DEVICE_CODENAME KERNEL_URL KERNEL_SHA512 \
@@ -65,6 +84,37 @@ require_device() {
 	OUT=$WORK/out
 	KVER=$KERNEL_VERSION
 	mkdir -p "$WORK" "$OUT"
+}
+
+# Uma montagem por vez: base, pacotes, buildroot e caches sao compartilhados em $BUILD,
+# e duas instalacoes juntas apagam o que a outra esta escrevendo. Os scripts chamados
+# de dentro de quem ja tem a trava (THUNDER_LOCK_HELD) passam direto. O kernel solta a
+# trava sozinho quando o processo termina, ate num kill -9.
+take_build_lock() {
+	[ "${THUNDER_LOCK_HELD:-}" = 1 ] && return 0
+	local f=$BUILD/.lock
+	exec 9<>"$f"
+	if ! flock -n 9; then
+		echo "outra montagem do Thunder OS esta rodando (pid $(cat "$f" 2>/dev/null || echo ?)); espere ela terminar" >&2
+		exit 75
+	fi
+	truncate -s 0 "$f"
+	echo $$ >&9
+	export THUNDER_LOCK_HELD=1
+}
+
+# Hash das entradas do kernel do aparelho (depois de require_device): os arquivos da
+# pasta do aparelho fora overlay/ e docs/ (config, patches, enxertos), as variaveis
+# KERNEL_* e o hook de preparo. Mexer em servico, pacote ou doc do aparelho nao muda o
+# hash. O install.sh compara com $KERNEL_OUT/.thunder-inputs para pular a build.
+kernel_inputs() {
+	{
+		(cd "$DEVICE_DIR" && find . \( -path ./overlay -o -path ./docs \) -prune -o \
+			-type f ! -name '*.md' ! -name device.sh -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+		declare -p KERNEL_URL KERNEL_SHA512 KERNEL_VERSION KERNEL_CONFIG KERNEL_IMAGE \
+			KERNEL_DTB KERNEL_STRIP_WERROR 2>/dev/null
+		declare -f device_kernel_prepare 2>/dev/null || true
+	} | sha256sum | cut -d' ' -f1
 }
 
 # Baixa um pacote do Arch do host pelo nome (o host precisa ser Arch ou derivado:

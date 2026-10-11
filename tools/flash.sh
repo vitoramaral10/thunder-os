@@ -7,9 +7,13 @@
 #
 # A particao da raiz (ROOT_PARTITION, em geral userdata) e APAGADA. O bootloader precisa
 # estar desbloqueado; nada aqui o trava. Confere o produto (FASTBOOT_PRODUCTS) antes.
+# O corpo vai num bloco: o bash le o bloco inteiro antes de executar, entao editar
+# este arquivo com ele rodando nao muda a execucao em curso.
+{
 set -euo pipefail
 . "$(dirname "$0")/common.sh"
 require_device
+take_build_lock
 
 out=$OUT
 sim=0
@@ -32,7 +36,7 @@ done
 var() { timeout 10 fastboot getvar "$1" 2>&1 | sed -n "s/^$1: *//p" | head -n 1; }
 wait_fastboot() {
 	local i
-	for i in $(seq 1 30); do
+	for i in $(seq 1 "${FASTBOOT_WAIT:-30}"); do
 		[ -n "$(var product)" ] && return 0
 		sleep 1
 	done
@@ -73,3 +77,5 @@ fastboot flash "boot$suffix" "$out/boot.img"
 [ "$so_boot" = 1 ] || fastboot flash "$ROOT_PARTITION" "$out/userdata.img"
 fastboot reboot
 echo "Gravado. Rede pelo cabo: 172.16.42.1 (ssh, ou telnet com login)."
+exit
+}

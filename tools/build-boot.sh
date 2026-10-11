@@ -10,6 +10,7 @@
 set -euo pipefail
 . "$(dirname "$0")/common.sh"
 require_device
+take_build_lock
 
 # thunder.root vai por ultimo: vale o ultimo valor da cmdline.
 CMDLINE="${CMDLINE:+$CMDLINE }thunder.root=$ROOT_PARTITION${CMDLINE_EXTRA:+ $CMDLINE_EXTRA}"

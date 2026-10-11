@@ -10,7 +10,7 @@ set -euo pipefail
 . "$(dirname "$0")/common.sh"
 # ROOTFS dado pelo chamador dispensa o aparelho (o build-rootfs.sh usa no buildroot).
 [ -n "${ROOTFS:-}" ] || require_device
-export ROOTFS QEMU
+export ROOTFS QEMU PACMAN_CACHE
 [ -x "$QEMU" ] || { echo "sem $QEMU: rode tools/build-rootfs.sh" >&2; exit 1; }
 [ $# -gt 0 ] || set -- /bin/bash -l
 
@@ -23,6 +23,11 @@ echo ":qemu-aarch64:M::$magic:$mask:$QEMU:FP" > /proc/sys/fs/binfmt_misc/registe
 
 # A raiz precisa ser um ponto de montagem: o CheckSpace do pacman procura o mount do cachedir.
 mount --bind "$ROOTFS" "$ROOTFS"
+# Cache de pacotes do host: o que um chroot baixou, o proximo nao baixa de novo.
+if [ -n "${PACMAN_CACHE:-}" ] && [ -d "$PACMAN_CACHE" ]; then
+	mkdir -p "$ROOTFS/var/cache/pacman/pkg"
+	mount --bind "$PACMAN_CACHE" "$ROOTFS/var/cache/pacman/pkg"
+fi
 # /dev proprio e minimo: com o /dev do host por bind, hooks como o systemd-tmpfiles tentam
 # mudar dono de no do host.
 mount -t tmpfs -o mode=0755,nosuid dev "$ROOTFS/dev"

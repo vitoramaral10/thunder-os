@@ -7,9 +7,13 @@
 #
 # Requisitos: cross-compilador aarch64 (tools/fetch-cross.sh poe um em $BUILD/cross) e
 # o basico de build do kernel no host (make, gcc, bison, flex, perl, openssl, cpio, kmod).
+# O corpo vai num bloco: o bash le o bloco inteiro antes de executar, entao editar
+# este arquivo com ele rodando nao muda a execucao em curso.
+{
 set -euo pipefail
 . "$(dirname "$0")/common.sh"
 require_device
+take_build_lock
 
 JOBS=${JOBS:-$(nproc)}
 
@@ -82,3 +86,5 @@ strings "$src/out/vmlinux" | grep -m1 '^Linux version' || true
 [ -d "$out/lib/modules/$KVER" ] || { echo "a build gerou modulos de outra versao: KERNEL_VERSION=$KVER no device.sh?" >&2; ls "$out/lib/modules" >&2; exit 1; }
 ls -l "$out/boot/vmlinuz" ${KERNEL_DTB:+"$out/boot/dtbs/$KERNEL_DTB"}
 find "$out/lib/modules" -name '*.ko' | wc -l
+exit
+}

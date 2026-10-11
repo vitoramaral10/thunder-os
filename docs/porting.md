@@ -65,6 +65,7 @@ and `$DEVICE_DIR` holds its absolute path. Defaults are in
 | `DEVICE_SOC` | no | Documentation only |
 | `DEVICE_MAINTAINER` | no | GitHub handle of who answers for the port |
 | `DEVICE_STATUS` | no | `bring-up`, `boots` or `daily` ([devices/README.md](../devices/README.md)) |
+| `ANDROID_DEVICES` | no | `ro.product.device` values of the stock Android, so the installer recognizes the phone over adb |
 
 ### Kernel
 
@@ -109,7 +110,23 @@ because many bootloaders prepend their own arguments (including `root=`).
 | `FIRMWARE_REQUIRED` | `()` | Files that must exist in `$FIRMWARE` before the rootfs build starts |
 | `DEVICE_PACKAGES` | `()` | Extra Arch packages installed in the image |
 | `DEVICE_SERVICES` | `()` | OpenRC services added to the `default` runlevel, from the overlay or from packages |
-| `overlay/` | — | Optional. Copied over `/` after the core overlay, so a device file can replace a core one |
+| `WIFI_INTERFACE` | empty | Station interface (e.g. `wlan0`). Set it and the image gets `wpa_supplicant`, `dhcpcd`, the `wpa-supplicant` and `dhcpcd-wifi` services and `thunder-wifi`. If the driver needs a bring-up first, ship a service that does `provide wifi-hw` |
+| `DEVICE_PROFILES` | all | Interface profiles (`rootfs/profiles/`) the device offers; empty means all |
+| `overlay/` | — | Optional. Copied over `/` after the core and profile overlays, so a device file can replace either |
+
+### Firmware from the factory ROM
+
+`tools/extract-firmware.sh <rom>` copies the proprietary files from the user's
+own factory ROM: the fastboot package as downloaded (`.tgz`), its extracted
+folder or a bare `super.img`. It reads one logical partition straight out of
+`super.img` (sparse or raw) without unpacking the rest, then pulls the files
+out of it with `debugfs` (ext4) or `fsck.erofs` (EROFS), all without root.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `FIRMWARE_FILES` | `()` | File names to copy. Empty means the device needs no ROM |
+| `FIRMWARE_ROM_PARTITION` | `vendor` | Logical partition in `super`; `_a`, `_b` and no suffix are tried in that order |
+| `FIRMWARE_ROM_DIRS` | `(/firmware /etc/firmware /vendor/firmware)` | Directories searched inside the partition, in order |
 
 The whole firmware directory goes to `/usr/lib/firmware`, and the kernel
 modules to `/usr/lib/modules/$KERNEL_VERSION`.

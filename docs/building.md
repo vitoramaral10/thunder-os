@@ -55,7 +55,10 @@ Shared by all devices:
 | `build/dl/` | Downloads: kernel sources, Arch packages, Arch Linux ARM tarball and signature |
 | `build/tools/` | Static qemu (`qemu-aarch64-static`), GPG home used to verify the tarball (`gnupg/`) |
 | `build/cross/` | Cross toolchain and `bc` (step 1) |
-| `build/buildroot/` | Throwaway chroot where OpenRC and `thunder-reboot` are built |
+| `build/base/`, `build/base.key` | Cached Arch Linux ARM base: the verified tarball extracted, keyring set up, fully upgraded, generic kernel removed. Rebuilt only when the tarball changes |
+| `build/packages/` | Our packages (`rootfs/packages/*`) and `thunder-reboot`, built once per recipe hash |
+| `build/pacman-cache/` | Packages downloaded by pacman, bind-mounted into every chroot. Files unused for 60 days are removed |
+| `build/buildroot/` | Chroot where our packages are built, kept between runs and only used when a recipe changed |
 
 Per device, in `build/<device>/`:
 
@@ -107,8 +110,15 @@ tree already in `kernel-src/`, for quick iteration on a hand-applied change.
 
 ### 3. Firmware
 
-Put the proprietary blobs in `build/<device>/firmware/` (or point `FIRMWARE`
-elsewhere). The rootfs step stops if a file in the device's `FIRMWARE_REQUIRED`
+```sh
+tools/extract-firmware.sh ~/Downloads/<factory-rom>.tgz
+```
+
+Copies the device's `FIRMWARE_FILES` from your factory ROM into
+`build/<device>/firmware/`, reading only the vendor partition out of `super.img`
+(about 30 s for a 6 GB package; nothing is unpacked to disk besides that
+partition). You can also put the blobs there by hand, or point `FIRMWARE`
+elsewhere. The rootfs step stops if a file in the device's `FIRMWARE_REQUIRED`
 or `INITRAMFS_FIRMWARE` is missing. Which files and how to extract them is in
 the device's docs.
 
@@ -137,11 +147,15 @@ Environment variables (or `local.conf`):
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `THUNDER_USER` | current user (`id -un`) | Login account created on the device |
-| `THUNDER_PASSWORD` | `147147` | Password for root and that user, used by the telnet login fallback (`telnet-usb` service). Provisional: change it on the device. The initramfs rescue shell asks for no password |
+| `THUNDER_PASSWORD` | `147147` | Password of that user, also used by the telnet login fallback (`telnet-usb` service). Provisional: change it on the device. The initramfs rescue shell asks for no password |
+| `THUNDER_ROOT_PASSWORD` | `THUNDER_PASSWORD` | Password of root |
+| `THUNDER_PROFILE` | `none` | Interface profile from `rootfs/profiles/`. Profiles marked `planned` are refused (set `THUNDER_ALLOW_PLANNED=1` to build one anyway while porting) |
+| `THUNDER_EXTRA_PACKAGES` | empty | Extra Arch packages, separated by spaces |
+| `THUNDER_WIFI_SSID`, `THUNDER_WIFI_PASSWORD` | empty | Wi-Fi network saved in the image, for devices with `WIFI_INTERFACE`. Only the derived PSK is written; empty password means an open network |
 | `THUNDER_LOCALE` | `en_US.UTF-8` | `LANG` of the image; `en_US.UTF-8` is always generated too |
 | `THUNDER_TIMEZONE` | `UTC` | Zone under `/usr/share/zoneinfo`, e.g. `America/Sao_Paulo` |
 | `THUNDER_HOSTNAME` | the device codename | Hostname |
-| `AUTHORIZED_KEYS` | `~/.ssh/id_ed25519.pub` | Public key installed for SSH. Must exist |
+| `AUTHORIZED_KEYS` | `~/.ssh/id_ed25519.pub` if it exists | Public key installed for SSH. Set it empty for no key (password login only) |
 | `FIRMWARE` | `build/<device>/firmware` | Firmware directory |
 
 Example:
@@ -187,6 +201,31 @@ disabled, since kernels before 5.15 refuse to mount an ext4 that has them. The
 image is checked with `e2fsck -fn`. On first boot
 `/etc/local.d/10-resize-root.start` grows the filesystem to the end of the
 partition.
+
+## What is reused between runs
+
+| Step | Reused when | Force a fresh one |
+| --- | --- | --- |
+| Cross toolchain | `build/cross` exists | delete `build/cross` |
+| Kernel | the kernel inputs did not change: the device folder minus `overlay/`, `docs/` and `device.sh`, plus the `KERNEL_*` variables and `device_kernel_prepare` (`kernel/.thunder-inputs`) | delete `build/<device>/kernel` |
+| Firmware | same ROM (path, size, date) and same `FIRMWARE_FILES` (`build/<device>/firmware.stamp`) | delete the stamp |
+| Arch base | same tarball; each run still applies the day's incremental upgrade | `THUNDER_REFRESH_BASE=1` (downloads the latest tarball) |
+| Our packages | same recipe (hash of `rootfs/packages/<name>/`, of `thunder-reboot.c`) | delete `build/packages/<name>` |
+| Device rootfs | never: it carries your user, passwords and profile. It is a reflink copy of the base (instant on btrfs/xfs) plus the configuration | — |
+
+The first run on a machine takes as long as before; the next ones skip
+straight to the configuration.
+
+## All steps at once
+
+```sh
+THUNDER_ROM=~/Downloads/<factory-rom>.tgz tools/install.sh
+```
+
+Runs steps 1 to 6 (and the flash, with `THUNDER_FLASH=1`), skipping the
+toolchain if present and the kernel if its inputs did not change since the last
+build. It prints `::step <id> <title>` before each step and `::done` or
+`::error <message>` at the end; this is what the graphical installer reads.
 
 ## Next
 

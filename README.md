@@ -59,10 +59,18 @@ docs/         building, flashing, porting
 Everything generated (kernel tree, rootfs, images, toolchain) goes to `build/`,
 which is not versioned: shared downloads at the top, one folder per device.
 
+## Installer
+
+[`installer/`](installer) is a desktop app that does all of this in the steps of
+a Linux installer: it detects the phone on the cable, takes the factory ROM for
+the firmware, and lets you pick the interface, the users, the root password, the
+locale and the timezone. Interface options and their state:
+[docs/profiles.md](docs/profiles.md).
+
 ## Getting started
 
-1. Pick your device and read its folder: it tells you which proprietary
-   firmware to copy from your own phone. Firmware is never in this repository.
+1. Pick your device and read its folder. Keep its factory ROM at hand: the
+   proprietary firmware is copied from it, and is never in this repository.
 2. [docs/building.md](docs/building.md): build the kernel, the rootfs and the
    images. No root needed on the host.
 3. [docs/flashing.md](docs/flashing.md): **read before flashing**. It erases
@@ -72,6 +80,7 @@ which is not versioned: shared downloads at the top, one folder per device.
 cp local.conf.example local.conf    # set DEVICE=<folder name>
 tools/fetch-cross.sh
 tools/build-kernel.sh
+tools/extract-firmware.sh ~/Downloads/<factory-rom>.tgz
 tools/build-rootfs.sh
 tools/build-boot.sh
 tools/make-userdata.sh

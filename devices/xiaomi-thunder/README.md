@@ -21,7 +21,7 @@ and MediaTek never published a newer BSP.
 | Display | works | no GUI yet | no text console on screen: see [docs/kernel.md](docs/kernel.md) |
 | Touchscreen | works | wake service included | needs the Novatek firmware from your phone |
 | GPU (Mali-G57) | works | not wired | panfrost backported to 4.19, see [docs/gpu-bringup.md](docs/gpu-bringup.md) |
-| Wi-Fi | works | not wired | gen4m stack rebuilt for MT6833, see [docs/wifi-bringup.md](docs/wifi-bringup.md) |
+| Wi-Fi | works | works | gen4m stack rebuilt for MT6833, 2.4 and 5 GHz; connects from the installer or `thunder-wifi`, see [docs/wifi-bringup.md](docs/wifi-bringup.md) |
 | Bluetooth | works | not wired | BR/EDR and LE, no audio yet, see [docs/bluetooth-bringup.md](docs/bluetooth-bringup.md) |
 | Battery and charging | works | — | fuel gauge algorithm runs in the kernel |
 | Sensors | works | not wired | light, accelerometer, proximity as IIO, see [docs/sensors.md](docs/sensors.md) |
@@ -61,7 +61,8 @@ device.sh        identity, kernel source, boot.img layout, fastboot, services,
 kernel-config    kernel .config
 patches/         kernel patches, applied in patches/series order
 connectivity/    MediaTek Wi-Fi/BT driver source grafted over the kernel
-overlay/         files added to the rootfs (touchscreen-wake service)
-init.d/, wifi/, bluetooth/   Wi-Fi and Bluetooth bring-up, not in the image yet
+overlay/         files added to the rootfs: touchscreen-wake, wifi-thunder (radio
+                 bring-up) and its helpers in /usr/local/bin
+init.d/, bluetooth/   Bluetooth bring-up, not in the image yet
 docs/            kernel catalogue, firmware, hardware bring-up write-ups
 ```

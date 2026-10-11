@@ -34,14 +34,34 @@ INITRAMFS_FIRMWARE=(nt36672c_tm_01_ts_fw.bin nt36672c_tm_01_ts_mp.bin)
 
 # Fastboot: A/B, vbmeta com a verificacao desligada. So o slot a foi testado.
 FASTBOOT_PRODUCTS=(thunder)
+# ro.product.device no Android de fabrica, para reconhecer o aparelho pelo adb.
+ANDROID_DEVICES=(thunder light)
 FASTBOOT_AB=1
 FASTBOOT_SLOT=a
 FASTBOOT_DISABLE_VBMETA=1
 
+# Firmware proprietario: copiado da ROM de fabrica do usuario (tools/extract-firmware.sh),
+# nunca do repositorio. Todos ficam em /firmware do vendor.
+FIRMWARE_ROM_PARTITION=vendor
+FIRMWARE_ROM_DIRS=(/firmware /etc/firmware)
+FIRMWARE_FILES=(
+	nt36672c_tm_01_ts_fw.bin nt36672c_tm_01_ts_mp.bin
+	WIFI_RAM_CODE_soc2_2_1_1.bin WIFI_RAM_CODE_soc2_2_1a_1.bin
+	soc2_2_ram_mcu_1_1_hdr.bin soc2_2_ram_mcu_1a_1_hdr.bin
+	soc2_2_ram_wifi_1_1_hdr.bin soc2_2_ram_wifi_1a_1_hdr.bin
+	soc2_2_ram_bt_1_1_hdr.bin soc2_2_ram_bt_1a_1_hdr.bin
+	WMT_SOC.cfg WMT_SOC_L19_GL.cfg WMT_SOC_L19_IN.cfg WMT_SOC_L19N.cfg
+	wifi.cfg txpowerctrl.cfg BT_FW.cfg
+)
+
 # Rootfs.
 FIRMWARE_REQUIRED=(nt36672c_tm_01_ts_fw.bin)
-DEVICE_PACKAGES=()
-DEVICE_SERVICES=(touchscreen-wake)
+# python: o bring-up do Wi-Fi (wmt-loader, wmt-daemon) e em Python.
+DEVICE_PACKAGES=(python)
+DEVICE_SERVICES=(touchscreen-wake wifi-thunder)
+# Interface de estacao: o gen4m cria wlan0, wlan1, ap0 e p2p0, mas so a wlan0 e
+# estacao de verdade.
+WIFI_INTERFACE=wlan0
 
 # Enxerto da conectividade MediaTek (wmt_drv, wmt_chrdev_wifi, wlan_drv_gen4m, connfem,
 # bt_drv) antes dos patches. common/ tem de vir do mesmo drop: o struct

@@ -3,7 +3,9 @@
 set -euo pipefail
 
 rm -rf /root/thunder-stage
-pacman -Scc --noconfirm >/dev/null
+# Com o cache do host montado (tools/achroot.sh), os pacotes ficaram nele e o diretorio
+# da imagem esta vazio por baixo; limpar aqui apagaria o cache compartilhado.
+mountpoint -q /var/cache/pacman/pkg || pacman -Scc --noconfirm >/dev/null
 # As chaves de host nascem no primeiro boot (servico sshd).
 rm -f /etc/ssh/ssh_host_*
 # O resolv.conf do PC (127.0.0.53) nao serve no aparelho.
