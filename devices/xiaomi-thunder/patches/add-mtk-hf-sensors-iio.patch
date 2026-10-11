@@ -1,0 +1,437 @@
+Sensor de luz ambiente e de proximidade (TMD2755) e acelerometro, todos
+atras do SCP, como dispositivos IIO "als" (in_illuminance_input, lux),
+"proximity" (in_proximity_raw, 10 = perto) e "accel" (in_accel_{x,y,z}_raw),
+lidos pelo hf_manager como o HAL do Android faz: o iio-sensor-proxy os
+detecta, e o brilho automatico, a rotacao de tela e o apagar a tela perto
+do rosto do Phosh funcionam. Cada sensor so liga quando e lido e desliga
+10 s depois.
+
+diff --color -urN a/drivers/misc/mediatek/sensor/2.0/hf_iio/Makefile b/drivers/misc/mediatek/sensor/2.0/hf_iio/Makefile
+--- a/drivers/misc/mediatek/sensor/2.0/hf_iio/Makefile	1969-12-31 21:00:00.000000000 -0300
++++ b/drivers/misc/mediatek/sensor/2.0/hf_iio/Makefile	2026-09-29 13:41:59.026802366 -0300
+@@ -0,0 +1,4 @@
++# SPDX-License-Identifier: GPL-2.0
++ccflags-y += -I$(srctree)/drivers/misc/mediatek/sensor/2.0/core
++
++obj-$(CONFIG_IIO) += mtk_hf_iio.o
+diff --color -urN a/drivers/misc/mediatek/sensor/2.0/hf_iio/mtk_hf_iio.c b/drivers/misc/mediatek/sensor/2.0/hf_iio/mtk_hf_iio.c
+--- a/drivers/misc/mediatek/sensor/2.0/hf_iio/mtk_hf_iio.c	1969-12-31 21:00:00.000000000 -0300
++++ b/drivers/misc/mediatek/sensor/2.0/hf_iio/mtk_hf_iio.c	2026-09-30 00:15:27.210735388 -0300
+@@ -0,0 +1,404 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Ambient light, proximity and accelerometer as IIO devices, read through
++ * MediaTek's sensor hub.
++ *
++ * On MT6833 the sensors (TMD2755 light and proximity, the IMU on
++ * xiaomi-thunder) are driven
++ * by the SCP co-processor, and the kernel only sees them through hf_manager,
++ * the channel the Android sensor HAL uses. Linux desktops look for IIO
++ * sensors (iio-sensor-proxy matches in_illuminance_input, in_proximity_raw
++ * and in_accel_*_raw),
++ * so this driver is an hf_manager client that exposes them as IIO channels.
++ *
++ * Each sensor is enabled on its first read and disabled again after
++ * MTK_HF_IDLE_MS without reads, so it only runs while something polls it
++ * (iio-sensor-proxy does while automatic brightness or rotation is on).
++ */
++
++#include <linux/iio/iio.h>
++#include <linux/jiffies.h>
++#include <linux/kthread.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/platform_device.h>
++#include <linux/wait.h>
++#include <linux/workqueue.h>
++
++#include "hf_manager.h"
++
++#define MTK_HF_PERIOD_NS	(200 * NSEC_PER_MSEC)
++#define MTK_HF_FIRST_MS		600
++#define MTK_HF_IDLE_MS		10000
++
++/* hf_manager reports acceleration in mm/s^2 (gain 1000 in mtk_nanohub) */
++#define MTK_HF_ACCEL_SCALE_NANO	1000000
++
++#define MTK_HF_PROX_NEAR	10
++
++struct mtk_hf_iio;
++
++struct mtk_hf_sensor {
++	struct mtk_hf_iio *hub;
++	struct iio_dev *indio_dev;
++	struct delayed_work idle_work;
++	u8 type;
++	bool enabled;		/* under hub->lock */
++	bool have_sample;
++	int val[3];
++};
++
++struct mtk_hf_iio {
++	struct hf_client *client;
++	struct task_struct *reader;
++	struct mutex lock;		/* sensor enable state, commands */
++	wait_queue_head_t sample_wq;
++	struct mtk_hf_sensor als;
++	struct mtk_hf_sensor prox;
++	struct mtk_hf_sensor accel;
++};
++
++static int mtk_hf_control(struct mtk_hf_sensor *s, bool enable)
++{
++	struct hf_manager_cmd cmd = {
++		.sensor_type = s->type,
++		.action = enable ? HF_MANAGER_SENSOR_ENABLE :
++				   HF_MANAGER_SENSOR_DISABLE,
++	};
++
++	if (enable) {
++		struct hf_manager_batch batch = {
++			.delay = MTK_HF_PERIOD_NS,
++			.latency = 0,
++		};
++
++		cmd.length = sizeof(batch);
++		memcpy(cmd.data, &batch, sizeof(batch));
++	}
++	return hf_client_control_sensor(s->hub->client, &cmd);
++}
++
++static void mtk_hf_store(struct mtk_hf_sensor *s, const int32_t *word)
++{
++	if (s->type == SENSOR_TYPE_ACCELEROMETER) {
++		/*
++		 * Android reads +y upright; iio-sensor-proxy wants -y upright
++		 * and +z face up, so the frame turns 180 degrees around z.
++		 */
++		WRITE_ONCE(s->val[0], -word[0]);
++		WRITE_ONCE(s->val[1], -word[1]);
++		WRITE_ONCE(s->val[2], word[2]);
++	} else if (s->type == SENSOR_TYPE_PROXIMITY) {
++		/* the hub reports 0 for near and 5 (cm) for far */
++		WRITE_ONCE(s->val[0], word[0] == 0 ? MTK_HF_PROX_NEAR : 0);
++	} else {
++		WRITE_ONCE(s->val[0], word[0]);
++	}
++	WRITE_ONCE(s->have_sample, true);
++}
++
++static int mtk_hf_reader(void *data)
++{
++	struct mtk_hf_iio *hub = data;
++	struct hf_manager_event ev[8];
++	int i, n;
++
++	while (!kthread_should_stop()) {
++		n = hf_client_poll_sensor_timeout(hub->client, ev,
++				ARRAY_SIZE(ev), msecs_to_jiffies(1000));
++		for (i = 0; i < n; i++) {
++			if (ev[i].action != DATA_ACTION)
++				continue;
++			if (ev[i].sensor_type == SENSOR_TYPE_LIGHT)
++				mtk_hf_store(&hub->als, ev[i].word);
++			else if (ev[i].sensor_type == SENSOR_TYPE_PROXIMITY)
++				mtk_hf_store(&hub->prox, ev[i].word);
++			else if (ev[i].sensor_type == SENSOR_TYPE_ACCELEROMETER)
++				mtk_hf_store(&hub->accel, ev[i].word);
++			else
++				continue;
++			wake_up(&hub->sample_wq);
++		}
++	}
++	return 0;
++}
++
++static void mtk_hf_idle(struct work_struct *work)
++{
++	struct mtk_hf_sensor *s = container_of(to_delayed_work(work),
++					       struct mtk_hf_sensor, idle_work);
++
++	mutex_lock(&s->hub->lock);
++	if (s->enabled) {
++		mtk_hf_control(s, false);
++		s->enabled = false;
++		WRITE_ONCE(s->have_sample, false);
++	}
++	mutex_unlock(&s->hub->lock);
++}
++
++static int mtk_hf_wait_sample(struct mtk_hf_sensor *s)
++{
++	struct mtk_hf_iio *hub = s->hub;
++	int ret;
++
++	mutex_lock(&hub->lock);
++	if (!s->enabled) {
++		if (hf_client_find_sensor(hub->client, s->type)) {
++			/* the SCP has not reported its sensor list yet */
++			mutex_unlock(&hub->lock);
++			return -EAGAIN;
++		}
++		ret = mtk_hf_control(s, true);
++		if (ret < 0) {
++			mutex_unlock(&hub->lock);
++			return ret;
++		}
++		s->enabled = true;
++	}
++	mod_delayed_work(system_wq, &s->idle_work,
++			 msecs_to_jiffies(MTK_HF_IDLE_MS));
++	mutex_unlock(&hub->lock);
++
++	if (!wait_event_timeout(hub->sample_wq, READ_ONCE(s->have_sample),
++				msecs_to_jiffies(MTK_HF_FIRST_MS)))
++		return -EAGAIN;
++	return 0;
++}
++
++static int mtk_hf_read_raw(struct iio_dev *indio_dev,
++			   struct iio_chan_spec const *chan,
++			   int *val, int *val2, long mask)
++{
++	struct mtk_hf_sensor *s = *(struct mtk_hf_sensor **)iio_priv(indio_dev);
++	int ret;
++
++	switch (mask) {
++	case IIO_CHAN_INFO_SCALE:
++		if (chan->type != IIO_ACCEL)
++			return -EINVAL;
++		*val = 0;
++		*val2 = MTK_HF_ACCEL_SCALE_NANO;
++		return IIO_VAL_INT_PLUS_NANO;
++	case IIO_CHAN_INFO_PROCESSED:
++		if (chan->type != IIO_LIGHT)
++			return -EINVAL;
++		ret = mtk_hf_wait_sample(s);
++		if (ret)
++			return ret;
++		*val = max(READ_ONCE(s->val[0]), 0);
++		return IIO_VAL_INT;
++	case IIO_CHAN_INFO_RAW:
++		if (chan->type != IIO_ACCEL && chan->type != IIO_PROXIMITY)
++			return -EINVAL;
++		ret = mtk_hf_wait_sample(s);
++		if (ret)
++			return ret;
++		*val = READ_ONCE(s->val[chan->address]);
++		return IIO_VAL_INT;
++	}
++	return -EINVAL;
++}
++
++static const struct iio_info mtk_hf_info = {
++	.read_raw = mtk_hf_read_raw,
++};
++
++static const struct iio_chan_spec mtk_hf_als_channels[] = {
++	{
++		.type = IIO_LIGHT,
++		.info_mask_separate = BIT(IIO_CHAN_INFO_PROCESSED),
++	},
++};
++
++/* iio-sensor-proxy ignores a near level of 0, hence the 0/10 scale */
++static ssize_t mtk_hf_prox_nearlevel(struct iio_dev *indio_dev,
++				     uintptr_t private,
++				     struct iio_chan_spec const *chan,
++				     char *buf)
++{
++	return sprintf(buf, "%d\n", MTK_HF_PROX_NEAR / 2);
++}
++
++static const struct iio_chan_spec_ext_info mtk_hf_prox_ext_info[] = {
++	{
++		.name = "nearlevel",
++		.shared = IIO_SEPARATE,
++		.read = mtk_hf_prox_nearlevel,
++	},
++	{ }
++};
++
++static const struct iio_chan_spec mtk_hf_prox_channels[] = {
++	{
++		.type = IIO_PROXIMITY,
++		.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),
++		.ext_info = mtk_hf_prox_ext_info,
++	},
++};
++
++#define MTK_HF_ACCEL_CHAN(axis, idx) {					\
++	.type = IIO_ACCEL,						\
++	.modified = 1,							\
++	.channel2 = IIO_MOD_##axis,					\
++	.address = idx,							\
++	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),			\
++	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE),		\
++}
++
++static const struct iio_chan_spec mtk_hf_accel_channels[] = {
++	MTK_HF_ACCEL_CHAN(X, 0),
++	MTK_HF_ACCEL_CHAN(Y, 1),
++	MTK_HF_ACCEL_CHAN(Z, 2),
++};
++
++static int mtk_hf_add_sensor(struct device *dev, struct mtk_hf_iio *hub,
++			     struct mtk_hf_sensor *s, u8 type, const char *name,
++			     const struct iio_chan_spec *channels, int nch)
++{
++	struct iio_dev *indio_dev;
++
++	indio_dev = devm_iio_device_alloc(dev, sizeof(s));
++	if (!indio_dev)
++		return -ENOMEM;
++
++	*(struct mtk_hf_sensor **)iio_priv(indio_dev) = s;
++	s->hub = hub;
++	s->type = type;
++	s->indio_dev = indio_dev;
++	INIT_DELAYED_WORK(&s->idle_work, mtk_hf_idle);
++
++	indio_dev->dev.parent = dev;
++	indio_dev->name = name;
++	indio_dev->info = &mtk_hf_info;
++	indio_dev->modes = INDIO_DIRECT_MODE;
++	indio_dev->channels = channels;
++	indio_dev->num_channels = nch;
++
++	return iio_device_register(indio_dev);
++}
++
++static void mtk_hf_del_sensor(struct mtk_hf_sensor *s)
++{
++	if (!s->indio_dev)
++		return;
++	iio_device_unregister(s->indio_dev);
++	cancel_delayed_work_sync(&s->idle_work);
++	mutex_lock(&s->hub->lock);
++	if (s->enabled)
++		mtk_hf_control(s, false);
++	s->enabled = false;
++	mutex_unlock(&s->hub->lock);
++}
++
++static int mtk_hf_probe(struct platform_device *pdev)
++{
++	struct mtk_hf_iio *hub;
++	int ret;
++
++	hub = devm_kzalloc(&pdev->dev, sizeof(*hub), GFP_KERNEL);
++	if (!hub)
++		return -ENOMEM;
++
++	mutex_init(&hub->lock);
++	init_waitqueue_head(&hub->sample_wq);
++
++	hub->client = hf_client_create();
++	if (!hub->client)
++		return -ENOMEM;
++
++	hub->reader = kthread_run(mtk_hf_reader, hub, "mtk_hf_iio");
++	if (IS_ERR(hub->reader)) {
++		ret = PTR_ERR(hub->reader);
++		goto err_client;
++	}
++
++	ret = mtk_hf_add_sensor(&pdev->dev, hub, &hub->als, SENSOR_TYPE_LIGHT,
++				"als", mtk_hf_als_channels,
++				ARRAY_SIZE(mtk_hf_als_channels));
++	if (ret)
++		goto err_reader;
++
++	ret = mtk_hf_add_sensor(&pdev->dev, hub, &hub->prox,
++				SENSOR_TYPE_PROXIMITY, "proximity",
++				mtk_hf_prox_channels,
++				ARRAY_SIZE(mtk_hf_prox_channels));
++	if (ret) {
++		hub->prox.indio_dev = NULL;
++		goto err_als;
++	}
++
++	ret = mtk_hf_add_sensor(&pdev->dev, hub, &hub->accel,
++				SENSOR_TYPE_ACCELEROMETER, "accel",
++				mtk_hf_accel_channels,
++				ARRAY_SIZE(mtk_hf_accel_channels));
++	if (ret) {
++		hub->accel.indio_dev = NULL;
++		goto err_prox;
++	}
++
++	platform_set_drvdata(pdev, hub);
++	return 0;
++
++err_prox:
++	mtk_hf_del_sensor(&hub->prox);
++err_als:
++	mtk_hf_del_sensor(&hub->als);
++err_reader:
++	kthread_stop(hub->reader);
++err_client:
++	hf_client_destroy(hub->client);
++	return ret;
++}
++
++static int mtk_hf_remove(struct platform_device *pdev)
++{
++	struct mtk_hf_iio *hub = platform_get_drvdata(pdev);
++
++	mtk_hf_del_sensor(&hub->accel);
++	mtk_hf_del_sensor(&hub->prox);
++	mtk_hf_del_sensor(&hub->als);
++	kthread_stop(hub->reader);
++	hf_client_destroy(hub->client);
++	return 0;
++}
++
++static struct platform_driver mtk_hf_driver = {
++	.probe = mtk_hf_probe,
++	.remove = mtk_hf_remove,
++	.driver = {
++		.name = "mtk-hf-iio",
++	},
++};
++
++/* No DT node describes the sensors: they live behind the SCP. */
++static struct platform_device *mtk_hf_pdev;
++
++static int __init mtk_hf_init(void)
++{
++	int ret;
++
++	ret = platform_driver_register(&mtk_hf_driver);
++	if (ret)
++		return ret;
++
++	mtk_hf_pdev = platform_device_register_simple("mtk-hf-iio", -1,
++						      NULL, 0);
++	if (IS_ERR(mtk_hf_pdev)) {
++		platform_driver_unregister(&mtk_hf_driver);
++		return PTR_ERR(mtk_hf_pdev);
++	}
++	return 0;
++}
++
++static void __exit mtk_hf_exit(void)
++{
++	platform_device_unregister(mtk_hf_pdev);
++	platform_driver_unregister(&mtk_hf_driver);
++}
++
++late_initcall(mtk_hf_init);
++module_exit(mtk_hf_exit);
++
++MODULE_DESCRIPTION("Light, proximity and acceleration through MediaTek hf_manager, as IIO");
++MODULE_LICENSE("GPL v2");
+diff --color -urN a/drivers/misc/mediatek/sensor/2.0/Makefile b/drivers/misc/mediatek/sensor/2.0/Makefile
+--- a/drivers/misc/mediatek/sensor/2.0/Makefile	2026-09-29 13:41:59.009802297 -0300
++++ b/drivers/misc/mediatek/sensor/2.0/Makefile	2026-09-29 14:43:57.243820544 -0300
+@@ -2,6 +2,9 @@
+ 
+ obj-y += core/
+ 
++# thunder: light, proximity and accelerometer as IIO, for iio-sensor-proxy
++obj-y += hf_iio/
++
+ obj-$(CONFIG_CUSTOM_KERNEL_SENSORHUB) += mtk_nanohub/
+ obj-$(CONFIG_MTK_SENSORHUB) += sensorhub/
+ obj-$(CONFIG_MTK_HF_LSM6DSM_SECONDARY) += lsm6dsm_secondary/

@@ -1,0 +1,37 @@
+From: thunder
+Subject: [PATCH] tcpc_mt6360: count the byte-count byte in the TX buffer
+
+mt6360_transmit() builds the TX_BYTE_CNT block in a stack buffer of
+MT6360_TRANSMIT_MAX_SIZE bytes: one byte count, the two-byte message header
+and up to seven data objects. The size only counted the header and the data
+objects (2 + 28 = 30), but the function writes 1 + 2 + 28 = 31 bytes when a
+message carries seven objects.
+
+A USB PD 3.0 source asks for Discover Identity, and the reply carries the VDM
+header plus six VDOs: seven objects. The extra byte lands on the stack canary,
+and the kernel panics about 13 s after boot whenever the phone is plugged into
+such a port:
+
+  Kernel panic - not syncing: stack-protector: Kernel stack is corrupted in:
+  mt6360_transmit+0x184/0x184
+  ... tcpci_transmit <- pd_send_message <- pd_reply_svdm_request
+      <- pd_dpm_ufp_request_id_info <- pe_ufp_vdm_get_identity_entry
+
+Read from pstore (console-ramoops) on 2026-10-10, kernel revision r39, when
+the phone moved to a PD-capable USB-C port and boot-looped every ~26 s.
+
+---
+--- a/drivers/misc/mediatek/typec/tcpc/tcpc_mt6360.c	2026-10-10 17:13:49.571909860 -0300
++++ b/drivers/misc/mediatek/typec/tcpc/tcpc_mt6360.c	2026-10-10 17:13:49.621688815 -0300
+@@ -2121,9 +2121,9 @@
+ 	return 0;
+ }
+ 
+-/* message header (2byte) + data object (7*4) */
++/* byte count (1 byte) + message header (2 bytes) + data objects (7 * 4) */
+ #define MT6360_TRANSMIT_MAX_SIZE \
+-	(sizeof(u16) + sizeof(u32) * 7)
++	(sizeof(u8) + sizeof(u16) + sizeof(u32) * 7)
+ 
+ #ifdef CONFIG_USB_PD_RETRY_CRC_DISCARD
+ static int mt6360_retransmit(struct tcpc_device *tcpc)

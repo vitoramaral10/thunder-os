@@ -1,9 +1,0 @@
-# O painel deste aparelho trava o hardware ao desligar o CRTC
-# ("Failed to disable CRTC"), e o watchdog reseta. Desliga o apagamento
-# automatico ate haver correcao no driver de display.
-[org.gnome.desktop.session:Phosh]
-idle-delay=0
-
-[org.gnome.desktop.screensaver:Phosh]
-idle-activation-enabled=false
-lock-enabled=false

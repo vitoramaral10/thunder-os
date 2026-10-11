@@ -1,0 +1,55 @@
+# PKGBUILD proprio do OpenRC para o Arch Linux ARM no thunder (kernel 4.19).
+# O systemd do Arch (260+) nao roda abaixo do kernel 5.10; o OpenRC vira o PID 1 e
+# substitui o systemd-sysvcompat (init, reboot, poweroff, halt, shutdown). O pacote
+# systemd continua instalado e inerte, porque o pacman depende dele.
+pkgname=openrc
+pkgver=0.64.1
+pkgrel=1
+pkgdesc='Init e gerenciador de servicos por dependencia (PID 1 do thunder)'
+arch=('aarch64')
+url='https://github.com/OpenRC/openrc'
+license=('BSD-2-Clause')
+depends=('pam' 'bash')
+makedepends=('meson' 'psmisc')
+provides=('systemd-sysvcompat' 'init-rc' 'svc-manager')
+conflicts=('systemd-sysvcompat')
+backup=('etc/rc.conf')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/$pkgver.tar.gz")
+sha256sums=('56d6d24c7fd2ca15d1abd1fb82ce5430629a71acb2c3fa12760300243dbd0baa')
+
+build() {
+	arch-meson "$pkgname-$pkgver" build \
+		--bindir=/usr/bin \
+		--sbindir=/usr/bin \
+		--libdir=/usr/lib \
+		--libexecdir=/usr/libexec \
+		--sysconfdir=/etc \
+		-Dagetty='[]' \
+		-Daudit=disabled \
+		-Dbranding='"Thunder OS"' \
+		-Dpam=true \
+		-Dpkgconfig=true \
+		-Dselinux=disabled \
+		-Dsysvinit=true \
+		-Dbash-completions=false \
+		-Dzsh-completions=false
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+
+	# O que o systemd-sysvcompat dava, apontando para o openrc-shutdown.
+	local cmd flag
+	for cmd in reboot:-r poweroff:-p halt:-H; do
+		flag=${cmd#*:}
+		cmd=${cmd%%:*}
+		printf '#!/bin/sh\nexec /usr/bin/openrc-shutdown %s now "$@"\n' "$flag" \
+			> "$pkgdir/usr/bin/$cmd"
+		chmod 755 "$pkgdir/usr/bin/$cmd"
+	done
+	printf '#!/bin/sh\nexec /usr/bin/openrc-shutdown "$@"\n' > "$pkgdir/usr/bin/shutdown"
+	chmod 755 "$pkgdir/usr/bin/shutdown"
+
+	install -Dm644 "$pkgname-$pkgver/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,3 @@
+# O initramfs monta a raiz (userdata) rw antes do switch_root; esta linha so documenta
+# as opcoes para o remount do OpenRC.
+LABEL=thunder-root	/	ext4	rw,noatime	0	0

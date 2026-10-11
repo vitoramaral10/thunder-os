@@ -1,0 +1,16 @@
+#!/usr/bin/openrc-run
+# Endereco por DHCP so na interface Wi-Fi: a rede do cabo USB (172.16.42.1, servidor
+# DHCP do proprio aparelho) fica de fora.
+
+description="dhcpcd na interface Wi-Fi"
+
+[ -r /etc/conf.d/wpa-supplicant ] && . /etc/conf.d/wpa-supplicant
+: "${wpa_iface:=wlan0}"
+
+command=/usr/bin/dhcpcd
+command_args="-B -q ${wpa_iface}"
+supervisor=supervise-daemon
+
+depend() {
+	need wpa-supplicant
+}

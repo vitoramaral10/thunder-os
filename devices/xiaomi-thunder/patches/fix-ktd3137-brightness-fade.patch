@@ -1,0 +1,28 @@
+Transicao de brilho por I2C do KTD3137 em ~512 ms (o DT pede ~128 ms):
+o GNOME troca o nivel de uma vez, e o fade fica a cargo do chip. O probe
+gravava 0x01 em REG_TRANS_RAMP logo depois de configurar o chip, o que
+desfazia o valor calculado (128 ms); a gravacao sai.
+
+--- a/drivers/misc/mediatek/leds/ktd3136_bl.c	2026-09-26 23:36:25.974811818 -0300
++++ b/drivers/misc/mediatek/leds/ktd3136_bl.c	2026-09-26 23:36:25.997597239 -0300
+@@ -317,6 +317,12 @@
+ 		LOG_DBG("i2c transition dimming --<%d ms>\n",
+ 					pdata->i2c_trans_dim);
+ 	}
++	/*
++	 * thunder: the device tree asks for ~128 ms, which makes every
++	 * brightness change a visible jump -- desktops set the level directly,
++	 * with no fade of their own. Let the chip fade I2C changes over ~512 ms.
++	 */
++	pdata->i2c_trans_dim = max_t(u32, pdata->i2c_trans_dim, 512);
+ 
+ 	rc = of_property_read_u32(np, "ktd,bl-channel", &bl_channel);
+ 	if (rc) {
+@@ -1179,7 +1185,6 @@
+ 
+ 	ktd3137_gpio_init(chip);
+ 	ktd3137_backlight_init(chip);
+-	ktd3137_write_reg(chip->client, 0x08, 0x01);
+ 	INIT_DELAYED_WORK(&chip->work, ktd3137_sync_backlight_work);
+ 	ktd3137_flashled_init(client, chip);
+ 	ktd3137_check_status(chip);

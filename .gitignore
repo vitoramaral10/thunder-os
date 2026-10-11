@@ -1,4 +1,7 @@
-# Proprietary firmware — never commit these
+# Tudo que e gerado: fonte do kernel, rootfs, imagens, toolchain.
+/build
+
+# Firmware proprietario e binarios: nunca versionar (docs de cada aparelho em devices/).
 *.bin
 *.img
 *.ko
@@ -7,13 +10,12 @@ nt36672c_*
 soc2_2_ram_*
 WIFI_RAM_CODE_*
 
-# Build output
-work/
-packages/
-*.apk
 *.log
 
-# Editor / OS noise
+# Notas locais da sessao de trabalho (caminhos da maquina, nao publicar).
+/CLAUDE.md
+/TASKS.md
+/local.conf
 __pycache__/
 *.pyc
 .DS_Store

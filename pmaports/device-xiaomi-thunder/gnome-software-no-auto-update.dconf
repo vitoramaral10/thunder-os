@@ -1,6 +1,0 @@
-# O GNOME Software nao baixa nem aplica atualizacoes sozinho neste aparelho.
-# Parte do sistema sao pacotes refeitos para o kernel 4.19 (glib, bubblewrap)
-# e um apk upgrade automatico os trocava pelos do Alpine, que derrubam a
-# sessao. Atualizar continua possivel a mao, pelo proprio GNOME Software.
-[org/gnome/software]
-download-updates=false

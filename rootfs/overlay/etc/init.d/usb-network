@@ -1,0 +1,22 @@
+#!/usr/bin/openrc-run
+# Rede pelo cabo USB: gadget RNDIS em 172.16.42.1 e DHCP que entrega 172.16.42.2 ao PC.
+
+description="Rede pelo cabo USB (RNDIS, 172.16.42.1)"
+
+command=/usr/bin/busybox
+command_args="udhcpd -f /run/udhcpd-usb.conf"
+command_background=yes
+pidfile=/run/usb-network.pid
+
+depend() {
+	need localmount
+	after sysfs
+	provide net
+}
+
+start_pre() {
+	/usr/lib/thunder/usb-gadget up || return 1
+	dev=$(/usr/lib/thunder/usb-gadget ifname)
+	sed "s/^interface .*/interface $dev/" /etc/udhcpd-usb.conf > /run/udhcpd-usb.conf
+	touch /run/udhcpd-usb.leases
+}

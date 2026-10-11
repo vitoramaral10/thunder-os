@@ -1,0 +1,82 @@
+#!/bin/sh
+# Rede pelo cabo USB: gadget configfs com RNDIS, aparelho em 172.16.42.1.
+# Roda no busybox do initramfs e no rootfs. Idempotente: se o gadget ja existe (o
+# initramfs o deixa montado ao fazer switch_root), so confere o UDC e o endereco.
+#
+# RNDIS, e nao NCM: o f_ncm no MUSB do MT6833 (xiaomi-thunder) degrada em minutos (RTT
+# de segundos, ARP cai), e RNDIS e o que o PC reconhece sem configuracao. Kernels 4.19
+# com o u_ether antigo precisam de fix-u-ether-linearize-tx.patch (devices/xiaomi-thunder):
+# sem ele, o u_ether manda lixo no lugar do payload em fragmentos de pagina.
+#
+# Identidade do aparelho (fabricante, nome) em /etc/thunder/device.
+#
+# Uso: usb-gadget up      cria/ativa o gadget e configura a interface
+#      usb-gadget ifname  imprime o nome da interface de rede
+set -u
+
+CONFIGFS=/sys/kernel/config
+G=$CONFIGFS/usb_gadget/g1
+FUNC=rndis.usb0
+ADDR=${THUNDER_USB_ADDR:-172.16.42.1}
+MTU=${THUNDER_USB_MTU:-1500}
+DEVICE_VENDOR="Thunder OS"
+DEVICE_NAME=device
+DEVICE_CODENAME=thunder
+[ -r /etc/thunder/device ] && . /etc/thunder/device
+
+log() {
+	echo "usb-gadget: $*"
+	[ -w /dev/kmsg ] && echo "usb-gadget: $*" > /dev/kmsg
+	return 0
+}
+
+serial() {
+	# O LK passa o serial do aparelho na cmdline; sem ele, um nome fixo.
+	for arg in $(cat /proc/cmdline); do
+		case $arg in
+		androidboot.serialno=*) echo "${arg#*=}"; return ;;
+		esac
+	done
+	echo "$DEVICE_CODENAME"
+}
+
+create() {
+	mkdir -p "$G" "$G/strings/0x409" "$G/configs/c.1/strings/0x409" || return 1
+	echo 0x1d6b > "$G/idVendor"          # Linux Foundation
+	echo 0x0104 > "$G/idProduct"         # Multifunction Composite Gadget
+	echo "$DEVICE_VENDOR" > "$G/strings/0x409/manufacturer"
+	echo "$DEVICE_NAME (Thunder OS)" > "$G/strings/0x409/product"
+	serial > "$G/strings/0x409/serialnumber"
+	echo "USB network" > "$G/configs/c.1/strings/0x409/configuration"
+	mkdir -p "$G/functions/$FUNC" || return 1
+	[ -e "$G/configs/c.1/$FUNC" ] || ln -s "$G/functions/$FUNC" "$G/configs/c.1/$FUNC"
+}
+
+ifname() {
+	cat "$G/functions/$FUNC/ifname" 2>/dev/null
+}
+
+up() {
+	if ! [ -d "$CONFIGFS/usb_gadget" ]; then
+		mount -t configfs -o nodev,noexec,nosuid configfs "$CONFIGFS" || return 1
+	fi
+	[ -d "$G/functions/$FUNC" ] || create || { log "falha ao criar o gadget"; return 1; }
+
+	if [ -z "$(cat "$G/UDC")" ]; then
+		udc=$(ls /sys/class/udc | head -n 1)
+		[ -n "$udc" ] || { log "nenhum UDC em /sys/class/udc"; return 1; }
+		echo "$udc" > "$G/UDC" || { log "falha ao ativar o UDC $udc"; return 1; }
+	fi
+
+	dev=$(ifname)
+	[ -n "$dev" ] || { log "o $FUNC nao tem interface"; return 1; }
+	ip link set "$dev" mtu "$MTU" up
+	ip addr add "$ADDR/24" dev "$dev" 2>/dev/null
+	log "$dev em $ADDR (mtu $MTU)"
+}
+
+case ${1:-up} in
+up) up ;;
+ifname) ifname ;;
+*) echo "uso: $0 up|ifname" >&2; exit 2 ;;
+esac
