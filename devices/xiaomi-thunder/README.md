@@ -7,7 +7,7 @@
 | Kernel | Xiaomi vendor 4.19.191 with our patches ([docs/kernel.md](docs/kernel.md)) |
 | Boot | boot.img header v2, A/B, fastboot, AVB disabled |
 | Root partition | `userdata` (ext4 written directly, no nested GPT) |
-| Status | **boots**: OpenRC up in ~20 s, SSH over USB |
+| Status | **boots** (validated under OpenRC; the systemd boot is being tested), SSH over USB |
 | Maintainer | vitoramaral10 |
 
 There is no newer kernel for this SoC: mainline supports no phone Dimensity,
@@ -46,8 +46,9 @@ built-in touch driver loads it before the root is mounted.
   active slot is `a` (the only one tested).
 - **The screen stays black.** There is no text console: the framebuffer
   console caused a bootloop on this kernel. Use the USB cable.
-- **Clock:** the RTC may be back in 2009 after the battery ran flat. The
-  `ntp-client` service fixes it (system clock and RTC) as soon as Wi-Fi is up.
+- **Clock:** the RTC may be back in 2009 after the battery ran flat. `systemd-timesyncd`
+  fixes the system clock as soon as Wi-Fi is up and `thunder-rtc-sync` writes it
+  to the RTC.
 - **Kernel updates go through fastboot.** The bootloader turns on the UFS
   power-on write protection for the boot partition, so Linux cannot write it
   (`DATA PROTECT`, sense key 0x7) until the next power cycle.
@@ -68,6 +69,6 @@ patches/         kernel patches, applied in patches/series order
 connectivity/    MediaTek Wi-Fi/BT driver source grafted over the kernel
 overlay/         files added to the rootfs: touchscreen-wake, wifi-thunder (radio
                  bring-up) and its helpers in /usr/local/bin
-init.d/, bluetooth/   Bluetooth bring-up, not in the image yet
+bluetooth/       Bluetooth bring-up (`bluetooth-thunder.service`), not in the image yet
 docs/            kernel catalogue, firmware, hardware bring-up write-ups
 ```

@@ -1,0 +1,12 @@
+# Quando o systemd-timesyncd acerta a hora pela rede pela primeira vez neste boot, ele
+# cria /run/systemd/timesync/synchronized; ai o RTC recebe a hora certa
+# (thunder-rtc-sync.service). Necessario enquanto o kernel do aparelho nao tiver
+# CONFIG_RTC_SYSTOHC (hoje nenhum aparelho tem): sem isso ninguem grava o RTC.
+[Unit]
+Description=Write the RTC once network time is known
+
+[Path]
+PathExists=/run/systemd/timesync/synchronized
+
+[Install]
+WantedBy=multi-user.target

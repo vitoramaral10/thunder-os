@@ -1,3 +1,4 @@
-# O initramfs monta a raiz (userdata) rw antes do switch_root; esta linha so documenta
-# as opcoes para o remount do OpenRC.
-LABEL=thunder-root	/	ext4	rw,noatime	0	0
+# O initramfs monta a raiz (userdata) rw antes do switch_root. Esta linha da as opcoes
+# ao systemd-remount-fs e, com x-systemd.growfs, faz o systemd-growfs-root.service crescer
+# o ext4 ate o fim da particao (online; nao faz nada quando ja ocupa tudo).
+LABEL=thunder-root	/	ext4	rw,noatime,x-systemd.growfs	0	0

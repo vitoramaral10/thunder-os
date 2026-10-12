@@ -1,0 +1,222 @@
+Backport de 94704515 ("vfs: split out access_override_creds()") e c8ffd8bcdd28
+("vfs: add faccessat2 syscall", Linux 5.8): novo syscall 439
+faccessat2(dfd, filename, mode, flags), com AT_EACCESS, AT_SYMLINK_NOFOLLOW e
+AT_EMPTY_PATH (qualquer outro flag devolve -EINVAL). O faccessat antigo segue
+igual (flags == 0). AT_EACCESS (0x200, mesmo valor de AT_REMOVEDIR) entra em
+include/uapi/linux/fcntl.h com o comentario do upstream.
+
+Por que: o executor do systemd 262 confere cada ExecStart= com
+faccessat(fd, "", X_OK, AT_EMPTY_PATH); a glibc 2.43 faz isso pelo syscall 439
+e, com ENOSYS, devolve EINVAL para AT_EMPTY_PATH. Sem o syscall todo servico
+falha com 203/EXEC.
+
+Adaptado para o 4.19: o 439 e registrado em include/uapi/asm-generic/unistd.h
+(__NR_syscalls 437 -> 440; 435, 437 e 438 continuam buracos) e na tabela compat
+AArch32 (unistd32.h, __NR_compat_syscalls 437 -> 440). As tabelas de syscall
+das outras arquiteturas ficaram de fora (so arm64 e compilado). O fs/open.c
+do vendor nao aplica o upstream direto (inode_permission2/struct vfsmount *mnt
+no corpo de do_faccessat; o 94704515 e o c8ffd8bcdd28 sao fundidos num diff so)
+e os headers unistd.h/syscalls.h/internal.h tem contexto diferente; tudo
+refeito a mao, com o corpo de access_override_creds()/do_faccessat() igual ao
+upstream.
+
+diff -ruN a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -825,6 +825,8 @@
+ __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+ #define __NR_close_range 436
+ __SYSCALL(__NR_close_range, sys_close_range)
++#define __NR_faccessat2 439
++__SYSCALL(__NR_faccessat2, sys_faccessat2)
+ 
+ /*
+  * Please add new compat syscalls above this comment and update
+diff -ruN a/arch/arm64/include/asm/unistd.h b/arch/arm64/include/asm/unistd.h
+--- a/arch/arm64/include/asm/unistd.h
++++ b/arch/arm64/include/asm/unistd.h
+@@ -49,7 +49,7 @@
+ #define __ARM_NR_compat_set_tls		(__ARM_NR_COMPAT_BASE + 5)
+ #define __ARM_NR_COMPAT_END		(__ARM_NR_COMPAT_BASE + 0x800)
+ 
+-#define __NR_compat_syscalls		437
++#define __NR_compat_syscalls		440
+ #endif
+ 
+ #define __ARCH_WANT_SYS_CLONE
+diff -ruN a/fs/internal.h b/fs/internal.h
+--- a/fs/internal.h
++++ b/fs/internal.h
+@@ -121,7 +121,6 @@
+ 		const char *, const struct open_flags *);
+ 
+ long do_sys_ftruncate(unsigned int fd, loff_t length, int small);
+-long do_faccessat(int dfd, const char __user *filename, int mode);
+ int do_fchmodat(int dfd, const char __user *filename, umode_t mode);
+ int do_fchownat(int dfd, const char __user *filename, uid_t user, gid_t group,
+ 		int flag);
+diff -ruN a/fs/open.c b/fs/open.c
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -353,22 +353,14 @@
+  * We do this by temporarily clearing all FS-related capabilities and
+  * switching the fsuid/fsgid around to the real ones.
+  */
+-long do_faccessat(int dfd, const char __user *filename, int mode)
++static const struct cred *access_override_creds(void)
+ {
+ 	const struct cred *old_cred;
+ 	struct cred *override_cred;
+-	struct path path;
+-	struct inode *inode;
+-	struct vfsmount *mnt;
+-	int res;
+-	unsigned int lookup_flags = LOOKUP_FOLLOW;
+-
+-	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
+-		return -EINVAL;
+ 
+ 	override_cred = prepare_creds();
+ 	if (!override_cred)
+-		return -ENOMEM;
++		return NULL;
+ 
+ 	override_cred->fsuid = override_cred->uid;
+ 	override_cred->fsgid = override_cred->gid;
+@@ -403,6 +395,39 @@
+ 	override_cred->non_rcu = 1;
+ 
+ 	old_cred = override_creds(override_cred);
++
++	/* override_cred() gets its own ref */
++	put_cred(override_cred);
++
++	return old_cred;
++}
++
++long do_faccessat(int dfd, const char __user *filename, int mode, int flags)
++{
++	struct path path;
++	struct inode *inode;
++	struct vfsmount *mnt;
++	int res;
++	unsigned int lookup_flags = LOOKUP_FOLLOW;
++	const struct cred *old_cred = NULL;
++
++	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
++		return -EINVAL;
++
++	if (flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH))
++		return -EINVAL;
++
++	if (flags & AT_SYMLINK_NOFOLLOW)
++		lookup_flags &= ~LOOKUP_FOLLOW;
++	if (flags & AT_EMPTY_PATH)
++		lookup_flags |= LOOKUP_EMPTY;
++
++	if (!(flags & AT_EACCESS)) {
++		old_cred = access_override_creds();
++		if (!old_cred)
++			return -ENOMEM;
++	}
++
+ retry:
+ 	res = user_path_at(dfd, filename, lookup_flags, &path);
+ 	if (res)
+@@ -445,19 +470,26 @@
+ 		goto retry;
+ 	}
+ out:
+-	revert_creds(old_cred);
+-	put_cred(override_cred);
++	if (old_cred)
++		revert_creds(old_cred);
++
+ 	return res;
+ }
+ 
+ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
+ {
+-	return do_faccessat(dfd, filename, mode);
++	return do_faccessat(dfd, filename, mode, 0);
++}
++
++SYSCALL_DEFINE4(faccessat2, int, dfd, const char __user *, filename, int, mode,
++		int, flags)
++{
++	return do_faccessat(dfd, filename, mode, flags);
+ }
+ 
+ SYSCALL_DEFINE2(access, const char __user *, filename, int, mode)
+ {
+-	return do_faccessat(AT_FDCWD, filename, mode);
++	return do_faccessat(AT_FDCWD, filename, mode, 0);
+ }
+ 
+ int ksys_chdir(const char __user *filename)
+diff -ruN a/include/linux/syscalls.h b/include/linux/syscalls.h
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -410,6 +410,8 @@
+ #endif
+ asmlinkage long sys_fallocate(int fd, int mode, loff_t offset, loff_t len);
+ asmlinkage long sys_faccessat(int dfd, const char __user *filename, int mode);
++asmlinkage long sys_faccessat2(int dfd, const char __user *filename, int mode,
++			       int flags);
+ asmlinkage long sys_chdir(const char __user *filename);
+ asmlinkage long sys_fchdir(unsigned int fd);
+ asmlinkage long sys_chroot(const char __user *filename);
+@@ -1229,11 +1231,11 @@
+ 	return do_fchmodat(AT_FDCWD, filename, mode);
+ }
+ 
+-extern long do_faccessat(int dfd, const char __user *filename, int mode);
++long do_faccessat(int dfd, const char __user *filename, int mode, int flags);
+ 
+ static inline long ksys_access(const char __user *filename, int mode)
+ {
+-	return do_faccessat(AT_FDCWD, filename, mode);
++	return do_faccessat(AT_FDCWD, filename, mode, 0);
+ }
+ 
+ extern int do_fchownat(int dfd, const char __user *filename, uid_t user,
+diff -ruN a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -742,9 +742,11 @@
+ __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
+ #define __NR_close_range 436
+ __SYSCALL(__NR_close_range, sys_close_range)
++#define __NR_faccessat2 439
++__SYSCALL(__NR_faccessat2, sys_faccessat2)
+ 
+ #undef __NR_syscalls
+-#define __NR_syscalls 437
++#define __NR_syscalls 440
+ 
+ /*
+  * 32 bit systems traditionally used different
+diff -ruN a/include/uapi/linux/fcntl.h b/include/uapi/linux/fcntl.h
+--- a/include/uapi/linux/fcntl.h
++++ b/include/uapi/linux/fcntl.h
+@@ -76,10 +76,20 @@
+ #define DN_ATTRIB	0x00000020	/* File changed attibutes */
+ #define DN_MULTISHOT	0x80000000	/* Don't remove notifier */
+ 
++/*
++ * The constants AT_REMOVEDIR and AT_EACCESS have the same value.  AT_EACCESS is
++ * meaningful only to faccessat, while AT_REMOVEDIR is meaningful only to
++ * unlinkat.  The two functions do completely different things and therefore,
++ * the flags can be allowed to overlap.  For example, passing AT_REMOVEDIR to
++ * faccessat would be undefined behavior and thus treating it equivalent to
++ * AT_EACCESS is valid undefined behavior.
++ */
+ #define AT_FDCWD		-100    /* Special value used to indicate
+                                            openat should use the current
+                                            working directory. */
+ #define AT_SYMLINK_NOFOLLOW	0x100   /* Do not follow symbolic links.  */
++#define AT_EACCESS		0x200	/* Test access permitted for
++                                           effective IDs, not real IDs.  */
+ #define AT_REMOVEDIR		0x200   /* Remove directory instead of
+                                            unlinking file.  */
+ #define AT_SYMLINK_FOLLOW	0x400   /* Follow symbolic links.  */

@@ -17,38 +17,38 @@ pac() {
 # DEVICE_{PACKAGES,SERVICES}, PROFILE_{PACKAGES,SERVICES,GROUPS}, EXTRA_PACKAGES, LOCAL_PACKAGES
 . "$S/config"
 
-# Pacotes nossos, na ordem. O primeiro e o OpenRC no lugar do systemd como PID 1
-# (substitui o systemd-sysvcompat; o pacote systemd fica instalado e inerte porque o
-# pacman depende dele).
-for p in "${LOCAL_PACKAGES[@]}"; do
+# Pacotes nossos (os do perfil, ex.: bubblewrap-thunder), na ordem. --ask 4: aceita
+# trocar o pacote do Arch que eles substituem.
+for p in ${LOCAL_PACKAGES[@]+"${LOCAL_PACKAGES[@]}"}; do
 	pacman -U --noconfirm --ask 4 --disable-sandbox "$S/packages/$p"/*.pkg.tar.*
 done
 
-# Pacotes: busybox estatico (udhcpd, telnetd, initramfs), sudo, inetutils (hostname,
-# que o servico hostname do OpenRC chama).
+# Pacotes: systemd-sysvcompat (/usr/bin/init -> systemd: o PID 1 e o systemd do Arch),
+# busybox estatico (udhcpd e telnetd do cabo USB, initramfs), sudo, inetutils (hostname;
+# o telnet.socket dele fica desligado: o telnet do cabo e o thunder-telnet-usb).
 # android-tools e python: o mkbootimg do boot-deploy (kernel atualizado pelo pacman).
-pac -S busybox sudo inetutils android-tools python
+pac -S systemd-sysvcompat busybox sudo inetutils android-tools python
 # Do aparelho, do perfil de interface e os extras escolhidos no instalador; com Wi-Fi,
-# wpa_supplicant e dhcpcd (sem udev, o NetworkManager nao gerencia a interface).
+# NetworkManager (backend wpa_supplicant; o iwd precisa de crypto do kernel que falta).
 extra=("${DEVICE_PACKAGES[@]}" "${PROFILE_PACKAGES[@]}" "${EXTRA_PACKAGES[@]}")
-[ -z "$WIFI_INTERFACE" ] || extra+=(wpa_supplicant dhcpcd)
+[ -z "$WIFI_INTERFACE" ] || extra+=(networkmanager wpa_supplicant)
 [ ${#extra[@]} -eq 0 ] || pac -S "${extra[@]}"
 
 # pacman no aparelho: o 4.19 nao tem Landlock.
 sed -i 's/^#DisableSandboxFilesystem/DisableSandboxFilesystem/' /etc/pacman.conf
 
-# Overlays: o do nucleo (servicos, gadget USB, scripts de boot, fstab), o do perfil e o
-# do aparelho por cima.
+# Overlays: o do nucleo (units, drop-ins, gadget USB, fstab), o do perfil e o do
+# aparelho por cima.
 cp -a "$S/overlay/." /
 [ ! -d "$S/profile-overlay" ] || cp -a "$S/profile-overlay/." /
 [ ! -d "$S/device-overlay" ] || cp -a "$S/device-overlay/." /
 
-# Identidade do aparelho, lida pelo initramfs e pelo usb-gadget (busybox sh).
+# Identidade do aparelho, lida pelo initramfs, pelo usb-gadget (busybox sh) e pelo
+# thunder-wifi (WIFI_INTERFACE).
 mkdir -p /etc/thunder
-grep -E '^DEVICE(|_NAME|_VENDOR|_CODENAME)=' "$S/config" > /etc/thunder/device
+grep -E '^(DEVICE(|_NAME|_VENDOR|_CODENAME)|WIFI_INTERFACE)=' "$S/config" > /etc/thunder/device
 grep -E '^THUNDER_PROFILE=' "$S/config" >> /etc/thunder/device
 echo "$THUNDER_HOSTNAME" > /etc/hostname
-echo "hostname=\"$THUNDER_HOSTNAME\"" > /etc/conf.d/hostname
 
 # Firmware do aparelho, e o kernel como pacote (linux-<aparelho>): modulos, kernel e
 # layout do boot.img. Com THUNDER_IMAGE_BUILD=1 o hook do pacote so roda o depmod; o
@@ -61,7 +61,7 @@ THUNDER_IMAGE_BUILD=1 pacman -U --noconfirm --disable-sandbox "$S"/packages/kern
 if id alarm >/dev/null 2>&1; then userdel -r alarm; fi
 id "$THUNDER_USER" >/dev/null 2>&1 || useradd -m -G wheel -s /bin/bash "$THUNDER_USER"
 printf 'root:%s\n%s:%s\n' "$THUNDER_ROOT_PASSWORD" "$THUNDER_USER" "$THUNDER_PASSWORD" | chpasswd
-# Grupos extras do perfil (seat, video, input, render...): os que faltam sao criados como
+# Grupos extras do perfil (video, input...): os que faltam sao criados como
 # grupo de sistema; usermod -aG e idempotente.
 for g in ${PROFILE_GROUPS[@]+"${PROFILE_GROUPS[@]}"}; do
 	getent group "$g" >/dev/null || groupadd -r "$g"
@@ -87,44 +87,79 @@ locale-gen
 echo "LANG=$THUNDER_LOCALE" > /etc/locale.conf
 [ -f "/usr/share/zoneinfo/$THUNDER_TIMEZONE" ] || { echo "fuso desconhecido: $THUNDER_TIMEZONE" >&2; exit 1; }
 ln -sf "/usr/share/zoneinfo/$THUNDER_TIMEZONE" /etc/localtime
+# machine-id gerado aqui de proposito: vazio, o PID 1 trataria o 1o boot como "first
+# boot" e aplicaria o 90-systemd.preset inteiro (homed, sysext, networkd...).
 [ -s /etc/machine-id ] || dbus-uuidgen > /etc/machine-id
 
-# OpenRC: log do boot em /var/log/rc.log; runlevels.
-sed -i 's/^#\?rc_logger=.*/rc_logger="YES"/' /etc/rc.conf
-# O servico dmesg baixa o console_loglevel para 1, e isso vale para o console do pstore:
-# um travamento depois do sysinit nao deixaria log. Fora do sysinit.
-rc-update del dmesg sysinit 2>/dev/null || true
-for s in binfmt network staticroute; do rc-update del "$s" boot 2>/dev/null || true; done
-rc-update del netmount default 2>/dev/null || true
-# Entradas "servico" (runlevel default) ou "servico:runlevel" (ex.: udev:sysinit).
-# PROFILE_SERVICES pode vir sem definicao se o config for de um build-rootfs.sh antigo.
-for s in usb-network telnet-usb sshd ntp-client local "${DEVICE_SERVICES[@]}" \
-	${PROFILE_SERVICES[@]+"${PROFILE_SERVICES[@]}"}; do
-	rc-update add "${s%%:*}" "$([ "$s" = "${s#*:}" ] && echo default || echo "${s#*:}")"
+# Kernel de vendor antigo: o systemd 262 precisa de recursos que ele nao tem
+# (/usr/lib/thunder/systemd-compat). Credenciais e o MemoryPressureWatch= de unit com
+# PrivateNetwork= pedem a mount API nova (5.2); ProtectProc=/ProcSubset= pedem procfs por
+# montagem (5.8). Os drop-ins entram em todo servico so quando o KVER do aparelho e
+# anterior; kernel mainline nao recebe nada. O systemd --user falha igual nos dois
+# primeiros (243/CREDENTIALS, 226/NAMESPACE) e recebe os mesmos arquivos; ProtectProc= e
+# ProcSubset= ele ignora sem erro, entao esse fica so no sistema.
+kver_before() { [ "$(printf '%s\n' "$1" "${KVER%%-*}" | sort -V | head -n 1)" != "$1" ]; }
+compat=/usr/lib/thunder/systemd-compat
+# versao-minima:gerente:arquivo
+for c in 5.2:system:zz-thunder-no-credentials.conf 5.2:system:zz-thunder-no-memory-pressure.conf \
+	5.8:system:zz-thunder-no-protectproc.conf \
+	5.2:user:zz-thunder-no-credentials.conf 5.2:user:zz-thunder-no-memory-pressure.conf; do
+	IFS=: read -r min mgr f <<<"$c"
+	d=/usr/lib/systemd/$mgr/service.d
+	if kver_before "$min"; then
+		install -D -m 644 "$compat/$f" "$d/$f"
+	else
+		rm -f "${d:?}/${f:?}"
+	fi
 done
 
-# Wi-Fi: servicos na interface do aparelho e, se o instalador mandou, a rede ja salva.
-# Na config so vai a PSK (derivada pelo wpa_passphrase); a senha nao fica na imagem. O
-# nome da rede vai em hexadecimal, como o thunder-wifi faz.
-if [ -n "$WIFI_INTERFACE" ]; then
-	echo "wpa_iface=\"$WIFI_INTERFACE\"" > /etc/conf.d/wpa-supplicant
-	wconf=/etc/wpa_supplicant/wpa_supplicant-$WIFI_INTERFACE.conf
-	mkdir -p /etc/wpa_supplicant
-	printf 'ctrl_interface=DIR=/run/wpa_supplicant GROUP=wheel\nupdate_config=1\n' > "$wconf"
-	if [ -n "$THUNDER_WIFI_SSID" ]; then
-		ssid_hex=$(printf '%s' "$THUNDER_WIFI_SSID" | od -An -tx1 | tr -d ' \n')
-		if [ -n "$THUNDER_WIFI_PASSWORD" ]; then
-			psk=$(printf '%s\n' "$THUNDER_WIFI_PASSWORD" | wpa_passphrase "$THUNDER_WIFI_SSID" |
-				sed -n 's/^[[:space:]]*psk=//p')
-			[ -n "$psk" ] || { echo "wpa_passphrase recusou a senha do Wi-Fi" >&2; exit 1; }
-			printf 'network={\n\tssid=%s\n\tpsk=%s\n}\n' "$ssid_hex" "$psk" >> "$wconf"
-		else
-			printf 'network={\n\tssid=%s\n\tkey_mgmt=NONE\n}\n' "$ssid_hex" >> "$wconf"
-		fi
+# Rede: o tarball do Arch Linux ARM liga o systemd-networkd (DHCP em en*/eth*) e o
+# systemd-resolved; aqui saem. O cabo USB e do thunder-usb-network e o Wi-Fi e do
+# NetworkManager, que escreve o /etc/resolv.conf. Como num Arch de PC com NM.
+for u in systemd-networkd.service systemd-networkd.socket systemd-networkd-varlink.socket \
+	systemd-networkd-varlink-metrics.socket systemd-networkd-resolve-hook.socket \
+	systemd-networkd-wait-online.service systemd-network-generator.service \
+	systemd-resolved.service systemd-resolved-monitor.socket systemd-resolved-varlink.socket; do
+	[ ! -e "/usr/lib/systemd/system/$u" ] || systemctl disable --quiet "$u"
+done
+rm -f /etc/systemd/network/en.network /etc/systemd/network/eth.network
+for u in systemd-networkd.service systemd-resolved.service; do
+	if systemctl is-enabled --quiet "$u" 2>/dev/null; then
+		echo "$u continua habilitado" >&2
+		exit 1
 	fi
-	chmod 600 "$wconf"
-	rc-update add wpa-supplicant default
-	rc-update add dhcpcd-wifi default
+done
+
+# Units do nucleo, do aparelho (DEVICE_SERVICES) e do perfil (PROFILE_SERVICES): nomes
+# de unit com sufixo; "{user}" vira o THUNDER_USER (ex.: thunder-console@{user}.service).
+# PROFILE_SERVICES pode vir sem definicao se o config for de um build-rootfs.sh antigo.
+units=(thunder-usb-network.service thunder-telnet-usb.service thunder-sshd-rescue.service
+	sshd.service systemd-timesyncd.service thunder-rtc-sync.path systemd-pstore.service)
+for s in ${DEVICE_SERVICES[@]+"${DEVICE_SERVICES[@]}"} ${PROFILE_SERVICES[@]+"${PROFILE_SERVICES[@]}"}; do
+	case $s in
+	*:*) echo "\"$s\": a forma servico:runlevel era do OpenRC; use o nome da unit" >&2; exit 1 ;;
+	*.service | *.socket | *.timer | *.path | *.target) units+=("${s//\{user\}/$THUNDER_USER}") ;;
+	*) echo "nome de unit sem sufixo: \"$s\" (ex.: $s.service)" >&2; exit 1 ;;
+	esac
+done
+systemctl enable "${units[@]}"
+
+# Wi-Fi: o NetworkManager so gerencia a interface de estacao do aparelho (o resto, como
+# o cabo USB e as interfaces extras do driver, fica de fora) e, se o instalador mandou,
+# a rede ja vem salva pelo thunder-wifi save: no perfil vai so a PSK (64 hex); a senha
+# nao fica na imagem e nao passa pela linha de comando.
+nmwifi=/usr/lib/NetworkManager/conf.d/51-thunder-wifi.conf
+if [ -n "$WIFI_INTERFACE" ]; then
+	printf '%s\n' "# Gerado pelo rootfs/configure.sh (WIFI_INTERFACE do device.sh)." \
+		'[keyfile]' "unmanaged-devices=except:interface-name:$WIFI_INTERFACE" > "$nmwifi"
+	systemctl enable NetworkManager.service
+	if [ -n "$THUNDER_WIFI_SSID" ]; then
+		rm -f /etc/NetworkManager/system-connections/thunder-*.nmconnection
+		printf '%s\n' "$THUNDER_WIFI_PASSWORD" |
+			THUNDER_WIFI_IFACE=$WIFI_INTERFACE /usr/local/bin/thunder-wifi save "$THUNDER_WIFI_SSID"
+	fi
+else
+	rm -f "$nmwifi"
 fi
 
 # Schemas do GLib: overrides de overlay (ex.: 90-thunder-console.gschema.override) so valem
@@ -138,4 +173,4 @@ if [ -f "$S/profile-configure.sh" ]; then
 	THUNDER_USER=$THUNDER_USER bash "$S/profile-configure.sh"
 fi
 
-rc-update show -v | grep -v '^ *[a-z-]* *|$' || true
+systemctl list-unit-files --state=enabled --no-legend --no-pager || true

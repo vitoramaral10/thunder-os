@@ -2,7 +2,7 @@
 
 **Thunder OS** puts Arch Linux ARM on Android phones. It keeps each phone's own
 kernel (vendor or mainline, with our patches), adds a small initramfs written
-for this project, and runs the stock Arch Linux ARM userland with **OpenRC** as
+for this project, and runs the stock Arch Linux ARM userland with Arch's **systemd** as
 PID 1. There is nothing from postmarketOS or Android in the result.
 
 The core (initramfs, rootfs, build and flash tools) is the same for every
@@ -28,28 +28,37 @@ Want your phone here? Read [docs/porting.md](docs/porting.md) and open a pull re
   partition and switches to Arch. If anything fails it stays up with a rescue
   shell on the cable instead of rebooting.
 - The phone at `172.16.42.1` over the USB cable (RNDIS, DHCP gives the host
-  `172.16.42.2`), with SSH and a telnet login fallback.
-- Arch Linux ARM, verified against its signing key, with OpenRC, your SSH key,
+  `172.16.42.2`), with SSH and a telnet login fallback. Both stay reachable in
+  emergency and rescue mode.
+- Arch Linux ARM, verified against its signing key, with systemd, your SSH key,
   your user and the device's firmware, modules and services.
 - `thunder-reboot bootloader` to get back to fastboot without buttons.
-- Logs of every boot, including the previous boot's panic from pstore, in
-  `/var/log/thunder/`.
+- A persistent journal (`journalctl -b -1` for the previous boot) and the
+  previous boot's panic from pstore in `/var/lib/systemd/pstore`.
 
-## Why OpenRC and not systemd
+## systemd on old vendor kernels
 
 Phone kernels are often old: vendor trees stay on the kernel the SoC shipped
-with. Arch's systemd (262) does not run on them. It calls `close_range`
-(Linux 5.9) and `waitid(P_PIDFD)` (5.4) with no fallback, since systemd 260
-raised its baseline to 5.10, and needs `CONFIG_FHANDLE`. OpenRC has no such
-dependency, so one init works on every device. The `systemd` package stays
-installed but inert, because `pacman` depends on it.
+with, and Arch's systemd (262) expects features from 5.x. Instead of replacing
+the init, the device kernel learns what it needs:
+
+- Small backports: `statx` mount id, `waitid(P_PIDFD)`, `close_range`,
+  `utimensat` and `faccessat2`, plus the configs `FHANDLE`, `CGROUP_PIDS` and
+  `AUTOFS`.
+- The initramfs mounts cgroup2 on `/sys/fs/cgroup` with `nsdelegate`, because
+  the mount systemd does itself adds `memory_recursiveprot`, which 4.19 refuses.
+- Three drop-ins turn off credentials (`ImportCredential=` and friends),
+  `MemoryPressureWatch=` (with `PrivateNetwork=` it needs `open_tree()`) and
+  `ProtectProc=`/`ProcSubset=`, which need the new mount API and a per-mount
+  procfs. They are installed only when the kernel is older than 5.2 or 5.8, so a
+  newer kernel runs Arch's units untouched.
 
 ## Layout
 
 ```
 initramfs/    init: mounts the root partition, falls back to a rescue shell over USB
-rootfs/       overlay/ (services, USB gadget, boot scripts), configure.sh,
-              finalize.sh, packages/ (OpenRC PKGBUILD, glib patches), src/
+rootfs/       overlay/ (systemd units, USB gadget, drop-ins), configure.sh,
+              finalize.sh, packages/ (glib patches), src/
 tools/        rootless build pipeline and flashing, driven by DEVICE
 devices/      one folder per phone: device.sh, kernel config and patches,
               overlay, docs, bring-up helpers

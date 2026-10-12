@@ -15,7 +15,7 @@ kernel tree). Build with `DEVICE=<folder>`.
 | Status | Means |
 |---|---|
 | `bring-up` | Builds, but does not reach the Arch userland yet. Kept so others can help |
-| `boots` | Reaches OpenRC's default runlevel; SSH over USB works |
+| `boots` | Reaches `multi-user.target`; SSH over USB works |
 | `daily` | Display, touch, Wi-Fi and battery work in the image, not only in the kernel |
 
 A device enters the table when its `device.sh` builds. The status is the port

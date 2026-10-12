@@ -1,130 +1,198 @@
 #!/bin/bash
-# Wi-Fi pelo terminal, sobre o wpa_supplicant do servico wpa-supplicant.
+# Wi-Fi pelo terminal, sobre o NetworkManager (nmcli).
 #
 #   thunder-wifi scan              redes visiveis (sinal, faixa, nome)
 #   thunder-wifi connect <rede>    pede a senha e conecta; a rede fica salva
 #   thunder-wifi status            estado, rede, endereco IP
 #   thunder-wifi forget <rede>     esquece a rede salva
+#   thunder-wifi save <rede>       so grava a rede (senha pela entrada), sem conectar
 #
-# A senha nunca e gravada: so a chave derivada (PSK, wpa_passphrase). O nome da rede
-# vai em hexadecimal, para nome com aspas, espacos ou acentos nao quebrar o arquivo.
+# Contrato com o instalador (installer/lib/backend.dart, parseWifiScan/parseWifiStatus),
+# o mesmo da versao antiga sobre o wpa_cli: o scan imprime "SINAL FAIXA REDE" e uma linha
+# por rede com o sinal em dBm; o status imprime wpa_state=, ssid=, freq= e ip_address=;
+# a senha vem pela entrada padrao.
+#
+# A senha nunca e gravada nem vai para a linha de comando: o perfil do NetworkManager
+# (modo 600) guarda so a chave derivada (PSK de 64 hex, wpa_passphrase). O nome da rede
+# vai no perfil como lista de bytes, para aspas, ';' ou acentos nao quebrarem o arquivo.
+# O "save" e o caminho da rede pre-configurada da imagem (rootfs/configure.sh, no chroot,
+# sem o NetworkManager rodando).
 set -euo pipefail
 
-IFACE=${THUNDER_WIFI_IFACE:-wlan0}
-[ -r /etc/conf.d/wpa-supplicant ] && . /etc/conf.d/wpa-supplicant
-IFACE=${wpa_iface:-$IFACE}
+# O nmcli traduz colunas (ACTIVE vira "sim" em pt_BR): fixa a saida em ingles, UTF-8.
+export LC_ALL=C.UTF-8
+unset LANGUAGE
 
-wcli() { wpa_cli -i "$IFACE" "$@"; }
+WIFI_INTERFACE=
+if [ -r /etc/thunder/device ]; then . /etc/thunder/device; fi
+IFACE=${THUNDER_WIFI_IFACE:-${WIFI_INTERFACE:-wlan0}}
+CONN_DIR=${THUNDER_WIFI_CONN_DIR:-/etc/NetworkManager/system-connections}
+# Espera do "connection up"; o instalador desiste em 60 s.
+WAIT=30
+
+nm_running() { [ "$(nmcli -t -g RUNNING general 2>/dev/null)" = running ]; }
 
 need_daemon() {
-	wcli ping >/dev/null 2>&1 && return 0
-	echo "o wpa_supplicant nao esta rodando em $IFACE: rc-service wpa-supplicant start" >&2
-	exit 1
+	if ! nm_running; then
+		echo "o NetworkManager nao esta rodando: systemctl start NetworkManager" >&2
+		exit 1
+	fi
+	if [ ! -e "/sys/class/net/$IFACE" ]; then
+		echo "$IFACE nao existe: o Wi-Fi do aparelho subiu? (systemctl --failed)" >&2
+		exit 1
+	fi
 }
 
-hex() { printf '%s' "$1" | od -An -tx1 | tr -d ' \n'; }
-
-# O wpa_cli escapa o nome da rede (\xNN para acento e bytes nao imprimiveis, \" e \\).
-# Devolve o nome real. \" primeiro: um \\ seguido de aspas sempre vem como \\\".
-unescape() {
-	local s=${1//\\\"/\"}
-	printf '%b' "$s"
-}
-
-# id da rede salva com este nome (o nome real, sem escape), ou vazio.
-network_id() {
-	local id name _
-	while IFS=$'\t' read -r id name _; do
-		if [ "$(unescape "$name")" = "$1" ]; then
-			echo "$id"
-			return
+# UUIDs dos perfis Wi-Fi salvos com este nome de rede (SSID), um por linha.
+saved_uuids() {
+	local uuid type
+	while IFS=: read -r uuid type; do
+		[ "$type" = 802-11-wireless ] || continue
+		if [ "$(nmcli -e no -g 802-11-wireless.ssid connection show uuid "$uuid")" = "$1" ]; then
+			echo "$uuid"
 		fi
-	done < <(wcli list_networks | tail -n +2)
+	done < <(nmcli -t -f UUID,TYPE connection show)
+}
+
+# Le a senha da entrada e imprime a PSK (vazio = rede aberta). $1 = rede.
+read_psk() {
+	local pass psk
+	if [ -t 0 ]; then
+		IFS= read -r -s -p "Senha de \"$1\" (vazio para rede aberta): " pass || pass=
+		echo >&2
+	else
+		IFS= read -r pass || pass=
+	fi
+	[ -n "$pass" ] || return 0
+	# wpa_passphrase corta em 63 bytes: conta bytes, nao caracteres.
+	local LC_ALL=C
+	if [ ${#pass} -lt 8 ] || [ ${#pass} -gt 63 ]; then
+		echo "senha WPA tem de 8 a 63 caracteres" >&2
+		return 1
+	fi
+	# Senha pela entrada padrao: como argumento ela apareceria no ps.
+	psk=$(printf '%s\n' "$pass" | wpa_passphrase "$1" 2>/dev/null | sed -n 's/^[[:space:]]*psk=//p')
+	[[ $psk =~ ^[0-9a-f]{64}$ ]] || { echo "wpa_passphrase recusou a senha" >&2; return 1; }
+	echo "$psk"
+}
+
+# Grava o perfil (modo 600) e imprime a UUID. $1 = rede, $2 = PSK ou vazio,
+# $3 = autoconnect (true/false).
+write_profile() {
+	local uuid bytes id
+	uuid=$(cat /proc/sys/kernel/random/uuid)
+	# -v: sem ele o od resume linhas repetidas com '*'.
+	bytes=$(printf '%s' "$1" | od -An -v -tu1 | tr -s ' \n' ';' | sed 's/^;//')
+	# O id so aparece no nmcli; sem caractere que o formato keyfile teria de escapar.
+	id=$(printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9 ._-' '_')
+	(
+		umask 077
+		mkdir -p "$CONN_DIR"
+		{
+			printf '[connection]\nid=%s\nuuid=%s\ntype=wifi\ninterface-name=%s\nautoconnect=%s\n\n' \
+				"$id" "$uuid" "$IFACE" "$3"
+			printf '[wifi]\nmode=infrastructure\nssid=%s\n\n' "$bytes"
+			[ -z "$2" ] || printf '[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n\n' "$2"
+			printf '[ipv4]\nmethod=auto\n\n[ipv6]\naddr-gen-mode=default\nmethod=auto\n'
+		} > "$CONN_DIR/thunder-$uuid.nmconnection"
+	)
+	echo "$uuid"
 }
 
 case ${1:-status} in
 scan)
 	need_daemon
-	wcli scan >/dev/null
-	sleep 6
 	printf '%-6s %-7s %s\n' SINAL FAIXA REDE
-	# bssid, freq, sinal, flags, nome (escapado pelo wpa_cli)
-	wcli scan_results | tail -n +2 | sort -t$'\t' -k3 -n -r |
-		while IFS=$'\t' read -r _ freq signal _ name; do
-			[ -n "$name" ] || continue
-			# Rede oculta anuncia o nome como bytes nulos: sem nome para escolher.
-			case $name in *'\x00'*) continue ;; esac
-			name=$(unescape "$name")
-			# Nome com quebra de linha nao cabe nesta saida de uma linha por rede.
-			case $name in *$'\n'*) continue ;; esac
+	# SIGNAL e a qualidade 0-100 do NetworkManager (nm_wifi_utils_level_to_quality:
+	# -100 dBm = 0, -40 dBm = 100); o instalador espera dBm: dBm = q * 6 / 10 - 100.
+	# O nome vem em hexadecimal: rede oculta (vazio) e nome com byte nulo ou quebra de
+	# linha (nao cabe numa linha por rede) ficam de fora.
+	nmcli -t -f SIGNAL,FREQ,SSID-HEX device wifi list ifname "$IFACE" --rescan yes |
+		while IFS=: read -r q freq hex; do
+			[[ $q =~ ^[0-9]+$ && $hex =~ ^([0-9A-Fa-f]{2})+$ ]] || continue
+			skip=0
+			for ((i = 0; i < ${#hex}; i += 2)); do
+				case ${hex:i:2} in 00 | 0[aAdD]) skip=1 ;; esac
+			done
+			[ "$skip" = 0 ] || continue
+			printf -v name '%b' "$(sed 's/../\\x&/g' <<< "$hex")"
 			band=2.4GHz
-			[ "$freq" -gt 4000 ] && band=5GHz
-			printf '%-6s %-7s %s\n' "$signal" "$band" "$name"
-		done | awk '!seen[$0]++'
+			[ "${freq%% *}" -gt 4000 ] && band=5GHz
+			printf '%-6s %-7s %s\n' "$((q * 6 / 10 - 100))" "$band" "$name"
+		done | sort -n -r -k1,1 | awk '!seen[$0]++'
 	;;
 connect)
 	need_daemon
 	ssid=${2:?uso: thunder-wifi connect <rede>}
-	read -r -s -p "Senha de \"$ssid\" (vazio para rede aberta): " pass
-	echo
-	# A rede ja salva com esse nome so sai depois que a nova associar: senha errada
-	# numa reconexao nao pode apagar a que funcionava.
-	old=$(network_id "$ssid")
-	id=$(wcli add_network | tail -n 1)
-	wcli set_network "$id" ssid "$(hex "$ssid")" >/dev/null
-	if [ -z "$pass" ]; then
-		wcli set_network "$id" key_mgmt NONE >/dev/null
-	else
-		if [ ${#pass} -lt 8 ] || [ ${#pass} -gt 63 ]; then
-			echo "senha WPA tem de 8 a 63 caracteres" >&2
-			wcli remove_network "$id" >/dev/null
+	psk=$(read_psk "$ssid")
+	# O perfil novo nasce sem autoconnect; os salvos com o mesmo nome so saem depois que
+	# o novo conectar: senha errada numa reconexao nao apaga o que funcionava.
+	old=$(saved_uuids "$ssid")
+	uuid=$(write_profile "$ssid" "$psk" false)
+	unset psk
+	file=$CONN_DIR/thunder-$uuid.nmconnection
+	nmcli connection load "$file"
+	echo "conectando a \"$ssid\"..."
+	if nmcli --wait "$WAIT" connection up uuid "$uuid" ifname "$IFACE" >/dev/null 2>&1; then
+		# Primeiro o novo fica com autoconnect gravado; so entao os antigos saem. Se a
+		# gravacao falhar, os salvos continuam e o proximo boot ainda tem rede.
+		if ! nmcli connection modify uuid "$uuid" connection.autoconnect yes; then
+			echo "conectado, mas o perfil novo nao foi gravado; os salvos ficam" >&2
 			exit 1
 		fi
-		# Senha pela entrada padrao: como argumento ela apareceria no ps.
-		psk=$(printf '%s\n' "$pass" | wpa_passphrase "$ssid" | sed -n 's/^[[:space:]]*psk=//p')
-		wcli set_network "$id" psk "$psk" >/dev/null
+		for u in $old; do nmcli connection delete uuid "$u" >/dev/null || true; done
+		echo "conectado: thunder-wifi status mostra o endereco IP"
+		exit 0
 	fi
-	unset pass
-	wcli enable_network "$id" >/dev/null
-	wcli select_network "$id" >/dev/null
-	echo "conectando a \"$ssid\"..."
-	for _ in $(seq 1 20); do
-		sleep 1
-		if wcli status | grep -q '^wpa_state=COMPLETED'; then
-			[ -z "$old" ] || wcli remove_network "$old" >/dev/null
-			# O select_network desativa as outras redes salvas; elas voltam a valer.
-			wcli enable_network all >/dev/null
-			wcli save_config >/dev/null
-			echo "associado. Endereco IP pelo dhcpcd em alguns segundos: thunder-wifi status"
-			exit 0
-		fi
-	done
-	# Falhou: a rede nova sai, as salvas voltam, e nada errado fica gravado.
-	wcli remove_network "$id" >/dev/null
-	wcli enable_network all >/dev/null
-	wcli save_config >/dev/null
-	wcli reassociate >/dev/null
-	echo "nao associou em 20 s: senha errada ou rede fora de alcance?" >&2
+	# Falhou: o perfil novo sai e o NetworkManager volta para os salvos.
+	nmcli connection delete uuid "$uuid" >/dev/null 2>&1 || rm -f "$file"
+	nmcli --wait 0 device connect "$IFACE" >/dev/null 2>&1 || true
+	echo "nao conectou em $WAIT s: senha errada ou rede fora de alcance?" >&2
 	exit 1
 	;;
-status)
-	if ! wcli ping >/dev/null 2>&1; then
-		echo "wpa_supplicant parado em $IFACE"
-		exit 1
-	fi
-	wcli status | grep -E '^(wpa_state|ssid|freq|ip_address)=' || true
-	ip -br addr show "$IFACE"
+save)
+	ssid=${2:?uso: thunder-wifi save <rede>}
+	psk=$(read_psk "$ssid")
+	uuid=$(write_profile "$ssid" "$psk" true)
+	unset psk
+	if nm_running; then nmcli connection load "$CONN_DIR/thunder-$uuid.nmconnection"; fi
+	echo "salva"
 	;;
 forget)
 	need_daemon
-	id=$(network_id "${2:?uso: thunder-wifi forget <rede>}")
-	[ -n "$id" ] || { echo "nao ha rede salva com esse nome" >&2; exit 1; }
-	wcli remove_network "$id" >/dev/null
-	wcli save_config >/dev/null
+	uuids=$(saved_uuids "${2:?uso: thunder-wifi forget <rede>}")
+	[ -n "$uuids" ] || { echo "nao ha rede salva com esse nome" >&2; exit 1; }
+	for u in $uuids; do nmcli connection delete uuid "$u" >/dev/null; done
 	echo "esquecida"
 	;;
+status)
+	if ! nm_running; then
+		echo "NetworkManager parado"
+		exit 1
+	fi
+	# Estados do NM no vocabulario do wpa_cli, que o instalador entende (COMPLETED).
+	# GENERAL.STATE vem como "100 (connected)".
+	state=$(nmcli -g GENERAL.STATE device show "$IFACE" 2>/dev/null || true)
+	case ${state%% *} in
+	100) echo wpa_state=COMPLETED ;;
+	40 | 50 | 60 | 70 | 80 | 90) echo wpa_state=ASSOCIATING ;;
+	30 | 110 | 120) echo wpa_state=DISCONNECTED ;;
+	*) echo wpa_state=INTERFACE_DISABLED ;;
+	esac
+	active=$(nmcli -t -e no -f ACTIVE,FREQ,SSID device wifi list ifname "$IFACE" --rescan no 2>/dev/null |
+		sed -n 's/^yes://p' | head -n 1)
+	if [ -n "$active" ]; then
+		freq=${active%%:*}
+		echo "ssid=${active#*:}"
+		echo "freq=${freq%% *}"
+	fi
+	ip4=$(nmcli -g IP4.ADDRESS device show "$IFACE" 2>/dev/null || true)
+	ip4=${ip4%% | *}
+	[ -z "$ip4" ] || echo "ip_address=${ip4%%/*}"
+	ip -br addr show "$IFACE" 2>/dev/null || true
+	;;
 *)
-	sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
 	exit 2
 	;;
 esac

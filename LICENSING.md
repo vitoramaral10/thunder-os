@@ -8,7 +8,6 @@ license it came with.
 | Path | License | Origin |
 |---|---|---|
 | `rootfs/packages/glib/*.patch` | LGPL-2.1-or-later | patches to GLib |
-| `rootfs/packages/openrc/PKGBUILD` | GPL-3.0 | written for this project; builds OpenRC (BSD-2-Clause) |
 | `initramfs/`, `rootfs/`, `tools/`, `docs/` | GPL-3.0 | written for this project |
 
 ## Devices

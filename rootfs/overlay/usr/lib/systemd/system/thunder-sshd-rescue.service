@@ -1,0 +1,29 @@
+# SSH no cabo USB quando o sistema cai no emergency.target ou no rescue.target: o
+# sshd.service do Arch depende do basic.target, que e justamente o que falhou. Este so
+# depende do cabo. Tambem e uma alavanca: com o boot travado antes do multi-user, pelo
+# telnet, "systemctl start thunder-sshd-rescue" da SSH (o Conflicts= cancela o job
+# pendente do sshd.service; "systemctl start sshd" depois devolve o normal). O Before=
+# faz o stop deste sair antes do start do sshd.service: so Conflicts= nao ordena, e o
+# sshd do Arch (0.0.0.0:22) toparia com 172.16.42.1:22 ainda em LISTEN (EADDRINUSE),
+# ficaria so no IPv6 e o Restart= nunca dispararia.
+# ssh-keygen -A so cria as chaves que faltam; com a raiz somente leitura ele falha e o
+# sshd sobe com as chaves que ja existem.
+[Unit]
+Description=OpenSSH on the USB cable for emergency and rescue mode
+DefaultDependencies=no
+Conflicts=sshd.service
+Before=sshd.service
+Wants=thunder-usb-network.service
+After=systemd-journald.socket thunder-usb-network.service
+IgnoreOnIsolate=yes
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/ssh-keygen -A
+ExecStart=/usr/bin/sshd -D -e -o ListenAddress=172.16.42.1
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=emergency.target rescue.target

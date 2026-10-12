@@ -20,6 +20,8 @@ KERNEL_IMAGE=Image.gz
 KERNEL_DTB=mediatek/mt6833.dtb
 # Codigo de vendor nao compila com -Werror em gcc moderno.
 KERNEL_STRIP_WERROR=1
+# Entradas do kernel alem do KERNEL_CONFIG (carimbo de reaproveitamento da build).
+KERNEL_INPUTS=(patches connectivity)
 
 # boot.img: offsets do boot.img de fabrica (header v2, pagina de 2048).
 BOOTIMG_ARGS=(
@@ -62,10 +64,13 @@ FIRMWARE_FILES=(
 FIRMWARE_REQUIRED=(nt36672c_tm_01_ts_fw.bin)
 # python: o bring-up do Wi-Fi (wmt-loader, wmt-daemon) e em Python.
 DEVICE_PACKAGES=(python)
-DEVICE_SERVICES=(touchscreen-wake wifi-thunder)
+# Units do systemd do aparelho (overlay/usr/lib/systemd/system), habilitadas pelo configure.sh. O toque e uma regra do udev (overlay/usr/lib/udev/rules.d).
+DEVICE_SERVICES=(wifi-thunder.service)
+# NetworkManager so gerencia esta interface; extras do driver ficam de fora.
 # Interface de estacao: o gen4m cria wlan0, wlan1, ap0 e p2p0, mas so a wlan0 e
 # estacao de verdade.
 WIFI_INTERFACE=wlan0
+# overlay/etc/systemd/system-generators/systemd-gpt-auto-generator -> /dev/null: o disco da raiz e o UFS do Android, com ~60 particoes de vendor; a descoberta automatica nunca monta nem faz swapon delas.
 
 # Enxerto da conectividade MediaTek (wmt_drv, wmt_chrdev_wifi, wlan_drv_gen4m, connfem,
 # bt_drv) antes dos patches. common/ tem de vir do mesmo drop: o struct

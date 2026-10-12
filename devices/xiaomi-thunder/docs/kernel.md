@@ -186,9 +186,23 @@ strace, and written from the upstream commit with two adversarial reviews.
   AT_EMPTY_PATH)`. udevd touches tag files and device nodes this way; 4.19 returned
   `EINVAL` and udevd dropped the whole event.
 
-Still missing and harmless: `faccessat2` (glibc falls back), `epoll_pwait2` (sd-event
-falls back), `openat2` (bubblewrap is rebuilt with its runtime fallback, see
-`rootfs/packages/bubblewrap-thunder`).
+- **backport-faccessat2** (94704515 + c8ffd8bcdd28, 5.8): syscall 439. Harmless for udevd
+  (glibc falls back), but required for systemd as PID 1: the executor checks every
+  `ExecStart=` with `faccessat(fd, "", X_OK, AT_EMPTY_PATH)`, which glibc 2.43 sends to
+  syscall 439 and fails with EINVAL when it is missing, so every service died with
+  `203/EXEC`.
+
+Still missing and harmless: `epoll_pwait2` (sd-event falls back), `openat2` (bubblewrap is
+rebuilt with its runtime fallback, see `rootfs/packages/bubblewrap-thunder`), the new
+mount API and per-mount procfs (systemd units that need them get drop-ins, see the
+systemd notes in the image).
+
+Kernel config for systemd as PID 1 (r40): `FHANDLE`, `CGROUP_PIDS`, `AUTOFS_FS`,
+`CHECKPOINT_RESTORE`, `NET_SCH_FQ_CODEL`, no `UEVENT_HELPER`; and for iwd, AF_ALG
+(`CRYPTO_USER_API_HASH/SKCIPHER/AEAD`) and `KEY_DH_OPERATIONS`. nf_tables stays off on
+purpose: this 4.19.191 has at least six nf_tables bugs with public exploits reachable from
+an unprivileged user namespace; it needs a gate patch and fixes first
+(`build/research/pid1/kernel-config-plan.md`, revision rB).
 
 ## Connectivity graft
 

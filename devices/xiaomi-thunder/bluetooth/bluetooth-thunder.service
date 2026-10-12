@@ -1,0 +1,27 @@
+# Bring-up do Bluetooth do MT6833 (ainda fora da imagem: docs/bluetooth-bringup.md).
+# Wi-Fi e Bluetooth dividem o CONNSYS: o bring-up do Wi-Fi e que copia os ROM patches e
+# liga o chip. A ponte stpbt-vhci-bridge.py liga /dev/stpbt a um controlador hci do
+# kernel. So para com SIGTERM e com tempo: um SIGKILL no meio de um read() deixa o
+# btonflag do driver preso e /dev/stpbt devolve EIO ate o proximo boot.
+[Unit]
+Description=Bluetooth bring-up (MediaTek MT6833 / stpbt)
+Requires=wifi-thunder.service
+After=wifi-thunder.service
+Before=bluetooth.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/modprobe bt_drv_6833
+ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/stpbt ] && [ $$i -lt 25 ]; do sleep 0.2; i=$$((i + 1)); done; [ -e /dev/stpbt ]'
+# BD_ADDR de fabrica da nvdata (somente leitura); sem ele, o endereco padrao da MediaTek.
+ExecStartPre=-/bin/sh -c '[ -s /lib/firmware/bt_addr.bin ] && exit 0; mkdir -p /mnt/nvdata-ro && mount -o ro /dev/disk/by-partlabel/nvdata /mnt/nvdata-ro || exit 0; dd if=/mnt/nvdata-ro/APCFG/APRDEB/BT_Addr of=/lib/firmware/bt_addr.bin bs=1 count=6; umount /mnt/nvdata-ro; chmod 600 /lib/firmware/bt_addr.bin'
+ExecStart=/usr/local/bin/stpbt-vhci-bridge.py
+ExecStartPost=/bin/sh -c 'i=0; while [ ! -e /sys/class/bluetooth/hci0 ] && [ $$i -lt 40 ]; do sleep 0.25; i=$$((i + 1)); done; [ -e /sys/class/bluetooth/hci0 ]'
+KillSignal=SIGTERM
+TimeoutStopSec=20
+SendSIGKILL=no
+
+# multi-user.target e nao bluetooth.target: o udev so puxa o bluetooth.target depois que o hci0
+# existe, e o hci0 so existe depois desta unit.
+[Install]
+WantedBy=multi-user.target

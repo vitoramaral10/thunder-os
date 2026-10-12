@@ -63,11 +63,13 @@ kernel or the initramfs. The script reboots the device when it finishes.
 - `ssh root@172.16.42.1` with the key that was staged into the image.
 - Fallback: `telnet 172.16.42.1`, which asks for a login (root or
   `THUNDER_USER`, password `THUNDER_PASSWORD`, see [building.md](building.md)).
-  It is a second way in if sshd does not start.
+  It is a second way in if sshd does not start. In emergency and rescue mode
+  `thunder-sshd-rescue` keeps ssh on `172.16.42.1` too.
 - The first boot grows the root filesystem to fill its partition, so it takes
   longer than later boots.
-- **Set the clock.** There is no network time yet, and the RTC may be back in
-  the past after the battery ran flat (OpenRC then warns about clock skew). From the
+- **The clock.** The RTC may be back in the past after the battery ran flat.
+  `systemd-timesyncd` sets the clock once there is network and
+  `thunder-rtc-sync` writes it back to the RTC. To set it by hand from the
   host: `ssh root@172.16.42.1 "date -s @$(date +%s) && hwclock --systohc"`.
 
 ## Rescue shell
@@ -79,6 +81,10 @@ the kernel command line, it drops to a rescue shell instead of rebooting:
 ```sh
 telnet 172.16.42.1        # no password
 ```
+
+In emergency or rescue mode (the system is up but did not reach
+`multi-user.target`) the login telnet and `ssh root@172.16.42.1` both work
+(`thunder-sshd-rescue`).
 
 The shell never reboots the device by itself. To retry mounting the root and
 continue the normal boot from inside it:
@@ -94,8 +100,9 @@ arguments, including `root=/dev/ram`.
 
 ## Getting to fastboot
 
-- From the running system: `thunder-reboot bootloader` (installed as
-  `/usr/local/bin/thunder-reboot`; it uses `LINUX_REBOOT_CMD_RESTART2`).
+- From the running system: `systemctl reboot bootloader` (clean shutdown) or
+  `thunder-reboot bootloader` (immediate; installed as
+  `/usr/local/bin/thunder-reboot`, it uses `LINUX_REBOOT_CMD_RESTART2`).
 - From a powered-off phone: the device's key combination, in its `README.md`
   (often **volume down** while powering on).
 
@@ -103,16 +110,22 @@ Check with `fastboot devices`.
 
 ## Reading logs
 
-- `/var/log/rc.log`: OpenRC boot output.
-- `/var/log/thunder/<YYYYmmdd-HHMMSS>/`: saved at each boot by
-  `/etc/local.d/20-save-logs.start`: `pstore/` (the console-ramoops record is
-  the panic log of the previous boot), `dmesg.txt` and `cmdline.txt`. The last
-  20 boots are kept.
+- `journalctl -b` is this boot, `journalctl -b -1` the previous one and
+  `journalctl -k` the kernel log. The journal is persistent.
+- `/var/lib/systemd/pstore`: archived at each boot by `systemd-pstore.service`;
+  the console-ramoops record is the panic log of the previous boot.
 
 If the system does not come up at all, boot into the rescue shell with
 `thunder.debug=1`. The rescue shell mounts pstore at `/sys/fs/pstore`; the root
 filesystem is not mounted there, so mount the root partition yourself to
 read `/var/log`.
+
+## Trying another init once
+
+`echo <init path> > /var/lib/thunder/init-once` makes the initramfs use that
+init for the next boot only (it consumes the file before `switch_root`), so a
+bad init never sticks. Without it the init is `thunder.init=` or
+`/usr/bin/init`.
 
 ## Full recovery to the factory ROM
 

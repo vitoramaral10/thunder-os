@@ -356,31 +356,34 @@ since the driver's own logging is unavailable.
 
 The bring-up is not something the kernel does on its own — the CONNSYS
 subsystem has no firmware of its own and the whole sequence in this document
-has to run on every boot. In the Thunder OS image (since 2026-10-10):
+has to run on every boot. In the Thunder OS image (the systemd and
+NetworkManager integration is pending validation on the phone):
 
-- `devices/xiaomi-thunder/overlay/etc/init.d/wifi-thunder` runs
-  `/usr/local/bin/sobe-wifi.sh` (log in `/run/sobe-wifi.log`) and declares
-  `provide wifi-hw`. It starts **after** `sshd` and the USB network, so the
-  ~30 s of bring-up never delay access over the cable.
-- The core services take over from there: `wpa-supplicant` waits for `wlan0`,
-  then `dhcpcd-wifi` gets an address on `wlan0` only (the USB link is left
-  alone). NetworkManager is not used: without udev it does not manage the
-  interface.
-- Measured: SSH back about 26 s after power-on, Wi-Fi associated with an IP at
-  about 30 s, on 5 GHz.
-- **The MAC is random on every boot** (the NVRAM push is off, see above). The
-  `wpa-supplicant` service replaces it with a stable, locally administered
-  address derived from `/etc/machine-id`, so the router hands out the same IP
-  across reboots. `wpa_mac="keep"` in `/etc/conf.d/wpa-supplicant` disables it.
+- `wifi-thunder.service` (oneshot, in the device overlay) runs
+  `/usr/local/bin/sobe-wifi.sh` (log in `/run/sobe-wifi.log`). It starts
+  **after** `sshd` and the USB network, so the ~30 s of bring-up never delay
+  access over the cable.
+- NetworkManager takes over from there and manages `wlan0` only
+  (`51-thunder-wifi.conf`, generated from `WIFI_INTERFACE`, plus the udev rule
+  that sets `NM_UNMANAGED` on `rndis*`, `usb*` and `ccmni*`). Nothing orders
+  after `wifi-thunder`: NetworkManager follows the interface hotplug.
+- Measured under OpenRC (wpa_supplicant + dhcpcd, before the move to systemd):
+  SSH back about 26 s after power-on, Wi-Fi associated with an IP at about
+  30 s, on 5 GHz.
+- **The MAC is random on every boot** (the NVRAM push is off, see above).
+  NetworkManager replaces it with a stable, locally administered address
+  (`wifi.cloned-mac-address=stable-ssid`): one per network, and it survives
+  re-creating the profile, so the router hands out the same IP across reboots.
+- Scan MAC randomization is off (`wifi.scan-rand-mac-address=no` in
+  `60-xiaomi-thunder.conf`).
 
 Success of `wifi-thunder` is judged by **`/sys/class/net/wlan0` existing**,
 not by the script's exit code: `sobe-wifi.sh` has expected failures along the
 way (the second `SET_PATCH_NUM` ioctl legitimately returns EPERM, for instance).
 
 gen4m creates `wlan0`, `wlan1`, `ap0` and `p2p0`; only `wlan0` is a real
-station, which is why `WIFI_INTERFACE=wlan0`. If NetworkManager is used one
-day, it must leave the other three alone
-([`docs/networkmanager-unmanaged.conf`](networkmanager-unmanaged.conf)):
+station, which is why `WIFI_INTERFACE=wlan0`. NetworkManager must leave the
+other three alone (`unmanaged-devices=except:interface-name:wlan0`):
 otherwise `nmcli dev wifi connect` can bind the profile to `ap0` and fail with
 `The Wi-Fi network could not be found`.
 
@@ -435,7 +438,7 @@ It now works. See [bluetooth-bringup.md](bluetooth-bringup.md).
   function names, not prefixes.
 - `echo 9 > /sys/bus/platform/drivers/mtk_btif/flag` (BTIF open+write test)
   **reboots the device**. `echo "8 5"` (log level only) is safe.
-- `rmmod wmt_drv` wedges the module in `Unloading` and blocks OpenRC shutdown;
+- `rmmod wmt_drv` wedges the module in `Unloading` and blocks shutdown;
   `sync; echo b > /proc/sysrq-trigger` is then the only way out.
 - Iterating on a module-only change does **not** need a flash: the `.ko` can be
   taken from `build/xiaomi-thunder/kernel/lib/modules/4.19.191-perf` and copied onto the

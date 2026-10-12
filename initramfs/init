@@ -9,8 +9,14 @@
 # root=/dev/ram):
 #   thunder.root=<PARTNAME>  particao da raiz (padrao: userdata; o build-boot.sh poe o
 #                            ROOT_PARTITION do aparelho)
-#   thunder.init=<caminho>   init da raiz (padrao: /usr/bin/init)
+#   thunder.init=<caminho>   init da raiz (padrao: /usr/bin/init, que o systemd-sysvcompat
+#                            aponta para o systemd)
 #   thunder.debug=1          para no shell de resgate antes de montar a raiz
+#
+# Init de um boot so: se a raiz tiver /var/lib/thunder/init-once (uma linha com o caminho
+# de um init, ex.: /usr/lib/systemd/systemd), ele vale para ESTE boot, por cima do
+# thunder.init, e o arquivo e apagado antes do switch_root. Qualquer reboot seguinte
+# (inclusive o reset forcado pelo botao) volta ao init de sempre.
 
 /bin/busybox mkdir -p /bin /proc /sys /dev /run /tmp /newroot
 /bin/busybox --install -s /bin
@@ -18,9 +24,14 @@ export PATH=/bin
 
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+# cgroup2 ja montado: o systemd 262 monta com memory_recursiveprot, que o 4.19 recusa, e
+# essa montagem e fatal; montado aqui, ele pula. Vai junto no mount --move do /sys.
+mount -t cgroup2 -o nsdelegate,nosuid,nodev,noexec cgroup2 /sys/fs/cgroup ||
+	echo "thunder-initramfs: cgroup2 nao montou; o systemd vai parar no boot" > /dev/kmsg
 mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/pts
-mount -t devpts devpts /dev/pts
+# As mesmas opcoes que o systemd usaria (ele nao remonta o que ja esta montado).
+mount -t devpts -o nosuid,noexec,gid=5,mode=0620 devpts /dev/pts
 mount -t tmpfs -o mode=0755,nosuid,nodev run /run
 
 log() {
@@ -119,6 +130,18 @@ mount_root() {
 	done
 	log "raiz em /dev/$dev ($ROOT)"
 	mount -t ext4 -o rw,noatime "/dev/$dev" /newroot || { log "mount de /dev/$dev falhou"; return 1; }
+	once=/newroot/var/lib/thunder/init-once
+	if [ -s "$once" ]; then
+		next=$(head -n 1 "$once")
+		rm -f "$once"
+		sync
+		if [ -x "/newroot$next" ]; then
+			INIT=$next
+			log "init deste boot: $INIT (init-once; o proximo volta ao padrao)"
+		else
+			log "init-once ignorado: $next nao existe na raiz"
+		fi
+	fi
 	if [ ! -x "/newroot$INIT" ]; then
 		log "$INIT nao existe na raiz"
 		umount /newroot

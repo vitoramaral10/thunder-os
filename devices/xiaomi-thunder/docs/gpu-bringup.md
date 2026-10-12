@@ -11,12 +11,11 @@ a compositor (phoc, in the tests below) composes with GLES through Mesa's
 `kmsro` path: the display stays on `mediatek-drm` (`card0`), rendering goes to
 panfrost (`renderD128`).
 
-**Status under Arch Linux ARM.** Every result in this document was measured on
-this kernel with the previous userland and its Mesa build. The Arch image ships
-a different Mesa build, and GPU rendering under Arch is untested. There is no
-GUI in the Arch image yet. Also pending: panfrost is a module and nothing loads
-it automatically (module autoloading does not work on this kernel), so the Arch
-image must load it explicitly through `modules-load` or an OpenRC service.
+**Status under Arch Linux ARM.** The measurements below were taken on this
+kernel with the previous userland and its Mesa build. On the Arch image (systemd
+and Arch's udev), panfrost is a module that udev loads from the device tree's
+modalias, with no `modules-load.d` entry, and the console profile's phoc renders
+through Arch's Mesa `panfrost` driver with GLES (2026-10-11).
 
 ## Why panfrost and not the alternatives
 

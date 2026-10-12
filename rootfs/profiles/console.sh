@@ -1,19 +1,19 @@
 # Perfil "console": terminal e teclado na tela, sem ambiente de desktop.
-# phoc + squeekboard + foot sob seatd, numa sessao dbus-run-session (servico thunder-console).
-# cage nao serve: nao tem layer-shell nem input-method-v2. O udev e o systemd-udevd do Arch
-# como servico do OpenRC; o kernel ganha tres backports (statx mnt_id, waitid P_PIDFD,
-# close_range) para ele rodar no 4.19. Plano: build/research/gui/PLAN.md.
+# phoc + squeekboard + foot numa sessao do logind no tty1 (thunder-console@<usuario>,
+# em console/overlay; o systemd --user da o D-Bus de sessao). cage nao serve: nao tem
+# layer-shell nem input-method-v2. O logind entrega DRM e entrada pelo libseat; o seatd
+# nao roda. Plano: build/research/gui/PLAN.md.
 # experimental: nada disto foi validado no aparelho (passos 4-13 do plano).
 PROFILE_ORDER=20
 PROFILE_TITLE="Console na tela"
 PROFILE_DESCRIPTION="Terminal em tela cheia com teclado virtual (phoc, squeekboard, foot), para usar o aparelho sem o cabo."
 PROFILE_STATUS=experimental
 PROFILE_BLOCKERS=""
-PROFILE_PACKAGES=(phoc squeekboard foot seatd mesa libbsd)
-# udev e udev-trigger vao no sysinit (forma servico:runlevel); o resto, no default.
-PROFILE_SERVICES=(udev:sysinit udev-trigger:sysinit seatd thunder-console)
-# O usuario precisa de seat (seatd.sock), video/render (DRM) e input (libinput).
-PROFILE_GROUPS=(seat video input render)
+PROFILE_PACKAGES=(phoc squeekboard foot mesa libbsd)
+# Units do systemd a habilitar (systemctl enable); {user} vira o usuario da imagem.
+PROFILE_SERVICES=('thunder-console@{user}.service')
+# Sem grupos extras: o logind da card0 e a entrada a sessao ativa (TakeDevice, uaccess).
+PROFILE_GROUPS=()
 # bubblewrap sem assume_kernel: o glycin (icones do GTK) precisa dele no 4.19.
 PROFILE_LOCAL_PACKAGES=(bubblewrap-thunder)
 PROFILE_BUILD_DEPENDS=(bash-completion docbook-xsl git libxslt meson)

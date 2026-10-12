@@ -1,0 +1,36 @@
+#!/bin/sh
+# Sessao do perfil console: roda como filho do phoc (phoc -E), com WAYLAND_DISPLAY
+# apontando para o phoc, dentro da sessao do logind aberta pelo thunder-console@.service
+# (USER, HOME, SHELL, LANG, XDG_RUNTIME_DIR e o D-Bus de sessao ja vem do systemd e do
+# pam_systemd). Sobe o squeekboard em segundo plano e deixa o foot na tela.
+#
+# Os dois lacos terminam quando o phoc morre ($PPID): o phoc so avisa a sessao no proprio
+# SIGTERM, num crash ela ficaria orfa e o foot reabriria no phoc novo (mesmo wayland-0).
+#
+# Se o usuario sai do foot (exit, Ctrl-D), o foot reabre. Motivo: o aparelho nao tem
+# teclado fisico, a tela do foot e a unica forma de ter um shell; se este script
+# terminasse, o phoc sairia (-E) e o systemd teria de recriar a sessao (Restart=), uns
+# segundos de tela preta. O pkill -u USER foot do teste e o crash do foot caem no mesmo laco.
+
+phoc=$PPID
+export GDK_BACKEND=wayland
+cd "$HOME" 2>/dev/null || cd /
+
+# Teste do passo 11: SQUEEKBOARD_DEBUG=force-show (hifen, nao underscore) mostra o teclado
+# sempre. Sem isso ele so aparece quando o foot habilita o text-input (override do gschema).
+(
+	while kill -0 "$phoc" 2>/dev/null; do
+		squeekboard
+		sleep 2
+	done
+) &
+osk=$!
+trap 'kill "$osk" 2>/dev/null; pkill -P "$osk" 2>/dev/null' EXIT
+trap 'exit 0' TERM INT HUP
+
+while kill -0 "$phoc" 2>/dev/null; do
+	start=$(date +%s)
+	foot
+	# foot caindo ao subir (fonte ausente, etc.): espera, para nao girar em laco quente
+	[ $(($(date +%s) - start)) -ge 3 ] || sleep 3
+done

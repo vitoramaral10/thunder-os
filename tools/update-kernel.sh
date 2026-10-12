@@ -72,7 +72,7 @@ gravado)
 	echo "boot gravado pelo proprio aparelho"
 	if [ "$reboot" = 1 ]; then
 		echo "reiniciando o aparelho"
-		ssh_bye "openrc-shutdown -r now"
+		ssh_bye "systemctl reboot 2>/dev/null || openrc-shutdown -r now"
 	fi
 	;;
 pendente)
@@ -82,7 +82,7 @@ pendente)
 	[ "$(sha256sum < "$img" | cut -d' ' -f1)" = "$sum" ] ||
 		{ echo "o boot.img copiado do aparelho nao confere; nada gravado" >&2; exit 1; }
 	echo "levando o aparelho ao fastboot para gravar o boot"
-	ssh_bye "thunder-reboot bootloader"
+	ssh_bye "systemctl reboot --reboot-argument=bootloader 2>/dev/null || thunder-reboot bootloader"
 	BOOT_IMG=$img FASTBOOT_WAIT=${FASTBOOT_WAIT:-90} "$repo/tools/flash.sh" --sim --so-boot
 	echo "esperando o aparelho voltar"
 	ok=0

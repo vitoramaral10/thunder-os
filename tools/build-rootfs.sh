@@ -59,7 +59,7 @@ if [ "${PROFILE_STATUS:-}" = planned ] && [ "${THUNDER_ALLOW_PLANNED:-0}" != 1 ]
 	echo "(THUNDER_ALLOW_PLANNED=1 monta assim mesmo, para quem esta portando)" >&2
 	exit 1
 fi
-LOCAL_PACKAGES=(openrc "${PROFILE_LOCAL_PACKAGES[@]}")
+LOCAL_PACKAGES=(${PROFILE_LOCAL_PACKAGES[@]+"${PROFILE_LOCAL_PACKAGES[@]}"})
 echo "perfil: $THUNDER_PROFILE ($PROFILE_TITLE)"
 
 echo "== qemu-aarch64 estatico"
@@ -133,7 +133,7 @@ else
 	if [ ! -d "$BUILDROOT/usr" ]; then
 		tree_copy "$BASE" "$BUILDROOT"
 	fi
-	ROOTFS=$BUILDROOT tools_achroot /bin/bash -c "$pac -Syu base-devel meson psmisc ${PROFILE_BUILD_DEPENDS[*]} && (id builder >/dev/null 2>&1 || useradd -m builder)"
+	ROOTFS=$BUILDROOT tools_achroot /bin/bash -c "$pac -Syu base-devel ${PROFILE_BUILD_DEPENDS[*]} && (id builder >/dev/null 2>&1 || useradd -m builder)"
 	# Valores entram nos shells do namespace pelo ambiente, nunca colados no codigo: um
 	# caminho ou uma senha com apostrofo quebraria a sintaxe.
 	export repo BUILDROOT

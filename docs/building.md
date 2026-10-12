@@ -145,13 +145,13 @@ tools/build-rootfs.sh
 - Extracts it in the user namespace, runs `pacman -Syu`, and removes `linux-aarch64`,
   `mkinitcpio` and `linux-firmware` (the device brings its own kernel and firmware,
   and Thunder OS its own initramfs).
-- Builds OpenRC 0.64.1 from `rootfs/packages/openrc/PKGBUILD`, and `thunder-reboot`
-  from `rootfs/src/thunder-reboot.c`, in a separate build chroot so the toolchain
-  stays out of the final rootfs.
+- Builds `thunder-reboot` from `rootfs/src/thunder-reboot.c`, and the profile's
+  local packages, in a separate build chroot so the toolchain stays out of the
+  final rootfs. There is no init to build: Arch's systemd is the PID 1.
 - Stages `rootfs/overlay`, the device's `overlay/`, the kernel modules, the
   firmware and your SSH key, then runs `rootfs/configure.sh` and
   `rootfs/finalize.sh` inside the chroot. `configure.sh` installs the device's
-  `DEVICE_PACKAGES`, enables its `DEVICE_SERVICES` and writes its identity to
+  `DEVICE_PACKAGES`, enables its `DEVICE_SERVICES` (systemd units) and writes its identity to
   `/etc/thunder/device`.
 
 Environment variables (or `local.conf`):
@@ -159,11 +159,11 @@ Environment variables (or `local.conf`):
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `THUNDER_USER` | current user (`id -un`) | Login account created on the device |
-| `THUNDER_PASSWORD` | `147147` | Password of that user, also used by the telnet login fallback (`telnet-usb` service). Provisional: change it on the device. The initramfs rescue shell asks for no password |
+| `THUNDER_PASSWORD` | `147147` | Password of that user, also used by the telnet login fallback (`thunder-telnet-usb.service`). Provisional: change it on the device. The initramfs rescue shell asks for no password |
 | `THUNDER_ROOT_PASSWORD` | `THUNDER_PASSWORD` | Password of root |
 | `THUNDER_PROFILE` | `none` | Interface profile from `rootfs/profiles/`. Profiles marked `planned` are refused (set `THUNDER_ALLOW_PLANNED=1` to build one anyway while porting) |
 | `THUNDER_EXTRA_PACKAGES` | empty | Extra Arch packages, separated by spaces |
-| `THUNDER_WIFI_SSID`, `THUNDER_WIFI_PASSWORD` | empty | Wi-Fi network saved in the image, for devices with `WIFI_INTERFACE`. Only the derived PSK is written; empty password means an open network |
+| `THUNDER_WIFI_SSID`, `THUNDER_WIFI_PASSWORD` | empty | Wi-Fi network saved in the image, for devices with `WIFI_INTERFACE`. Stored as a NetworkManager profile that holds only the derived PSK (64 hex characters, never the password); empty password means an open network |
 | `THUNDER_LOCALE` | `en_US.UTF-8` | `LANG` of the image; `en_US.UTF-8` is always generated too |
 | `THUNDER_TIMEZONE` | `UTC` | Zone under `/usr/share/zoneinfo`, e.g. `America/Sao_Paulo` |
 | `THUNDER_HOSTNAME` | the device codename | Hostname |
@@ -214,8 +214,8 @@ Creates `build/<device>/out/userdata.img`, an ext4 image of the rootfs (`SIZE`,
 default `4G`), labeled `thunder-root`. `orphan_file` and `metadata_csum_seed` are
 disabled, since kernels before 5.15 refuse to mount an ext4 that has them. The
 image is checked with `e2fsck -fn`. On first boot
-`/etc/local.d/10-resize-root.start` grows the filesystem to the end of the
-partition.
+the `x-systemd.growfs` option in `/etc/fstab` (`systemd-growfs-root.service`)
+grows the filesystem to the end of the partition.
 
 ## What is reused between runs
 

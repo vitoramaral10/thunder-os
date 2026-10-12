@@ -26,7 +26,7 @@ CONFIG_SCHED_TUNE=y
 # CONFIG_RD_LZO is not set
 # CONFIG_RD_LZ4 is not set
 CONFIG_SYSCTL_SYSCALL=y
-# CONFIG_FHANDLE is not set
+CONFIG_FHANDLE=y
 CONFIG_KALLSYMS_ALL=y
 # CONFIG_KALLSYMS_BASE_RELATIVE is not set
 CONFIG_MTK_SCHED_EXTENSION=y
@@ -84,7 +84,7 @@ CONFIG_CFG80211=y
 CONFIG_NL80211_TESTMODE=y
 CONFIG_CFG80211_DEVELOPER_WARNINGS=y
 # CONFIG_CFG80211_DEFAULT_PS is not set
-CONFIG_UEVENT_HELPER=y
+# CONFIG_UEVENT_HELPER is not set
 CONFIG_EXTRA_FIRMWARE="valhall-1691526.wa"
 CONFIG_EXTRA_FIRMWARE_DIR="firmware"
 # CONFIG_FW_CACHE is not set
@@ -592,3 +592,20 @@ CONFIG_BT_HIDP=y
 CONFIG_BT_HCIVHCI=y
 CONFIG_SOFTLOCKUP_DETECTOR=y
 CONFIG_DETECT_HUNG_TASK=y
+
+# thunder: systemd 262 como PID 1 (build/research/pid1/kernel-config-plan.md, revisao rA).
+# FHANDLE: name_to_handle_at (id de cgroup, identidade de inode). CGROUP_PIDS: TasksMax=.
+# AUTOFS_FS: units .automount. CHECKPOINT_RESTORE: kcmp (systemd same_fd, Mesa).
+# FQ_CODEL: net.core.default_qdisc do systemd. UEVENT_HELPER fica desligado acima: o udev
+# usa netlink, e um helper faria fork por uevent.
+CONFIG_CGROUP_PIDS=y
+CONFIG_AUTOFS_FS=y
+CONFIG_CHECKPOINT_RESTORE=y
+CONFIG_NET_SCH_FQ_CODEL=y
+
+# thunder: iwd (AF_ALG e DH do keyring; revisao rC). WPA2/WPA3-Personal; enterprise com TLS
+# precisa de KEYCTL_PKEY_* (4.20) e fica no wpa_supplicant.
+CONFIG_CRYPTO_USER_API_HASH=y
+CONFIG_CRYPTO_USER_API_SKCIPHER=y
+CONFIG_CRYPTO_USER_API_AEAD=y
+CONFIG_KEY_DH_OPERATIONS=y

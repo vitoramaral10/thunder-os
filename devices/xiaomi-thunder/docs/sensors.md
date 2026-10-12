@@ -10,15 +10,14 @@ revision" column is the kernel revision (rNN) in which the change landed.
 | `devices/xiaomi-thunder/patches/add-mtk-hf-sensors-iio.patch` | r36, r38 | the light sensor (r36), the accelerometer and the proximity sensor (r38) as IIO devices, so automatic brightness, screen rotation and blanking near the face work |
 | `devices/xiaomi-thunder/patches/fix-ktd3137-brightness-fade.patch` | r38 | a ~512 ms hardware fade instead of a visible jump |
 
-These results were proven on this kernel with the previous userland. The Arch
-image boots (console and SSH only), and there is no GUI at the moment, so
-the desktop parts below (slider, automatic brightness, rotation, proximity
-blanking) describe what the kernel interfaces were verified to support and what
-a GUI session would consume.
-
-`iio-sensor-proxy` in Arch is a systemd-oriented package (D-Bus and systemd
-service activation, udev rules). Running it under OpenRC, which is what this
-image uses as PID 1, is untested.
+The kernel interfaces were proven on this kernel with the previous userland. On
+the Arch image with systemd as PID 1, Arch's `iio-sensor-proxy` and `upower`
+work unchanged (2026-10-11): `monitor-sensor` reports the accelerometer (tilt),
+the ambient light sensor (lux values that follow the room) and the proximity
+sensor, and `upower -i /org/freedesktop/UPower/devices/battery_battery` reports
+the battery (state, percentage, voltage). The desktop parts below (slider,
+automatic brightness, rotation, proximity blanking) still wait for a desktop
+shell to consume them.
 
 ## The slider
 

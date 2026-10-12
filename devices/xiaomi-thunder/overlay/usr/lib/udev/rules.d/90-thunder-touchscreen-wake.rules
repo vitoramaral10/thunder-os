@@ -1,0 +1,8 @@
+# Acorda o controlador de toque Novatek NT36672C. O probe do NVT-ts termina com
+# bTouchIsAwake = 0 e WAKEUP_GESTURE 1 (nt36xxx.h:84): toda IRQ vai para o decodificador
+# de gesto. So nvt_ts_resume(), chamado pelo notificador de framebuffer em
+# FB_BLANK_UNBLANK, liga o toque (carrega /usr/lib/firmware/nt36672c_tm_01_ts_fw.bin,
+# habilita a IRQ), e sem CONFIG_FRAMEBUFFER_CONSOLE ninguem emite esse evento. Escrever
+# 0 em fb0/blank o emite. Roda no coldplug (systemd-udev-trigger), com a raiz e o
+# firmware ja montados, antes de qualquer compositor. Idempotente.
+ACTION=="add", SUBSYSTEM=="graphics", KERNEL=="fb0", ATTR{blank}="0"

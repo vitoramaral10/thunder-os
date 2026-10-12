@@ -1,0 +1,30 @@
+# Rede pelo cabo USB: gadget RNDIS em 172.16.42.1 e DHCP que entrega 172.16.42.2 ao PC.
+# O initramfs ja deixou o gadget e o endereco de pe; aqui o usb-gadget so confere
+# (idempotente: so escreve o UDC se estiver vazio, entao o enlace com o PC nao cai) e o
+# udhcpd do busybox serve o PC com o mesmo /etc/udhcpd-usb.conf do resgate do initramfs.
+#
+# E o acesso de ultimo recurso, entao so depende do kernel: sem udev, D-Bus, rede ou
+# sysinit.target (DefaultDependencies=no; nunca atrasa o sysinit). Fica de pe no
+# emergency/rescue (WantedBy= desses alvos e IgnoreOnIsolate=yes) e, de proposito, sem
+# Conflicts=shutdown.target: num desligamento travado o cabo continua acessivel; so o
+# kill final do systemd-shutdown o derruba (nada aqui segura arquivo na raiz).
+[Unit]
+Description=USB network (RNDIS gadget at 172.16.42.1, DHCP for the host)
+Documentation=file:/usr/lib/thunder/usb-gadget
+DefaultDependencies=no
+After=systemd-journald.socket sys-kernel-config.mount
+IgnoreOnIsolate=yes
+# Insiste para sempre, como o resgate do initramfs.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStartPre=/usr/lib/thunder/usb-gadget up
+ExecStartPre=/usr/lib/thunder/usb-gadget dhcp-conf
+ExecStart=/usr/bin/busybox udhcpd -f /run/udhcpd-usb.conf
+Restart=always
+RestartSec=3
+OOMScoreAdjust=-900
+
+[Install]
+WantedBy=sysinit.target emergency.target rescue.target

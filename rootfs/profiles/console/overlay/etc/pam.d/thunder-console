@@ -1,0 +1,9 @@
+#%PAM-1.0
+# Sessao do thunder-console@.service. O systemd nao autentica (so acct_mgmt, setcred e
+# open_session; um setcred que falha so vira log de debug). O auth negado impede que
+# este nome de servico PAM sirva de login. A sessao e a de um login local: o pam_systemd
+# (via system-login) registra no logind (seat0, tty1).
+auth      required  pam_deny.so
+account   include   system-local-login
+password  required  pam_deny.so
+session   include   system-local-login

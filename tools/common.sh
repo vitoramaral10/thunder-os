@@ -43,6 +43,9 @@ require_device() {
 	KERNEL_IMAGE=Image.gz
 	KERNEL_DTB=
 	KERNEL_STRIP_WERROR=0
+	# Arquivos e pastas (relativos a pasta do aparelho) que entram no kernel, alem do
+	# KERNEL_CONFIG: o carimbo de reaproveitamento so olha estes.
+	KERNEL_INPUTS=(patches)
 	BOOTIMG_ARGS=()
 	CMDLINE=
 	ROOT_PARTITION=userdata
@@ -60,8 +63,9 @@ require_device() {
 	FIRMWARE_ROM_PARTITION=vendor
 	FIRMWARE_ROM_DIRS=(/firmware /etc/firmware /vendor/firmware)
 	DEVICE_PACKAGES=()
-	# Interface Wi-Fi de estacao; vazio = aparelho sem Wi-Fi (sem wpa_supplicant/dhcpcd).
+	# Interface Wi-Fi de estacao; vazio = aparelho sem Wi-Fi (sem NetworkManager nem thunder-wifi).
 	WIFI_INTERFACE=
+	# Units do systemd do aparelho a habilitar, com sufixo (ex.: wifi-thunder.service).
 	DEVICE_SERVICES=()
 	# Perfis de interface que o aparelho aceita (rootfs/profiles/); vazio = todos.
 	DEVICE_PROFILES=()
@@ -106,14 +110,15 @@ take_build_lock() {
 	export THUNDER_LOCK_HELD=1
 }
 
-# Hash das entradas do kernel do aparelho (depois de require_device): os arquivos da
-# pasta do aparelho fora overlay/ e docs/ (config, patches, enxertos), as variaveis
-# KERNEL_* e o hook de preparo. Mexer em servico, pacote ou doc do aparelho nao muda o
-# hash. O install.sh compara com $KERNEL_OUT/.thunder-inputs para pular a build.
+# Hash das entradas do kernel do aparelho (depois de require_device): KERNEL_CONFIG e os
+# caminhos de KERNEL_INPUTS (patches/, enxertos), as variaveis KERNEL_* e o hook de
+# preparo. Mexer em servico, pacote ou doc do aparelho nao muda o hash. O install.sh compara com $KERNEL_OUT/.thunder-inputs para pular a build.
 kernel_inputs() {
 	{
-		(cd "$DEVICE_DIR" && find . \( -path ./overlay -o -path ./docs \) -prune -o \
-			-type f ! -name '*.md' ! -name device.sh -print0 | LC_ALL=C sort -z | xargs -0 sha256sum)
+		# So o que o device.sh declara como entrada do kernel (KERNEL_INPUTS): um arquivo de
+		# servico ou script do aparelho nao pode forcar uma recompilacao de 17 min.
+		(cd "$DEVICE_DIR" && find "$KERNEL_CONFIG" "${KERNEL_INPUTS[@]}" -type f -print0 2>/dev/null |
+			LC_ALL=C sort -z | xargs -0 -r sha256sum)
 		declare -p KERNEL_URL KERNEL_SHA512 KERNEL_VERSION KERNEL_CONFIG KERNEL_IMAGE \
 			KERNEL_DTB KERNEL_STRIP_WERROR 2>/dev/null
 		declare -f device_kernel_prepare 2>/dev/null || true

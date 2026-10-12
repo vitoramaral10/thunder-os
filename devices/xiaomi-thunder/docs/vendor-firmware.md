@@ -80,7 +80,7 @@ hands it to the driver at bring-up. The push is gated behind
 [wifi-bringup.md](wifi-bringup.md#the-factory-mac-solved-mechanism-unusable-in-practice).
 
 The Bluetooth address lives in the same place, at `/APCFG/APRDEB/BT_Addr`: six
-bytes, same OUI as the Wi-Fi MAC. [`devices/xiaomi-thunder/init.d/bluetooth-thunder`](../init.d/bluetooth-thunder)
+bytes, same OUI as the Wi-Fi MAC. [`devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service`](../bluetooth/bluetooth-thunder.service)
 extracts it into `/lib/firmware/bt_addr.bin` on first start, again with the
 partition mounted read-only, and the bridge writes it to the controller.
 

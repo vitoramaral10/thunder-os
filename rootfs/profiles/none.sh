@@ -6,6 +6,7 @@ PROFILE_DESCRIPTION="Sistema base, sem nada na tela. Acesso pelo cabo USB com SS
 # planned: ainda falta base; o build recusa (PROFILE_BLOCKERS diz o que falta).
 PROFILE_STATUS=tested
 PROFILE_PACKAGES=()
+# Units do systemd a habilitar (systemctl enable); vazio = so a base.
 PROFILE_SERVICES=()
 # Pacotes nossos (rootfs/packages/<nome>/PKGBUILD) compilados no buildroot e instalados.
 PROFILE_LOCAL_PACKAGES=()

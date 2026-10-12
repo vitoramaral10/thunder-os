@@ -10,9 +10,9 @@ What was missing was everything *above* the radio, and it was missing in two
 independent places.
 
 **Status under Arch Linux ARM.** Every result here was measured on this kernel
-with the previous userland. The Arch image boots, but the services in
-`devices/xiaomi-thunder/init.d/` are not yet installed or enabled in the
-Arch image (they also need python3).
+with the previous userland. The Arch image boots, but the unit in
+`devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service` is not yet installed or enabled in the
+Arch image (it also needs python3).
 
 ## Two holes, and neither is the chip
 
@@ -157,7 +157,7 @@ bridge waits in `select()` and only calls `read()` when data is already there.
 A self-pipe joins the same `select()` for shutdown, which removed the threads
 entirely — one loop that can always exit and close its descriptors in order.
 
-This is also why the OpenRC service (`devices/xiaomi-thunder/init.d/bluetooth-thunder`) sets `retry="SIGTERM/20"`: a `SIGKILL` would
+This is also why the systemd unit (`devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service`) sets `KillSignal=SIGTERM`, `TimeoutStopSec=20` and `SendSIGKILL=no`: a `SIGKILL` would
 recreate the problem.
 
 ### 3. The address was MediaTek's placeholder
@@ -174,7 +174,7 @@ stored makes the controller report a different address; sending them reversed
 makes `Read_BD_ADDR` return exactly what is in nvram. HCI carries `BD_ADDR`
 least-significant byte first, while nvram stores display order.
 
-The `devices/xiaomi-thunder/init.d/bluetooth-thunder` service extracts six bytes into `/lib/firmware/bt_addr.bin` on
+The `devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service` unit extracts six bytes into `/lib/firmware/bt_addr.bin` on
 first start (mounting `nvdata` **read-only**, always), and the bridge writes it
 with the MediaTek vendor command `0xFC1A`, then reads it back to confirm. It
 survives the `HCI_Reset` the kernel issues during init.
