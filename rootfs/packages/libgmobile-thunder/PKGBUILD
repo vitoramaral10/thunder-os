@@ -1,0 +1,52 @@
+# libgmobile como o do Arch, mais os recortes de tela dos aparelhos do Thunder OS que
+# ainda nao estao no upstream.
+#
+# O gmobile so conhece um recorte (entalhe, cantos arredondados) pelos dados compilados
+# nele, escolhidos pelo compatible do DT; o Phosh e o phoc os usam para nao desenhar o
+# relogio e os icones embaixo do entalhe. Sem o arquivo do aparelho, a barra de cima ignora
+# o entalhe. Os patches daqui sao os pedidos de inclusao no upstream: quando o Arch trouxer
+# uma versao com eles, o pacote sai e volta o libgmobile do Arch.
+#
+# - 0001: xiaomi,thunder (Redmi 10 5G), geometria do overlay da ROM de fabrica
+#   (config_mainBuiltInDisplayCutout e rounded_corner_radius, em px do painel 1080x2408).
+#
+# Fonte: a tag v0.7.4 (assinada por Guido Gunther, chave primaria
+# 0DB3932762F78E592F6522AFBB5A2C77584122D3, a mesma que o Arch aceita), conferida no PC em
+# 2026-10-12 e fixada aqui pelo commit. Nome proprio com provides/conflicts: satisfaz o
+# phosh e o phoc, e um pacman -Syu nao o troca de volta pelo do Arch.
+pkgname=libgmobile-thunder
+_name=gmobile
+pkgver=0.7.4
+_commit=8996c042b573823dfa4ec2cb9f9fd8267f3543c6
+pkgrel=1
+pkgdesc='Functions useful in mobile related, glib based projects (Thunder OS: recortes de tela dos aparelhos)'
+url='https://gitlab.gnome.org/World/Phosh/gmobile'
+arch=(aarch64)
+license=('LGPL-2.1-or-later AND GPL-3.0-or-later')
+depends=(libgcc glib2 glibc json-glib)
+makedepends=(git gobject-introspection meson python-docutils vala)
+provides=("libgmobile=$pkgver")
+conflicts=(libgmobile)
+source=(
+	"$_name::git+$url.git#commit=$_commit"
+	0001-data-Add-cutout-for-xiaomi-thunder.patch
+)
+b2sums=('SKIP'
+        '78af21f4b32593d028cf4d252e5db196bcc98574c9b7f17ea78d0497f179940876989256b9f89d8020ecc80f825ab5c52d8a9ad5e74c1853259a56f9fa456158')
+
+prepare() {
+	git -C $_name apply "$srcdir/0001-data-Add-cutout-for-xiaomi-thunder.patch"
+}
+
+build() {
+	arch-meson $_name build -D man=true
+	meson compile -C build
+}
+
+check() {
+	meson test -C build --print-errorlogs
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+}

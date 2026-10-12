@@ -92,7 +92,11 @@ greeter: without `GDMSESSION=phosh`, Phosh starts locked, and the user's passwor
 unlocks it (PAM `phosh`, from the package). The on-screen keyboard is squeekboard
 (`stevia` conflicts with it). The display scale is phoc's own, computed from the
 panel's physical size (3 on xiaomi-thunder, 360x803 logical); a device whose panel
-reports a wrong size ships `/etc/phosh/phoc.ini` in its overlay. Modem, calls,
+reports a wrong size ships `/etc/phosh/phoc.ini` in its overlay. Notch and rounded
+corners come from gmobile's panel data, picked by the first DT compatible (the clock
+moves off a notch; `sm.puri.phosh shell-layout` must stay `device`); a device whose file
+is not upstream yet adds it as a patch to `rootfs/packages/libgmobile-thunder`, which
+replaces Arch's libgmobile until a release carries it. Modem, calls,
 Bluetooth, audio and vibration come later. An image is built for one profile, so
 going back to the console means installing a console image; on a system where both
 profiles were installed by hand,

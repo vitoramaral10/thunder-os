@@ -26,11 +26,13 @@ PROFILE_GROUPS=(feedbackd)
 # bubblewrap sem assume_kernel: glycin e xdg-desktop-portal precisam dele no 4.19.
 # phoc-thunder: o phoc com o wlroots embutido e o patch do upstream; o do Arch, contra o
 # wlroots do sistema, derruba a superficie "phosh home" (rootfs/packages/phoc-thunder).
-PROFILE_LOCAL_PACKAGES=(bubblewrap-thunder phoc-thunder)
+# libgmobile-thunder: o libgmobile com o recorte de tela dos nossos aparelhos ainda fora do
+# upstream (entalhe e cantos); vem antes do phoc-thunder, que o usa.
+PROFILE_LOCAL_PACKAGES=(bubblewrap-thunder libgmobile-thunder phoc-thunder)
 # makepkg roda sem -s: depends e makedepends dos pacotes locais entram aqui.
 PROFILE_BUILD_DEPENDS=(bash-completion docbook-xsl git libxslt meson
 	cairo dconf glib2-devel gnome-desktop gsettings-desktop-schemas hicolor-icon-theme
-	libgmobile libinput libxcb libxkbcommon mutter pango pixman wayland wayland-protocols
+	libinput libxcb libxkbcommon mutter pango pixman wayland wayland-protocols
 	xorg-xwayland lcms2 libdisplay-info libdrm libglvnd libliftoff seatd vulkan-icd-loader
 	vulkan-headers xcb-util-errors xcb-util-renderutil xcb-util-wm glslang ninja
-	python-docutils systemd)
+	python-docutils systemd gobject-introspection json-glib vala)

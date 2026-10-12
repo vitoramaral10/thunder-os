@@ -1,0 +1,38 @@
+Subject: [PATCH] data: Add cutout for xiaomi,thunder (Redmi 10 5G)
+
+Geometry from the factory ROM overlay (config_mainBuiltInDisplayCutout "M 0,0 H -50 V 76 H 50 V 0 H 0 Z", rounded_corner_radius 106px) on the 1080x2408 panel.
+---
+ data/devices/display-panels/xiaomi,thunder.json | 12 ++++++++++++
+ data/gmobile.gresources.xml                     |  1 +
+ 2 files changed, 13 insertions(+)
+ create mode 100644 data/devices/display-panels/xiaomi,thunder.json
+
+diff --git a/data/devices/display-panels/xiaomi,thunder.json b/data/devices/display-panels/xiaomi,thunder.json
+new file mode 100644
+index 0000000..6be48d2
+--- /dev/null
++++ b/data/devices/display-panels/xiaomi,thunder.json
+@@ -0,0 +1,12 @@
++{
++    "name": "Xiaomi Redmi 10 5G",
++    "x-res": 1080,
++    "y-res": 2408,
++    "border-radius": 106,
++    "cutouts": [
++        {
++            "name": "notch",
++            "path": "M 490,0 L 490,76 L 590,76 L 590,0 Z"
++        }
++    ]
++}
+diff --git a/data/gmobile.gresources.xml b/data/gmobile.gresources.xml
+index 8ff7b93..df4b4b2 100644
+--- a/data/gmobile.gresources.xml
++++ b/data/gmobile.gresources.xml
+@@ -38,5 +38,6 @@
+     <file preprocess="json-stripblanks">devices/display-panels/xiaomi,onclite.json</file>
+     <file preprocess="json-stripblanks">devices/display-panels/xiaomi,lavender.json</file>
+     <file preprocess="json-stripblanks">devices/display-panels/xiaomi,sweet.json</file>
++    <file preprocess="json-stripblanks">devices/display-panels/xiaomi,thunder.json</file>
+   </gresource>
+ </gresources>
