@@ -1,0 +1,46 @@
+--- a/drivers/gpu/drm/panel/panel-ft8722-jdi-fhdp-dsi-vdo-90hz-l19.c
++++ b/drivers/gpu/drm/panel/panel-ft8722-jdi-fhdp-dsi-vdo-90hz-l19.c
+@@ -408,8 +408,11 @@
+ 
+ 	ctx->pwm =
+ 	    devm_gpiod_get(ctx->dev, "pwm", GPIOD_OUT_HIGH);
+-	gpiod_set_value(ctx->pwm, 1);
+-	devm_gpiod_put(ctx->dev, ctx->pwm);
++	/* thunder: no pwm-gpios in the DT; the ERR_PTR made devm_gpiod_put WARN */
++	if (!IS_ERR(ctx->pwm)) {
++		gpiod_set_value(ctx->pwm, 1);
++		devm_gpiod_put(ctx->dev, ctx->pwm);
++	}
+ 	/*L19 code for HQ-159431 by caogaojie at 2021/12/5 end*/
+ 	ret = ctx->error;
+ 	if (ret < 0)
+--- a/drivers/gpu/drm/panel/panel-nt36672c-tianma-fhdp-dsi-vdo-90hz-l19.c
++++ b/drivers/gpu/drm/panel/panel-nt36672c-tianma-fhdp-dsi-vdo-90hz-l19.c
+@@ -459,8 +459,11 @@
+ 	/*L19 code for HQ-157272 by caogaojie at 2021/11/18 start*/
+ 	ctx->pwm =
+ 	    devm_gpiod_get(ctx->dev, "pwm", GPIOD_OUT_HIGH);
+-	gpiod_set_value(ctx->pwm, 0);
+-	devm_gpiod_put(ctx->dev, ctx->pwm);
++	/* thunder: no pwm-gpios in the DT; the ERR_PTR made devm_gpiod_put WARN */
++	if (!IS_ERR(ctx->pwm)) {
++		gpiod_set_value(ctx->pwm, 0);
++		devm_gpiod_put(ctx->dev, ctx->pwm);
++	}
+ 
+ 	/*L19 code for HQ-159420 by chenzimo at 2021/12/20 start*/
+ 	blank = DRM_BLANK_POWERDOWN;
+@@ -550,8 +553,11 @@
+ 	/*L19 code for HQ-157272 by caogaojie at 2021/11/18 start*/
+ 	ctx->pwm =
+ 	    devm_gpiod_get(ctx->dev, "pwm", GPIOD_OUT_HIGH);
+-	gpiod_set_value(ctx->pwm, 1);
+-	devm_gpiod_put(ctx->dev, ctx->pwm);
++	/* thunder: no pwm-gpios in the DT; the ERR_PTR made devm_gpiod_put WARN */
++	if (!IS_ERR(ctx->pwm)) {
++		gpiod_set_value(ctx->pwm, 1);
++		devm_gpiod_put(ctx->dev, ctx->pwm);
++	}
+ 	/*L19 code for HQ-157272 by caogaojie at 2021/11/18 end*/
+ 	ret = ctx->error;
+ 	if (ret < 0)

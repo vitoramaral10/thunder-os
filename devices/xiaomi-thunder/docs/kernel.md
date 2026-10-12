@@ -111,6 +111,12 @@ rate. Each `.clock` is now computed from the mode's own timings (60 Hz: 308356 k
 The DSI link takes its rate from the panel's `pll_clk`/`data_rate` params, so only the
 advertised rate changes. Timing vblanks with `DRM_IOCTL_WAIT_VBLANK` gives 60.5 Hz.
 
+**fix-panel-pwm-gpio-optional.** The Tianma and JDI panel drivers take a `pwm` GPIO on
+prepare and unprepare, but the DT has no `pwm-gpios`. The error pointer from
+`devm_gpiod_get()` went to `gpiod_set_value()` ("invalid GPIO") and `devm_gpiod_put()`,
+which WARNs with a backtrace: one per screen-off. Both drivers skip the GPIO when the
+lookup fails.
+
 **backport-procfs-fdinfo-ptrace-read.** (r30) Backport of upstream 5.14 `7bc3fa0172a4`
 and `1927e498aee1`. A process that drops privileges without `exec()` becomes
 non-dumpable, its `/proc` files turn root-owned, and it cannot read its own

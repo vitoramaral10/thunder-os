@@ -17,6 +17,7 @@ fix-mtk-gauge-charge-full-uisoc.patch
 fix-mtk-backlight-follow-panel-blank.patch
 fix-nvt-touch-follow-panel-blank.patch
 fix-panel-mode-clock-refresh.patch
+fix-panel-pwm-gpio-optional.patch
 backport-procfs-fdinfo-ptrace-read.patch
 backport-drm-prime-ioctls-no-auth.patch
 add-drm-panfrost-mt6833.patch
