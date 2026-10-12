@@ -42,6 +42,11 @@ compile-time constants, so the speaker codec builds.
 **build-mt6833-dtb.** The arm64 MediaTek DTS Makefile does not list `mt6833.dtb`.
 The patch adds it so `dtbs_install` produces `boot/dtbs/mediatek/mt6833.dtb`.
 
+**add-thunder-dt-compatible-chassis.** The root node said only `mediatek,MT6833`. It now
+lists `xiaomi,thunder` first, so gmobile (Phosh) can match the phone's display data, and
+sets `chassis-type = "handset"` for hostnamed. `mediatek,MT6833` stays: `clkchk-mt6833`
+and `clkdbg-mt6833` check it. The bootloader rewrites `model` but leaves both alone.
+
 **fix-u-serial-null-close.** `gs_open()` in the USB serial gadget sets
 `tty->driver_data` near its end, after several early error returns. The tty layer still
 calls `gs_close()` on the release path of a failed open, so `port` can be NULL there and

@@ -6,6 +6,7 @@ use-system-cpio.patch
 fix-gcc-modern-compat.patch
 fix-sia81xx-vla.patch
 build-mt6833-dtb.patch
+add-thunder-dt-compatible-chassis.patch
 fix-u-serial-null-close.patch
 fix-mtk-gem-ion-null.patch
 fix-mtk-gem-prime-import-fallback.patch
