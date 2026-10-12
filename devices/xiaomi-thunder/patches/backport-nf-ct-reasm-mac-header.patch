@@ -1,0 +1,22 @@
+Backport de 3b08fed5b7e0 (Linux 7.2), texto identico ao 5.10.261 6e8cd710ca35,
+CVE-2026-72250. Sem fix no 4.19.y.
+
+nf_ct_frag6_reasm() somava sizeof(struct frag_hdr) ao mac_header mesmo quando
+ele nao estava setado (defrag em LOCAL_OUT), deixando um offset invalido no
+skb. O fix so ajusta se skb_mac_header_was_set().
+
+Aplica na arvore pos-fatia (backport-netfilter-4.19.325.patch), possivelmente
+com offset.
+
+--- a/net/ipv6/netfilter/nf_conntrack_reasm.c
++++ b/net/ipv6/netfilter/nf_conntrack_reasm.c
+@@ -354,7 +354,8 @@
+ 	skb_network_header(skb)[fq->nhoffset] = skb_transport_header(skb)[0];
+ 	memmove(skb->head + sizeof(struct frag_hdr), skb->head,
+ 		(skb->data - skb->head) - sizeof(struct frag_hdr));
+-	skb->mac_header += sizeof(struct frag_hdr);
++	if (skb_mac_header_was_set(skb))
++		skb->mac_header += sizeof(struct frag_hdr);
+ 	skb->network_header += sizeof(struct frag_hdr);
+ 
+ 	skb_reset_transport_header(skb);

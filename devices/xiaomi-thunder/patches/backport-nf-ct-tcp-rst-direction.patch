@@ -1,0 +1,23 @@
+Backport de bed6e04be8e6 (Linux 7.1), texto identico ao 5.10.259 2006979a15af,
+CVE-2026-63913. Sem fix no 4.19.y.
+
+tcp_packet() aceitava como "RST do handshake" qualquer RST depois de um SYN com
+resposta vista, sem checar a direcao do ultimo pacote: um RST remoto com seq
+invalida forcava o conntrack para CLOSE e derrubava NAT e sessoes. O fix exige
+last_dir != dir.
+
+Aplica na arvore pos-fatia (backport-netfilter-4.19.325.patch), possivelmente
+com offset.
+
+--- a/net/netfilter/nf_conntrack_proto_tcp.c
++++ b/net/netfilter/nf_conntrack_proto_tcp.c
+@@ -1019,7 +1019,8 @@
+ 			new_state = old_state;
+ 		}
+ 		if (((test_bit(IPS_SEEN_REPLY_BIT, &ct->status)
+-			 && ct->proto.tcp.last_index == TCP_SYN_SET)
++			 && ct->proto.tcp.last_index == TCP_SYN_SET
++			 && ct->proto.tcp.last_dir != dir)
+ 			|| (!test_bit(IPS_ASSURED_BIT, &ct->status)
+ 			    && ct->proto.tcp.last_index == TCP_ACK_SET))
+ 		    && ntohl(th->ack_seq) == ct->proto.tcp.last_end) {

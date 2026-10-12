@@ -33,3 +33,13 @@ backport-close-range.patch
 backport-utimensat-empty-path.patch
 backport-faccessat2.patch
 fix-vendor-kthreads-idle-sleep.patch
+# thunder rB: netfilter em 4.19.325, gate de userns, fixes sem 4.19.y (build/research/nft/DESIGN.md)
+backport-netfilter-4.19.325.patch
+add-netfilter-userns-restrict.patch
+backport-nf-reject-ipv6-ll-max-header.patch
+backport-nf-ct-tcp-rst-direction.patch
+backport-nf-ct-reasm-mac-header.patch
+fix-mtk-default-no-dccp-act-ipt.patch
+backport-cgroup-v1-release-agent-capable.patch
+backport-reboot-hw-protection-shutdown.patch
+fix-mtk-charger-battery-missing-poweroff.patch

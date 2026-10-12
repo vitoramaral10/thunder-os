@@ -1,0 +1,368 @@
+Gate de userns do netfilter: sysctl net.netfilter.nf_userns_restrict, padrao 1.
+Proprio do Thunder, sem equivalente upstream (revisao rB,
+build/research/nft/DESIGN.md secao 1.1 e 3.2).
+
+O que: upstream aceita CAP_NET_ADMIN sobre o netns dono do socket
+(netlink_net_capable, ns_capable(net->user_ns)). Com USER_NS e NET_NS ligados,
+`unshare -Urn` da isso a qualquer usuario, e com nf_tables, ctnetlink, nfqueue,
+x_tables e ebtables compilados isso expoe toda a superficie de configuracao do
+netfilter a um processo sem privilegio. Com nf_userns_restrict=1 a checagem
+upstream continua e soma-se CAP_NET_ADMIN no userns inicial (netlink_capable()
+no caminho netlink, capable() nos sockopts e no bind). Quem roda no userns
+inicial (root, NetworkManager, systemd-networkd, nftables.service) nao ve
+diferenca; admin de userns filho recebe EPERM.
+
+Cobre: nfnetlink_rcv() (nf_tables, ctnetlink, nfqueue, nflog, ipset),
+nfnetlink_bind() (assinatura de eventos e autoload de modulo) e os sockopts de
+ip_tables, ip6_tables, arp_tables, ebtables, ipset e ipvs. NAO cobre
+net/sched/act_ipt.c: por isso NET_ACT_IPT sai do kernel
+(fix-mtk-default-no-dccp-act-ipt.patch).
+
+O sysctl: registrado so no init_net (net/netfilter/nf_userns_restrict), valor
+inicial 1 no codigo (vale desde o boot, mesmo se o registro falhar), faixa 0..1.
+net_ctl_permissions() deixa qualquer CAP_NET_ADMIN escrever em sysctl de rede
+como se fosse root, entao o proc_handler proprio exige CAP_SYS_ADMIN no userns
+inicial para escrever: um processo nao-root so com CAP_NET_ADMIN leva EPERM.
+
+Custo: quebra podman rootless com rede em bridge, Docker rootless e
+nft/iptables dentro de conteiner sem privilegio. Opt-out por boot:
+net.netfilter.nf_userns_restrict = 0 em /etc/sysctl.d (so por decisao do dono).
+
+Aplica sobre a base e sobre backport-netfilter-4.19.325.patch (series: depois dele).
+
+diff -ruN a/include/linux/netfilter.h b/include/linux/netfilter.h
+--- a/include/linux/netfilter.h
++++ b/include/linux/netfilter.h
+@@ -180,6 +180,20 @@
+ extern struct static_key nf_hooks_needed[NFPROTO_NUMPROTO][NF_MAX_HOOKS];
+ #endif
+ 
++/* thunder: sysctl net.netfilter.nf_userns_restrict (net/netfilter/core.c).
++ * 1 (default): configuring netfilter needs CAP_NET_ADMIN in the initial user
++ * namespace; CAP_NET_ADMIN over a netns owned by another user namespace is
++ * not enough. 0: upstream behaviour.
++ */
++extern int sysctl_nf_userns_restrict;
++
++static inline bool nf_userns_restricted(void)
++{
++	return READ_ONCE(sysctl_nf_userns_restrict) != 0;
++}
++
++bool nf_net_admin_capable(const struct net *net);
++
+ int nf_hook_slow(struct sk_buff *skb, struct nf_hook_state *state,
+ 		 const struct nf_hook_entries *e, unsigned int i);
+ 
+diff -ruN a/net/bridge/netfilter/ebtables.c b/net/bridge/netfilter/ebtables.c
+--- a/net/bridge/netfilter/ebtables.c
++++ b/net/bridge/netfilter/ebtables.c
+@@ -1470,7 +1470,7 @@
+ 	int ret;
+ 	struct net *net = sock_net(sk);
+ 
+-	if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(net))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1493,7 +1493,7 @@
+ 	struct ebt_table *t;
+ 	struct net *net = sock_net(sk);
+ 
+-	if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(net))
+ 		return -EPERM;
+ 
+ 	if (copy_from_user(&tmp, user, sizeof(tmp)))
+@@ -2333,7 +2333,7 @@
+ 	int ret;
+ 	struct net *net = sock_net(sk);
+ 
+-	if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(net))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -2357,7 +2357,7 @@
+ 	struct ebt_table *t;
+ 	struct net *net = sock_net(sk);
+ 
+-	if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(net))
+ 		return -EPERM;
+ 
+ 	/* try real handler in case userland supplied needed padding */
+diff -ruN a/net/ipv4/netfilter/arp_tables.c b/net/ipv4/netfilter/arp_tables.c
+--- a/net/ipv4/netfilter/arp_tables.c
++++ b/net/ipv4/netfilter/arp_tables.c
+@@ -1300,7 +1300,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1434,7 +1434,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1455,7 +1455,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1478,7 +1478,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+diff -ruN a/net/ipv4/netfilter/ip_tables.c b/net/ipv4/netfilter/ip_tables.c
+--- a/net/ipv4/netfilter/ip_tables.c
++++ b/net/ipv4/netfilter/ip_tables.c
+@@ -1545,7 +1545,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1647,7 +1647,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1669,7 +1669,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1693,7 +1693,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+diff -ruN a/net/ipv6/netfilter/ip6_tables.c b/net/ipv6/netfilter/ip6_tables.c
+--- a/net/ipv6/netfilter/ip6_tables.c
++++ b/net/ipv6/netfilter/ip6_tables.c
+@@ -1554,7 +1554,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1656,7 +1656,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1678,7 +1678,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+@@ -1702,7 +1702,7 @@
+ {
+ 	int ret;
+ 
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	switch (cmd) {
+diff -ruN a/net/netfilter/core.c b/net/netfilter/core.c
+--- a/net/netfilter/core.c
++++ b/net/netfilter/core.c
+@@ -24,6 +24,8 @@
+ #include <linux/rcupdate.h>
+ #include <net/net_namespace.h>
+ #include <net/sock.h>
++#include <linux/capability.h>
++#include <linux/sysctl.h>
+ 
+ #include "nf_internals.h"
+ 
+@@ -33,6 +35,20 @@
+ DEFINE_PER_CPU(bool, nf_skb_duplicated);
+ EXPORT_SYMBOL_GPL(nf_skb_duplicated);
+ 
++int sysctl_nf_userns_restrict __read_mostly = 1;
++EXPORT_SYMBOL_GPL(sysctl_nf_userns_restrict);
++
++/* Permission for the x_tables/ebtables/ipset/ipvs sockopts: CAP_NET_ADMIN over
++ * @net as upstream and, while restricted, also in the initial user namespace.
++ */
++bool nf_net_admin_capable(const struct net *net)
++{
++	if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
++		return false;
++	return !nf_userns_restricted() || capable(CAP_NET_ADMIN);
++}
++EXPORT_SYMBOL_GPL(nf_net_admin_capable);
++
+ #ifdef CONFIG_JUMP_LABEL
+ struct static_key nf_hooks_needed[NFPROTO_NUMPROTO][NF_MAX_HOOKS];
+ EXPORT_SYMBOL(nf_hooks_needed);
+@@ -673,6 +689,41 @@
+ 	.exit = netfilter_net_exit,
+ };
+ 
++#ifdef CONFIG_SYSCTL
++static int nf_userns_restrict_min;
++static int nf_userns_restrict_max = 1;
++
++/* net_ctl_permissions() lets any CAP_NET_ADMIN holder write net sysctls as if
++ * it were root, so a process with CAP_NET_ADMIN but nothing else could switch
++ * the restriction off. Writes need CAP_SYS_ADMIN in the initial user namespace.
++ */
++static int nf_userns_restrict_handler(struct ctl_table *table, int write,
++				      void __user *buffer, size_t *lenp,
++				      loff_t *ppos)
++{
++	if (write && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
++	return proc_dointvec_minmax(table, write, buffer, lenp, ppos);
++}
++
++/* Registered in init_net only: invisible from other network namespaces.
++ * Values 0..1; writes need CAP_SYS_ADMIN (see the handler).
++ */
++static struct ctl_table nf_userns_sysctl_table[] = {
++	{
++		.procname	= "nf_userns_restrict",
++		.data		= &sysctl_nf_userns_restrict,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= nf_userns_restrict_handler,
++		.extra1		= &nf_userns_restrict_min,
++		.extra2		= &nf_userns_restrict_max,
++	},
++	{ }
++};
++#endif
++
+ int __init netfilter_init(void)
+ {
+ 	int ret;
+@@ -685,6 +736,13 @@
+ 	if (ret < 0)
+ 		goto err_pernet;
+ 
++#ifdef CONFIG_SYSCTL
++	/* Without the knob the restriction simply stays on. */
++	if (!register_net_sysctl(&init_net, "net/netfilter",
++				 nf_userns_sysctl_table))
++		pr_warn("netfilter: cannot register nf_userns_restrict\n");
++#endif
++
+ 	return 0;
+ err_pernet:
+ 	unregister_pernet_subsys(&netfilter_net_ops);
+diff -ruN a/net/netfilter/ipset/ip_set_core.c b/net/netfilter/ipset/ip_set_core.c
+--- a/net/netfilter/ipset/ip_set_core.c
++++ b/net/netfilter/ipset/ip_set_core.c
+@@ -1940,7 +1940,7 @@
+ 	struct net *net = sock_net(sk);
+ 	struct ip_set_net *inst = ip_set_pernet(net);
+ 
+-	if (!ns_capable(net->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(net))
+ 		return -EPERM;
+ 	if (optval != SO_IP_SET)
+ 		return -EBADF;
+diff -ruN a/net/netfilter/ipvs/ip_vs_ctl.c b/net/netfilter/ipvs/ip_vs_ctl.c
+--- a/net/netfilter/ipvs/ip_vs_ctl.c
++++ b/net/netfilter/ipvs/ip_vs_ctl.c
+@@ -2349,7 +2349,7 @@
+ 	struct netns_ipvs *ipvs = net_ipvs(net);
+ 
+ 	BUILD_BUG_ON(sizeof(arg) > 255);
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	if (cmd < IP_VS_BASE_CTL || cmd > IP_VS_SO_SET_MAX)
+@@ -2664,7 +2664,7 @@
+ 
+ 	BUG_ON(!net);
+ 	BUILD_BUG_ON(sizeof(arg) > 255);
+-	if (!ns_capable(sock_net(sk)->user_ns, CAP_NET_ADMIN))
++	if (!nf_net_admin_capable(sock_net(sk)))
+ 		return -EPERM;
+ 
+ 	if (cmd < IP_VS_BASE_CTL || cmd > IP_VS_SO_GET_MAX)
+diff -ruN a/net/netfilter/nfnetlink.c b/net/netfilter/nfnetlink.c
+--- a/net/netfilter/nfnetlink.c
++++ b/net/netfilter/nfnetlink.c
+@@ -28,6 +28,7 @@
+ #include <linux/sched/signal.h>
+ 
+ #include <net/netlink.h>
++#include <linux/netfilter.h>
+ #include <linux/netfilter/nfnetlink.h>
+ 
+ MODULE_LICENSE("GPL");
+@@ -554,7 +555,8 @@
+ 	    skb->len < nlh->nlmsg_len)
+ 		return;
+ 
+-	if (!netlink_net_capable(skb, CAP_NET_ADMIN)) {
++	if (!netlink_net_capable(skb, CAP_NET_ADMIN) ||
++	    (nf_userns_restricted() && !netlink_capable(skb, CAP_NET_ADMIN))) {
+ 		netlink_ack(skb, nlh, -EPERM, NULL);
+ 		return;
+ 	}
+@@ -574,6 +576,12 @@
+ 	if (group <= NFNLGRP_NONE || group > NFNLGRP_MAX)
+ 		return 0;
+ 
++	/* thunder: no event subscription (nor the module autoload below) for
++	 * an admin of a non-initial user namespace while restricted.
++	 */
++	if (nf_userns_restricted() && !capable(CAP_NET_ADMIN))
++		return -EPERM;
++
+ 	type = nfnl_group2type[group];
+ 
+ 	rcu_read_lock();

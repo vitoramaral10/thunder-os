@@ -1,0 +1,46 @@
+Backport de 4ed234fe793f ("netfilter: nf_reject_ipv6: fix potential crash in
+nf_send_reset6()", Linux 6.12; no stable 6.1.116 como 4f7b586aae53),
+CVE-2024-50256. Sem fix no 4.19.y.
+
+nf_send_reset6() dimensionava o skb com dst->dev->hard_header_len, que e 0 em
+devices sem cabecalho L2 (o ccmni, dados moveis do MediaTek, e assim), e
+skb_push do cabecalho ethernet depois estourava o headroom. O fix usa
+LL_MAX_HEADER, como o caminho IPv4.
+
+Adaptado para o 4.19: a funcao nao recebe `sk` e declara as variaveis em outra
+ordem; os hunks de alloc_skb e skb_reserve sao os mesmos do upstream. Vai depois
+de backport-netfilter-4.19.325.patch (o hunk do CVE-2024-47685 mexe no mesmo
+arquivo).
+
+--- a/net/ipv6/netfilter/nf_reject_ipv6.c
++++ b/net/ipv6/netfilter/nf_reject_ipv6.c
+@@ -124,7 +124,7 @@
+ 	struct sk_buff *nskb;
+ 	struct tcphdr _otcph;
+ 	const struct tcphdr *otcph;
+-	unsigned int otcplen, hh_len;
++	unsigned int otcplen;
+ 	const struct ipv6hdr *oip6h = ipv6_hdr(oldskb);
+ 	struct ipv6hdr *ip6h;
+ 	struct dst_entry *dst = NULL;
+@@ -158,9 +158,8 @@
+ 	if (IS_ERR(dst))
+ 		return;
+ 
+-	hh_len = (dst->dev->hard_header_len + 15)&~15;
+-	nskb = alloc_skb(hh_len + 15 + dst->header_len + sizeof(struct ipv6hdr)
+-			 + sizeof(struct tcphdr) + dst->trailer_len,
++	nskb = alloc_skb(LL_MAX_HEADER + sizeof(struct ipv6hdr) +
++			 sizeof(struct tcphdr) + dst->trailer_len,
+ 			 GFP_ATOMIC);
+ 
+ 	if (!nskb) {
+@@ -173,7 +172,7 @@
+ 
+ 	nskb->mark = fl6.flowi6_mark;
+ 
+-	skb_reserve(nskb, hh_len + dst->header_len);
++	skb_reserve(nskb, LL_MAX_HEADER);
+ 	ip6h = nf_reject_ip6hdr_put(nskb, oldskb, IPPROTO_TCP,
+ 				    ip6_dst_hoplimit(dst));
+ 	nf_reject_ip6_tcphdr_put(nskb, oldskb, otcph, otcplen);

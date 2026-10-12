@@ -1,0 +1,48 @@
+Desliga na Kconfig do vendor tres `select` que religam sozinhos, a cada
+olddefconfig, simbolos que a revisao rB quer fora do kernel. Um `select` vence o
+"# CONFIG_X is not set" do kernel-config, entao so tirar a linha do arquivo de
+config nao basta. Proprio do Thunder, sem equivalente upstream.
+Revisao rB: build/research/nft/DESIGN.md (secao 2.1) e as correcoes da critica.
+
+- `select NF_CT_PROTO_DCCP` (bloco ANDROID_DEFAULT_SETTING): conntrack de DCCP
+  tem OOB de pilha alcancavel por pacote remoto (CVE-2023-53333). O fix
+  upstream (ff0a3a7d52ff) nao casa com a estrutura do 4.19 (dccp_new,
+  dccp_packet e dccp_error separados), o aparelho nao usa DCCP (IP_DCCP=n) e o
+  autor anunciou a remocao. Nenhum outro Kconfig seleciona o simbolo.
+- `select NF_NAT_PROTO_DCCP`: o simbolo e `bool depends on NF_NAT &&
+  NF_CT_PROTO_DCCP`; com o select de cima fora, forca-lo so geraria aviso de
+  dependencia. Saindo, o NF_NAT_PROTO_DCCP some junto.
+- `select NET_ACT_IPT`: a acao `tc ... action xt` (net/sched/act_ipt.c) roda
+  alvos do xtables (xt_CT, por exemplo) e so exige CAP_NET_ADMIN sobre o netns,
+  entao `unshare -Urn` bastaria. Ela nao passa pelo gate de userns
+  (add-netfilter-userns-restrict.patch), e o xt_CT alcancavel ai tem UAF sem fix
+  no 4.19 (CVE-2026-23391). NET_CLS_ACT continua; so a acao `xt` sai.
+  kernel-config leva "# CONFIG_NET_ACT_IPT is not set".
+
+diff -ruN a/drivers/misc/mediatek/Kconfig.default b/drivers/misc/mediatek/Kconfig.default
+--- a/drivers/misc/mediatek/Kconfig.default
++++ b/drivers/misc/mediatek/Kconfig.default
+@@ -188,7 +188,6 @@
+ 	select NF_CONNTRACK_SECMARK
+ 	select NF_CONNTRACK_TFTP
+ 	select NF_CT_NETLINK
+-	select NF_CT_PROTO_DCCP
+ 	select NF_CT_PROTO_SCTP
+ 	select NF_CT_PROTO_UDPLITE
+ 	select NF_NAT
+@@ -371,7 +370,6 @@
+ 	select MTK_SYSTRACKER_V2
+ 	select HAVE_MTK_TRUSTED_MEMORY_SUBSYSTEM if (MTK_PROT_MEM_SUPPORT || MTK_SECURE_MEM_SUPPORT || MTK_MTEE_MULTI_CHUNK_SUPPORT || MTK_GZ_KREE)
+ 	select MTK_WFD_SMEM_SUPPORT if (MTK_SECURE_MEM_SUPPORT && MTK_SEC_VIDEO_PATH_SUPPORT)
+-	select NET_ACT_IPT
+ 	select NET_ACT_MIRRED
+ 	select NET_ACT_POLICE
+ 	select NET_CLS
+@@ -422,7 +420,6 @@
+ 	select NF_NAT_IRC
+ 	select NF_NAT_MASQUERADE_IPV4
+ 	select NF_NAT_PPTP
+-	select NF_NAT_PROTO_DCCP
+ 	select NF_NAT_PROTO_GRE
+ 	select NF_NAT_PROTO_SCTP
+ 	select NF_NAT_PROTO_UDPLITE
