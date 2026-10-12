@@ -175,7 +175,7 @@ makes `Read_BD_ADDR` return exactly what is in nvram. HCI carries `BD_ADDR`
 least-significant byte first, while nvram stores display order.
 
 The `devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service` unit extracts six bytes into `/lib/firmware/bt_addr.bin` on
-first start (mounting `nvdata` **read-only**, always), and the bridge writes it
+first start (mounting `nvdata` **read-only** and with `noload`, always), and the bridge writes it
 with the MediaTek vendor command `0xFC1A`, then reads it back to confirm. It
 survives the `HCI_Reset` the kernel issues during init.
 
@@ -195,7 +195,9 @@ A 25-second scan finds devices with names and with LE random addresses, so
 both BR/EDR and LE work. Done with Wi-Fi associated throughout — the two
 radios share CONNSYS and coexist.
 
-After a cold boot, with no intervention:
+After a cold boot, with no intervention (history: measured on the earlier OpenRC
+image, where the Wi-Fi bring-up was a service called `wifi-thunder`; today it is
+`thunder-wmt-connsys` plus `thunder-wmt-wifi`):
 
 ```
 wifi-thunder       started

@@ -1,0 +1,39 @@
+# CONNSYS da MediaTek (Wi-Fi, Bluetooth, GPS e FM dividem o chip): inicializa o driver
+# WMT (o wmt_loader do Android) e fica residente como o wmt_launcher. Pronto (notify) =
+# os ioctls de HIF e ROM patches voltaram ok; dali em diante todo power-on do CONNSYS
+# baixa os patches sozinho (Wi-Fi, Bluetooth, chip reset, tela ligada). O HIF e
+# enfileirado pelo driver (SET_STP_MODE nao e sincrono): READY=1 nao prova que ele ja
+# foi aplicado, a ordem em relacao aos power-ons seguintes vem da fila FIFO do driver.
+# Residente porque o no /dev/stpwmt tem de ficar aberto: com o ultimo fd fechado o driver
+# entende que o sistema esta desligando e deixa de se recuperar de falha do chip.
+# Nao descarrega modulo ao parar: rmmod wmt_drv trava em Unloading e prende o desligamento.
+# Reiniciar esta unit NAO reinicia a thunder-wmt-wifi (sem PartOf=/Requires=): reiniciar
+# o radio ainda nao foi verificado quanto a associacao (docs/wifi-bringup.md).
+[Unit]
+Description=MediaTek CONNSYS (WMT driver init and launcher)
+Documentation=file:/usr/lib/thunder/wmt/thunder-wmt
+ConditionPathExists=/etc/thunder/wmt.conf
+# Dependencias padrao: depois do sysinit.target (cabo USB, udev), parado no desligamento.
+After=thunder-usb-network.service thunder-telnet-usb.service
+
+[Service]
+Type=notify
+ExecStart=/usr/lib/thunder/wmt/thunder-wmt connsys
+# /run/thunder-wmt/connsys-ready: o launcher pronto (o wifi-on confere); some no stop.
+RuntimeDirectory=thunder-wmt
+# Configuracao ou firmware errado nao melhora tentando de novo.
+Restart=on-failure
+RestartSec=2
+# direct: o auto-restart vai direto para activating, sem passar por failed/inactive; um
+# start da unit do Wi-Fi que espera esta (After=) fica esperando em vez de falhar.
+RestartMode=direct
+RestartPreventExitStatus=72 78
+TimeoutStartSec=60
+TimeoutStopSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

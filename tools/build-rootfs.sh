@@ -59,7 +59,14 @@ if [ "${PROFILE_STATUS:-}" = planned ] && [ "${THUNDER_ALLOW_PLANNED:-0}" != 1 ]
 	echo "(THUNDER_ALLOW_PLANNED=1 monta assim mesmo, para quem esta portando)" >&2
 	exit 1
 fi
-LOCAL_PACKAGES=(${PROFILE_LOCAL_PACKAGES[@]+"${PROFILE_LOCAL_PACKAGES[@]}"})
+# Pacotes nossos: os do aparelho e depois os do perfil, sem repetir.
+LOCAL_PACKAGES=()
+for p in ${DEVICE_LOCAL_PACKAGES[@]+"${DEVICE_LOCAL_PACKAGES[@]}"} \
+	${PROFILE_LOCAL_PACKAGES[@]+"${PROFILE_LOCAL_PACKAGES[@]}"}; do
+	[ -f "$repo/rootfs/packages/$p/PKGBUILD" ] ||
+		{ echo "pacote local sem receita: rootfs/packages/$p/PKGBUILD" >&2; exit 1; }
+	[[ " ${LOCAL_PACKAGES[*]} " == *" $p "* ]] || LOCAL_PACKAGES+=("$p")
+done
 echo "perfil: $THUNDER_PROFILE ($PROFILE_TITLE)"
 
 echo "== qemu-aarch64 estatico"
@@ -116,7 +123,7 @@ export ROOTFS
 
 # Pacotes nossos e o thunder-reboot: guardados em $LOCAL_PKGS/<nome>/<hash da receita>.
 # So o que mudou e compilado, num chroot de build ($BUILDROOT) que fica fora do rootfs.
-recipe_hash() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) | sha256sum | cut -c1-16; }
+recipe_hash() { (cd "$1" && find . -name __pycache__ -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) | sha256sum | cut -c1-16; }
 declare -A PKG_DIR
 need_build=()
 for p in "${LOCAL_PACKAGES[@]}"; do
@@ -139,6 +146,11 @@ else
 	export repo BUILDROOT
 	UIDGID=$(userns awk -F: '$1=="builder"{print $3":"$4}' "$BUILDROOT/etc/passwd")
 	export UIDGID
+	# Dependencias da receita que faltam no chroot de build: o makepkg recusa compilar sem
+	# elas (depends, makedepends, checkdepends) e o -s dele nao roda como builder. pacman -T
+	# lista so as ausentes; as nossas ja entraram no chroot nas voltas anteriores.
+	recipe_deps='. ./PKGBUILD; missing=$(pacman -T "${depends[@]}" "${makedepends[@]}" "${checkdepends[@]}") || true
+		[ -z "$missing" ] || pacman --noconfirm --needed --disable-sandbox -S --asdeps $missing'
 	# Na ordem: cada pacote entra no buildroot depois de pronto (ou do cache), para o
 	# seguinte poder depender dele.
 	for p in "${LOCAL_PACKAGES[@]}"; do
@@ -150,6 +162,7 @@ else
 				rm -rf "${w:?}/$p"; mkdir -p "$w"
 				cp -a "$repo/rootfs/packages/$p" "$w/$p"
 				chown -R "$UIDGID" "$w/$p"'
+			ROOTFS=$BUILDROOT tools_achroot /bin/bash -c "cd /home/builder/work/$p && $recipe_deps"
 			ROOTFS=$BUILDROOT tools_achroot /bin/bash -c "cd /home/builder/work/$p &&
 				su builder -c 'MAKEFLAGS=-j\$(nproc) makepkg -f --noconfirm'"
 			userns bash -c 'set -e
@@ -183,7 +196,7 @@ stage_config=$(
 	for v in DEVICE DEVICE_NAME DEVICE_VENDOR DEVICE_CODENAME KVER THUNDER_USER \
 		THUNDER_PASSWORD THUNDER_ROOT_PASSWORD THUNDER_LOCALE THUNDER_TIMEZONE \
 		THUNDER_HOSTNAME THUNDER_PROFILE WIFI_INTERFACE THUNDER_WIFI_SSID \
-		THUNDER_WIFI_PASSWORD; do
+		THUNDER_WIFI_PASSWORD WMT_HIF WMT_WIFI_NVRAM; do
 		echo "$v=$(q "${!v}")"
 	done
 	qa() { local x; for x in "$@"; do printf '%s ' "$(q "$x")"; done; }
@@ -194,6 +207,9 @@ stage_config=$(
 	echo "PROFILE_GROUPS=($(qa "${PROFILE_GROUPS[@]}"))"
 	echo "EXTRA_PACKAGES=($(qa "${EXTRA_PACKAGES[@]}"))"
 	echo "LOCAL_PACKAGES=($(qa "${LOCAL_PACKAGES[@]}"))"
+	echo "WMT_CORE_MODULES=($(qa "${WMT_CORE_MODULES[@]}"))"
+	echo "WMT_WIFI_MODULES=($(qa "${WMT_WIFI_MODULES[@]}"))"
+	echo "WMT_ROM_PATCHES=($(qa "${WMT_ROM_PATCHES[@]}"))"
 )
 LOCAL_DIRS=$(for p in "${LOCAL_PACKAGES[@]}"; do printf '%s=%s\n' "$p" "${PKG_DIR[$p]}"; done)
 export stage_config THUNDER_PROFILE LOCAL_DIRS REBOOT_DIR repo KVER KERNEL_PKG FIRMWARE AUTHORIZED_KEYS DEVICE_DIR

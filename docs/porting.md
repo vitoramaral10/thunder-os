@@ -111,8 +111,13 @@ because many bootloaders prepend their own arguments (including `root=`).
 |---|---|---|
 | `FIRMWARE_REQUIRED` | `()` | Files that must exist in `$FIRMWARE` before the rootfs build starts |
 | `DEVICE_PACKAGES` | `()` | Extra Arch packages installed in the image |
-| `DEVICE_SERVICES` | `()` | systemd units (with suffix, e.g. `wifi-thunder.service`) from the overlay (`overlay/usr/lib/systemd/system`) or from packages, enabled with `systemctl enable` |
-| `WIFI_INTERFACE` | empty | Station interface (e.g. `wlan0`). Set it and the image gets NetworkManager (wpa_supplicant backend) managing only this interface, and `thunder-wifi`. If the driver needs a bring-up, ship a oneshot unit that creates the interface; nothing has to order after it (NetworkManager follows hotplug). Extra driver interfaces are left unmanaged automatically |
+| `DEVICE_SERVICES` | `()` | systemd units (with suffix, e.g. `thunder-wmt-wifi.service`) from the overlay (`overlay/usr/lib/systemd/system`) or from packages, enabled with `systemctl enable` |
+| `DEVICE_LOCAL_PACKAGES` | `()` | Our own packages (`rootfs/packages/<name>/PKGBUILD`) the device needs, built like `PROFILE_LOCAL_PACKAGES` and installed before them; updatable on the phone with `pacman -U` |
+| `WMT_CORE_MODULES`, `WMT_WIFI_MODULES` | `()` | MediaTek WMT (CONNAC 1.0 SoC): modules loaded before `DO_MODULE_INIT`, and the Wi-Fi modules loaded after CONNSYS is up. Non-empty `WMT_CORE_MODULES` writes `/etc/thunder/wmt.conf` for `thunder-wmt` |
+| `WMT_ROM_PATCHES` | `()` | ROM patch file names in the firmware directory; type and EMI offset are read from each header. List them in `FIRMWARE_REQUIRED` too, together with `WMT_SOC.cfg` and the Wi-Fi RAM code |
+| `WMT_HIF` | `0x23` | `SET_STP_MODE` argument: HIF type in bits 0-3 (`0x03` = BTIF full), FM mode in bits 4-7 |
+| `WMT_WIFI_NVRAM` | empty | `<partlabel>:<path in its ext4>` of the Wi-Fi NVRAM, pushed before the first power-on; empty = no NVRAM |
+| `WIFI_INTERFACE` | empty | Station interface (e.g. `wlan0`). Set it and the image gets NetworkManager (wpa_supplicant backend) managing only this interface, and `thunder-wifi`. If the driver needs a bring-up, ship a unit that creates the interface (MediaTek WMT: the `thunder-mediatek-wmt` package and the `WMT_*` variables); nothing has to order after it (NetworkManager follows hotplug). Extra driver interfaces are left unmanaged automatically |
 | `DEVICE_PROFILES` | all | Interface profiles (`rootfs/profiles/`) the device offers; empty means all |
 | `overlay/` | — | Optional. Copied over `/` after the core and profile overlays, so a device file can replace either |
 

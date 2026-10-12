@@ -14,7 +14,8 @@ pac() {
 	return 1
 }
 # DEVICE*, KVER, THUNDER_{USER,PASSWORD,ROOT_PASSWORD,LOCALE,TIMEZONE,HOSTNAME,PROFILE},
-# DEVICE_{PACKAGES,SERVICES}, PROFILE_{PACKAGES,SERVICES,GROUPS}, EXTRA_PACKAGES, LOCAL_PACKAGES
+# DEVICE_{PACKAGES,SERVICES}, PROFILE_{PACKAGES,SERVICES,GROUPS}, EXTRA_PACKAGES, LOCAL_PACKAGES,
+# WMT_*
 . "$S/config"
 
 # Pacotes nossos (os do perfil, ex.: bubblewrap-thunder), na ordem. --ask 4: aceita
@@ -48,6 +49,26 @@ cp -a "$S/overlay/." /
 mkdir -p /etc/thunder
 grep -E '^(DEVICE(|_NAME|_VENDOR|_CODENAME)|WIFI_INTERFACE)=' "$S/config" > /etc/thunder/device
 grep -E '^THUNDER_PROFILE=' "$S/config" >> /etc/thunder/device
+
+# Conectividade MediaTek WMT (pacote thunder-mediatek-wmt): o que o device.sh diz do chip
+# vira /etc/thunder/wmt.conf, lido pelo thunder-wmt. Aparelho sem WMT fica sem o arquivo
+# e as units do pacote ficam inertes (ConditionPathExists=). O config pode vir de um
+# build-rootfs.sh antigo, sem as WMT_*.
+wmtconf=/etc/thunder/wmt.conf
+wmt_core=(${WMT_CORE_MODULES[@]+"${WMT_CORE_MODULES[@]}"})
+if [ ${#wmt_core[@]} -gt 0 ]; then
+	{
+		echo "# Gerado pelo rootfs/configure.sh (WMT_* do device.sh). Lido pelo thunder-wmt."
+		echo "WMT_CORE_MODULES=${wmt_core[*]}"
+		echo "WMT_WIFI_MODULES=${WMT_WIFI_MODULES[*]-}"
+		echo "WMT_ROM_PATCHES=${WMT_ROM_PATCHES[*]-}"
+		echo "WMT_HIF=${WMT_HIF-}"
+		echo "WMT_WIFI_INTERFACE=$WIFI_INTERFACE"
+		echo "WMT_WIFI_NVRAM=${WMT_WIFI_NVRAM-}"
+	} > "$wmtconf"
+else
+	rm -f "$wmtconf"
+fi
 echo "$THUNDER_HOSTNAME" > /etc/hostname
 
 # Firmware do aparelho, e o kernel como pacote (linux-<aparelho>): modulos, kernel e

@@ -67,8 +67,8 @@ device.sh        identity, kernel source, boot.img layout, fastboot, services,
 kernel-config    kernel .config
 patches/         kernel patches, applied in patches/series order
 connectivity/    MediaTek Wi-Fi/BT driver source grafted over the kernel
-overlay/         files added to the rootfs: touchscreen-wake, wifi-thunder (radio
-                 bring-up) and its helpers in /usr/local/bin
+overlay/         files added to the rootfs: touchscreen-wake rule, NetworkManager and
+                 sleep policy (Wi-Fi/BT bring-up is the thunder-mediatek-wmt package)
 bluetooth/       Bluetooth bring-up (`bluetooth-thunder.service`), not in the image yet
 docs/            kernel catalogue, firmware, hardware bring-up write-ups
 ```

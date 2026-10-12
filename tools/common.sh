@@ -63,12 +63,21 @@ require_device() {
 	FIRMWARE_ROM_PARTITION=vendor
 	FIRMWARE_ROM_DIRS=(/firmware /etc/firmware /vendor/firmware)
 	DEVICE_PACKAGES=()
+	# Pacotes nossos do aparelho (rootfs/packages/<nome>/PKGBUILD), montados como os do perfil.
+	DEVICE_LOCAL_PACKAGES=()
 	# Interface Wi-Fi de estacao; vazio = aparelho sem Wi-Fi (sem NetworkManager nem thunder-wifi).
 	WIFI_INTERFACE=
-	# Units do systemd do aparelho a habilitar, com sufixo (ex.: wifi-thunder.service).
+	# Units do systemd do aparelho a habilitar, com sufixo (ex.: thunder-wmt-wifi.service).
 	DEVICE_SERVICES=()
 	# Perfis de interface que o aparelho aceita (rootfs/profiles/); vazio = todos.
 	DEVICE_PROFILES=()
+	# Conectividade MediaTek WMT (pacote thunder-mediatek-wmt); vazio = aparelho sem WMT.
+	# Viram /etc/thunder/wmt.conf no rootfs/configure.sh.
+	WMT_CORE_MODULES=()
+	WMT_WIFI_MODULES=()
+	WMT_ROM_PATCHES=()
+	WMT_HIF=
+	WMT_WIFI_NVRAM=
 	. "$DEVICE_DIR/device.sh"
 	if [ ${#DEVICE_PROFILES[@]} -eq 0 ]; then
 		local p

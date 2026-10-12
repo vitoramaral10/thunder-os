@@ -1,0 +1,43 @@
+# Radio Wi-Fi da MediaTek (gen4m) sobre o CONNSYS: carrega os modulos do Wi-Fi, entrega a
+# NVRAM de fabrica (MAC e calibracao de RF, lida da particao sem montar) e liga o radio
+# uma vez. Ativa = radio ligado e interface criada; parar = radio desligado.
+# Wants= e nao Requires=/PartOf=: parar ou reiniciar a thunder-wmt-connsys nao pode
+# derrubar nem reiniciar o radio, porque reiniciar o radio (stop/start) ainda nao foi
+# verificado quanto a associacao: um power on/off/on ja deixou o supplicant sem associar
+# (docs/wifi-bringup.md). O thunder-wmt wifi-on falha (69) se o CONNSYS nao subiu.
+# Sem Before=NetworkManager: o sshd do Arch vem depois do network.target, que vem depois
+# do NetworkManager; com o After=sshd abaixo isso fecharia um ciclo de ordenacao (o
+# systemd apagaria um job a cada boot). Nada espera o radio: o NetworkManager pega a
+# wlan0 no hotplug. Os cabos e o sshd vem antes, para o bring-up nunca atrasar o acesso.
+[Unit]
+Description=MediaTek Wi-Fi radio (gen4m) power
+Documentation=file:/usr/lib/thunder/wmt/thunder-wmt
+ConditionPathExists=/etc/thunder/wmt.conf
+Wants=thunder-wmt-connsys.service
+After=thunder-wmt-connsys.service
+After=thunder-usb-network.service thunder-telnet-usb.service sshd.service
+# No maximo 5 partidas por minuto (o limite conta tambem start manual): sem laco de restart.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/thunder/wmt/thunder-wmt wifi-on
+ExecStop=/usr/lib/thunder/wmt/thunder-wmt wifi-off
+Restart=on-failure
+RestartSec=3
+# 72 = firmware ausente, 78 = configuracao: tentar de novo nao conserta.
+RestartPreventExitStatus=72 78
+# O write() no /dev/wmtWifi e ininterrompivel; o proprio driver limita o FUNC_ON do Wi-Fi
+# a 4 s alem do power-on (~1,5 s medido, com calibracao). Os prazos daqui so pegam
+# travamento de verdade.
+TimeoutStartSec=90
+TimeoutStopSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

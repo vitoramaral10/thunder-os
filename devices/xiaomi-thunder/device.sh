@@ -61,11 +61,36 @@ FIRMWARE_FILES=(
 )
 
 # Rootfs.
-FIRMWARE_REQUIRED=(nt36672c_tm_01_ts_fw.bin)
-# python: o bring-up do Wi-Fi (wmt-loader, wmt-daemon) e em Python.
-DEVICE_PACKAGES=(python)
-# Units do systemd do aparelho (overlay/usr/lib/systemd/system), habilitadas pelo configure.sh. O toque e uma regra do udev (overlay/usr/lib/udev/rules.d).
-DEVICE_SERVICES=(wifi-thunder.service)
+# Obrigatorios: sem eles a imagem nao sobe o Wi-Fi. O WMT_SOC.cfg o driver carrega sozinho
+# por nome fixo nos chips SoC (wmt_conf.c:605-610), sem ioctl. Os ROM patches 1_1 sao os
+# de WMT_ROM_PATCHES; o WIFI_RAM_CODE 1_1 e o firmware do radio que o gen4m pede.
+FIRMWARE_REQUIRED=(
+	nt36672c_tm_01_ts_fw.bin
+	WMT_SOC.cfg
+	soc2_2_ram_mcu_1_1_hdr.bin soc2_2_ram_wifi_1_1_hdr.bin soc2_2_ram_bt_1_1_hdr.bin
+	WIFI_RAM_CODE_soc2_2_1_1.bin
+)
+# Conectividade (Wi-Fi e Bluetooth dividem o CONNSYS): o pacote thunder-mediatek-wmt
+# (rootfs/packages) faz o papel do wmt_loader, do wmt_launcher e do wlan_assistant do
+# Android. thunder-wmt-connsys inicializa o driver e fica residente; thunder-wmt-wifi
+# liga o radio. O toque e uma regra do udev (overlay/usr/lib/udev/rules.d).
+DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt)
+DEVICE_SERVICES=(thunder-wmt-connsys.service thunder-wmt-wifi.service)
+# Modulos do nucleo WMT, antes do DO_MODULE_INIT.
+WMT_CORE_MODULES=(wmt_drv connfem)
+# Modulos do Wi-Fi, depois do CONNSYS pronto (ordem do init.wlan_drv.rc do Android).
+WMT_WIFI_MODULES=(wmt_chrdev_wifi wlan_drv_gen4m)
+# ROM patches que o launcher registra; tipo e endereco vem do cabecalho de cada .bin.
+# So a variante 1_1 foi validada neste aparelho (as 1a_1 tambem estao no firmware).
+WMT_ROM_PATCHES=(soc2_2_ram_mcu_1_1_hdr.bin soc2_2_ram_wifi_1_1_hdr.bin soc2_2_ram_bt_1_1_hdr.bin)
+# HIF do CONNSYS: STP_BTIF_FULL (0x03) com WMT_FM_COMM (2 << 4).
+WMT_HIF=0x23
+# NVRAM de fabrica do Wi-Fi (MAC e calibracao de RF): <partlabel>:<arquivo no ext4>, lida
+# sem montar e entregue antes do 1o power-on. Vazio = sem NVRAM (status quo: MAC gerado).
+# Ligada: no aparelho (2026-10-11) o 1o probe aplica a NVRAM ("NVRAM verdict: applied") e
+# a rede associa, no boot e depois de desligar/religar o radio. Se um dia o veredito for
+# "not applied" ou "unknown", o padrao volta para vazio (docs/wifi-bringup.md, T3).
+WMT_WIFI_NVRAM=nvdata:/APCFG/APRDEB/WIFI
 # NetworkManager so gerencia esta interface; extras do driver ficam de fora.
 # Interface de estacao: o gen4m cria wlan0, wlan1, ap0 e p2p0, mas so a wlan0 e
 # estacao de verdade.

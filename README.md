@@ -58,10 +58,10 @@ the init, the device kernel learns what it needs:
 ```
 initramfs/    init: mounts the root partition, falls back to a rescue shell over USB
 rootfs/       overlay/ (systemd units, USB gadget, drop-ins), configure.sh,
-              finalize.sh, packages/ (glib patches), src/
+              finalize.sh, packages/ (our own pacman packages, glib patches), src/
 tools/        rootless build pipeline and flashing, driven by DEVICE
 devices/      one folder per phone: device.sh, kernel config and patches,
-              overlay, docs, bring-up helpers
+              overlay, docs, bring-up units
 docs/         building, flashing, porting
 ```
 

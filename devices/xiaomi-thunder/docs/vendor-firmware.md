@@ -65,24 +65,24 @@ Not a file you copy out of the ROM. It lives in the device's own `nvdata`
 partition, is unique to each unit, and is read at run time:
 
 ```sh
-mount -o ro /dev/disk/by-partlabel/nvdata /mnt      # READ-ONLY, always
-cp /mnt/APCFG/APRDEB/WIFI /lib/firmware/wifi_nvram.bin
-umount /mnt
+debugfs -R "cat /APCFG/APRDEB/WIFI" /dev/disk/by-partlabel/nvdata | xxd | head -4   # read-only, saves nothing
 ```
 
-Mount it read-only and never write to it. It holds the factory RF calibration
-for this specific radio; there is no way to regenerate it if you corrupt it.
+Never write to it. It holds the factory RF calibration for this specific
+radio; there is no way to regenerate it if you corrupt it. `debugfs` without
+`-w` opens the filesystem read-only, and unlike a read-only mount it does not
+replay the journal.
 
-The Wi-Fi file is 2050 bytes, with the MAC address at offset 4. It is consumed
-by [`devices/xiaomi-thunder/overlay/usr/local/bin/wifi-nvram-push.py`](../overlay/usr/local/bin/wifi-nvram-push.py), which
-hands it to the driver at bring-up. The push is gated behind
-`/etc/thunder-wifi-nvram` and off by default, for reasons explained in
-[wifi-bringup.md](wifi-bringup.md#the-factory-mac-solved-mechanism-unusable-in-practice).
+The Wi-Fi file is 2050 bytes, with the MAC address at offset 4.
+`thunder-wmt` (package `thunder-mediatek-wmt`) reads it this way at every
+boot and hands it to the driver before the first power-on; nothing is copied
+to disk. See
+[wifi-bringup.md](wifi-bringup.md#the-factory-nvram-mac-and-rf-calibration).
 
 The Bluetooth address lives in the same place, at `/APCFG/APRDEB/BT_Addr`: six
 bytes, same OUI as the Wi-Fi MAC. [`devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service`](../bluetooth/bluetooth-thunder.service)
 extracts it into `/lib/firmware/bt_addr.bin` on first start, again with the
-partition mounted read-only, and the bridge writes it to the controller.
+partition mounted read-only and without journal replay (`ro,noload`), and the bridge writes it to the controller.
 
 Because it is per-unit data, no MAC address or calibration blob belongs in
 this repository.
@@ -95,9 +95,12 @@ this repository.
 into the initramfs by [`tools/build-boot.sh`](../../../tools/build-boot.sh), from the built rootfs. See
 [building.md](../../../docs/building.md).
 
-`request_firmware()` searches that path, and
-[`devices/xiaomi-thunder/overlay/usr/local/bin/wmt-daemon.py`](../overlay/usr/local/bin/wmt-daemon.py) reads the patch
-headers from it.
+`request_firmware()` searches that path, and `thunder-wmt` reads the ROM patch
+headers from it (`WMT_ROM_PATCHES` in `device.sh`). The files the Wi-Fi
+sequence cannot do without (`WMT_SOC.cfg`, the three `*_1_1_hdr.bin` ROM
+patches and `WIFI_RAM_CODE_soc2_2_1_1.bin`) are in the device's
+`FIRMWARE_REQUIRED`: a missing one stops `tools/extract-firmware.sh` and the
+image build.
 
 ## Licensing
 

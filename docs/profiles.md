@@ -27,8 +27,8 @@ working on them).
 | `PROFILE_PACKAGES` | Arch packages installed in the image |
 | `PROFILE_SERVICES` | systemd unit names with suffix (`foo.service`, `bar.socket`) enabled with `systemctl enable`; `{user}` is replaced by `THUNDER_USER`. The old `name:runlevel` form is gone |
 | `PROFILE_GROUPS` | Supplementary groups of `THUNDER_USER` (`video input render`). Groups that do not exist yet are created with `groupadd -r` |
-| `PROFILE_LOCAL_PACKAGES` | Our own packages, `rootfs/packages/<name>/PKGBUILD`, built in order in the build chroot (each one is installed there before the next, so they can depend on each other) |
-| `PROFILE_BUILD_DEPENDS` | Arch packages the build chroot needs for them |
+| `PROFILE_LOCAL_PACKAGES` | Our own packages, `rootfs/packages/<name>/PKGBUILD`, built in order in the build chroot (each one is installed there before the next, so they can depend on each other). Device packages (`DEVICE_LOCAL_PACKAGES`) come first |
+| `PROFILE_BUILD_DEPENDS` | Arch packages the build chroot needs for them. Missing `depends`/`makedepends`/`checkdepends` of each recipe are also installed automatically |
 
 Optional files next to it, in `rootfs/profiles/<name>/`: `overlay/` (copied over
 `/` after the core overlay and before the device's) and `configure.sh` (run in
