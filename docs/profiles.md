@@ -9,7 +9,7 @@ the USB cable, the device's firmware and services.
 |---|---|---|
 | `none` | tested | No interface. SSH and telnet over the USB cable |
 | `console` | experimental | Full-screen terminal with an on-screen keyboard |
-| `phosh` | planned | GNOME's phone shell |
+| `phosh` | experimental | GNOME's phone shell |
 | `plasma-mobile` | planned | KDE's phone shell |
 
 `planned` profiles show up in the installer with what is missing, and

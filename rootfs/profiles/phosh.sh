@@ -4,11 +4,14 @@
 # systemd --user. Sem greeter: o Phosh sobe bloqueado e a senha do usuario desbloqueia.
 # Escala: a que o phoc calcula do tamanho fisico do painel. Desenho e testes:
 # build/research/phosh/DESIGN.md.
+# experimental: validado no xiaomi-thunder em 2026-10-11 com o pacman no sistema rodando
+# (sobe no boot, desbloqueia, toque, teclado com acentos, Wi-Fi, apagar/acender a tela);
+# falta instalar do zero pelo app para virar tested.
 PROFILE_ORDER=30
 PROFILE_TITLE="Phosh"
 PROFILE_DESCRIPTION="Interface de celular do GNOME: tela inicial, gestos, notificacoes, teclado na tela e apps GNOME."
-PROFILE_STATUS=planned
-PROFILE_BLOCKERS="Sobe no boot e apaga/acende a tela no aparelho; falta conferir a mao: desbloquear, toque e teclado na tela, Wi-Fi nos ajustes rapidos (DESIGN.md, fase A)."
+PROFILE_STATUS=experimental
+PROFILE_BLOCKERS=""
 # phosh puxa gnome-session, gnome-settings-daemon, polkit, upower, iio-sensor-proxy,
 # feedbackd e os portais; o phoc vem do phoc-thunder (PROFILE_LOCAL_PACKAGES). squeekboard
 # explicito: e o phosh-osk-provider (o stevia conflita com ele). libbsd: dep que o
