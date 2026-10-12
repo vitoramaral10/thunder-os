@@ -25,7 +25,7 @@ and MediaTek never published a newer BSP.
 | Bluetooth | works | not wired | BR/EDR and LE, no audio yet, see [docs/bluetooth-bringup.md](docs/bluetooth-bringup.md) |
 | Battery and charging | works | — | fuel gauge algorithm runs in the kernel |
 | Sensors | works | not wired | light, accelerometer, proximity as IIO, see [docs/sensors.md](docs/sensors.md) |
-| Speaker | works | not wired | |
+| Audio | works | works | speaker and internal mic through PipeWire (UCM); headphones without jack detection, no earpiece yet, see [docs/audio.md](docs/audio.md) |
 | Modem, cameras | not started | | |
 
 "Not wired" means the driver works, but the service that brings it up is not

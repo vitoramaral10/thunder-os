@@ -16,9 +16,10 @@ PROFILE_BLOCKERS=""
 # feedbackd e os portais; o phoc vem do phoc-thunder (PROFILE_LOCAL_PACKAGES). squeekboard
 # explicito: e o phosh-osk-provider (o stevia conflita com ele). libbsd: dep que o
 # squeekboard do Arch ARM nao declara. mesa: driver panfrost. gnome-backgrounds: o override
-# do Phosh (00_mobi.Phosh) aponta o fundo para ele.
+# do Phosh (00_mobi.Phosh) aponta o fundo para ele. rtkit: prioridade de tempo real do
+# PipeWire (sem ele o audio roda com prioridade normal).
 PROFILE_PACKAGES=(phosh squeekboard gnome-console gnome-control-center
-	phosh-mobile-settings gnome-keyring gnome-backgrounds mesa libbsd)
+	phosh-mobile-settings gnome-keyring gnome-backgrounds mesa libbsd rtkit)
 # Units do systemd a habilitar (systemctl enable); {user} vira o usuario da imagem.
 PROFILE_SERVICES=('thunder-phosh@{user}.service')
 # feedbackd: grupo que as regras do feedbackd dao aos LEDs (fbd-ledctrl -G), como no pmOS.

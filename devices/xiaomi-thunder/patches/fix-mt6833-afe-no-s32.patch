@@ -1,0 +1,38 @@
+AFE do MT6833 sem S32_LE nos frontends.
+
+memif_32bit_supported e 0 e o init do AFE forca o formato 8_24 para amostras de 32 bits
+(CPU_HD_ALIGN = 0 em AFE_MEMIF_CON0): o "S32_LE" que o driver anunciava era S24_LE (24
+bits alinhados a direita). Quem escolhe S32 (o PipeWire, por padrao) grava 256 vezes mais
+baixo e toca lixo. Sem S32 na lista, o cliente escolhe S24_LE ou S16_LE, que o hardware
+faz de verdade.
+
+--- a/sound/soc/mediatek/mt6833/mt6833-afe-pcm.c
++++ b/sound/soc/mediatek/mt6833/mt6833-afe-pcm.c
+@@ -52,9 +52,13 @@
+ 	.info = (SNDRV_PCM_INFO_MMAP |
+ 		 SNDRV_PCM_INFO_INTERLEAVED |
+ 		 SNDRV_PCM_INFO_MMAP_VALID),
++	/*
++	 * thunder: no S32_LE. memif_32bit_supported is 0 and AFE_MEMIF_CON0 forces the
++	 * 8_24 layout for 32-bit samples, so "S32_LE" was S24_LE: capture 256 times too
++	 * low, playback garbage.
++	 */
+ 	.formats = (SNDRV_PCM_FMTBIT_S16_LE |
+-		    SNDRV_PCM_FMTBIT_S24_LE |
+-		    SNDRV_PCM_FMTBIT_S32_LE),
++		    SNDRV_PCM_FMTBIT_S24_LE),
+ 	.period_bytes_min = 96,
+ 	.period_bytes_max = 4 * 48 * 1024,
+ 	.periods_min = 2,
+@@ -308,9 +312,9 @@
+ 			   SNDRV_PCM_RATE_32000 |\
+ 			   SNDRV_PCM_RATE_48000)
+ 
++/* thunder: no S32_LE, see mt6833_afe_hardware */
+ #define MTK_PCM_FORMATS (SNDRV_PCM_FMTBIT_S16_LE |\
+-			 SNDRV_PCM_FMTBIT_S24_LE |\
+-			 SNDRV_PCM_FMTBIT_S32_LE)
++			 SNDRV_PCM_FMTBIT_S24_LE)
+ 
+ static struct snd_soc_dai_driver mt6833_memif_dai_driver[] = {
+ 	/* FE DAIs: memory intefaces to CPU */

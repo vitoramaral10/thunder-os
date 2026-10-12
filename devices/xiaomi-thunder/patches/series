@@ -43,3 +43,7 @@ fix-mtk-default-no-dccp-act-ipt.patch
 backport-cgroup-v1-release-agent-capable.patch
 backport-reboot-hw-protection-shutdown.patch
 fix-mtk-charger-battery-missing-poweroff.patch
+# thunder audio: amplificador no DAPM, VOW preso, S32 falso (docs/audio.md)
+fix-sia81xx-speaker-amp-dapm.patch
+fix-mt6359-vow-enable-stuck.patch
+fix-mt6833-afe-no-s32.patch

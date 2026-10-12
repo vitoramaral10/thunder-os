@@ -75,6 +75,14 @@ FIRMWARE_REQUIRED=(
 # Android. thunder-wmt-connsys inicializa o driver e fica residente; thunder-wmt-wifi
 # liga o radio. O toque e uma regra do udev (overlay/usr/lib/udev/rules.d).
 DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt)
+# Audio: o UCM do cartao (overlay/usr/share/alsa/ucm2/conf.d/mt6833-mt6359) e as regras
+# do WirePlumber (overlay/usr/share/wireplumber). alsa-utils: a regra do udev roda o
+# alsactl no boot, que aplica a FixedBootSequence do UCM (amplificador desligado, ganhos
+# de fabrica; o padrao do driver e +8 dB no lineout). overlay/etc/systemd/system/
+# alsa-restore.service -> /dev/null: sem asound.state gravado no desligamento, o restore
+# do boot cai no init do UCM em vez de devolver um estado antigo (ganho alto, amplificador
+# ligado).
+DEVICE_PACKAGES=(alsa-utils)
 DEVICE_SERVICES=(thunder-wmt-connsys.service thunder-wmt-wifi.service)
 # Modulos do nucleo WMT, antes do DO_MODULE_INIT.
 WMT_CORE_MODULES=(wmt_drv connfem)

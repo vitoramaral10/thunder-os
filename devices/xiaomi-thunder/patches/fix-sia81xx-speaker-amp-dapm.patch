@@ -1,0 +1,88 @@
+Amplificador sia81xx no DAPM: liga e desliga com o stream de reproducao.
+
+O driver do sia81xx tem os widgets IN -> "SPKR DRV" (com o evento que liga e desliga o
+chip) -> SPKR, mas o vendor comentou as rotas entre eles, e o driver da maquina so liga o
+amplificador por CONFIG_SND_SOC_SIA8109, que nao existe (sia81xx_start/stop nao tem
+implementacao). No Android o HAL liga o "Sia81xx Power" a cada stream; com UCM o controle
+fica ligado enquanto o alto-falante estiver selecionado, mesmo ocioso e com o aparelho
+suspenso.
+
+As rotas internas voltam, e um late_probe no driver da maquina liga "LINEOUT L" ao "IN"
+de cada sia81xx que o DT declara (pelo prefixo, "SpkrLeft" aqui). Com o "LOL Mux" em
+Playback_L_DAC, o DAPM liga o amplificador quando o DL1 toca e o desliga depois.
+
+--- a/sound/soc/codecs/sia81xx/sia81xx.c
++++ b/sound/soc/codecs/sia81xx/sia81xx.c
+@@ -1569,10 +1569,15 @@
+ 	SND_SOC_DAPM_OUTPUT("SPKR")
+ };
+ 
+-/*static const struct snd_soc_dapm_route sia81xx_audio_map[] = {
++/*
++ * thunder: the routes were commented out, so DAPM never powered "SPKR DRV" and the
++ * amplifier only followed the "Sia81xx Power" control. With them, the machine driver
++ * connects IN to the codec lineout and the amplifier follows the playback stream.
++ */
++static const struct snd_soc_dapm_route sia81xx_audio_map[] = {
+ 	{"SPKR DRV", NULL, "IN"},
+ 	{"SPKR", NULL, "SPKR DRV"}
+-};*/
++};
+ 
+ #if (LINUX_VERSION_CODE > KERNEL_VERSION(4, 16, 28))
+ static int sia81xx_component_probe(
+@@ -1657,8 +1662,8 @@
+ 	.num_controls = ARRAY_SIZE(sia81xx_controls),
+ 	.dapm_widgets = sia81xx_dapm_widgets,
+ 	.num_dapm_widgets = ARRAY_SIZE(sia81xx_dapm_widgets),
+-	.dapm_routes = NULL, //sia81xx_audio_map,
+-	.num_dapm_routes = 0,//ARRAY_SIZE(sia81xx_audio_map),
++	.dapm_routes = sia81xx_audio_map,
++	.num_dapm_routes = ARRAY_SIZE(sia81xx_audio_map),
+ };
+ #elif (LINUX_VERSION_CODE > KERNEL_VERSION(4, 8, 17) && LINUX_VERSION_CODE <= KERNEL_VERSION(4, 16, 28))
+ static struct snd_soc_codec_driver soc_codec_dev_sia81xx = {
+--- a/sound/soc/mediatek/mt6833/mt6833-mt6359.c
++++ b/sound/soc/mediatek/mt6833/mt6833-mt6359.c
+@@ -1015,6 +1015,33 @@
+ #endif
+ };
+ 
++/*
++ * thunder: feed each sia81xx amplifier from the codec lineout, so DAPM powers it
++ * with the playback stream through "LOL Mux" and powers it down after. The aux
++ * devices and their name prefixes come from the DT; a variant without sia81xx
++ * has none, and nothing is added.
++ */
++static int mt6833_mt6359_late_probe(struct snd_soc_card *card)
++{
++	struct snd_soc_dapm_route route = { .source = "LINEOUT L" };
++	char sink[64];
++	int i, ret;
++
++	for (i = 0; i < card->num_configs; i++) {
++		const char *prefix = card->codec_conf[i].name_prefix;
++
++		if (!prefix)
++			continue;
++		snprintf(sink, sizeof(sink), "%s IN", prefix);
++		route.sink = sink;
++		ret = snd_soc_dapm_add_routes(&card->dapm, &route, 1);
++		if (ret)
++			dev_warn(card->dev, "%s(), no route to %s: %d\n",
++				 __func__, sink, ret);
++	}
++	return 0;
++}
++
+ static struct snd_soc_card mt6833_mt6359_soc_card = {
+ 	.name = "mt6833-mt6359",
+ 	.owner = THIS_MODULE,
+@@ -1027,6 +1054,7 @@
+ 	.num_dapm_widgets = ARRAY_SIZE(mt6833_mt6359_widgets),
+ 	.dapm_routes = mt6833_mt6359_routes,
+ 	.num_dapm_routes = ARRAY_SIZE(mt6833_mt6359_routes),
++	.late_probe = mt6833_mt6359_late_probe,
+ };
+ 
+ static int mt6833_mt6359_dev_probe(struct platform_device *pdev)
