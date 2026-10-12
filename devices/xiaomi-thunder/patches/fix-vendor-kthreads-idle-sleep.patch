@@ -1,0 +1,202 @@
+--- a/kernel/time/timer.c
++++ b/kernel/time/timer.c
+@@ -2014,3 +2014,30 @@
+ 	}
+ }
+ EXPORT_SYMBOL(usleep_range);
++
++/*
++ * thunder: msleep()/usleep_range() in TASK_IDLE. Vendor kthreads sleep in a loop all the
++ * time; TASK_UNINTERRUPTIBLE counts them in the load average (~16 with an idle CPU).
++ * Same timing; usleep_idle_range() is mainline's (5.16), msleep_idle() is ours.
++ */
++void __sched usleep_idle_range(unsigned long min, unsigned long max)
++{
++	ktime_t exp = ktime_add_us(ktime_get(), min);
++	u64 delta = (u64)(max - min) * NSEC_PER_USEC;
++
++	for (;;) {
++		__set_current_state(TASK_IDLE);
++		if (!schedule_hrtimeout_range(&exp, delta, HRTIMER_MODE_ABS))
++			break;
++	}
++}
++EXPORT_SYMBOL(usleep_idle_range);
++
++void __sched msleep_idle(unsigned int msecs)
++{
++	unsigned long timeout = msecs_to_jiffies(msecs) + 1;
++
++	while (timeout)
++		timeout = schedule_timeout_idle(timeout);
++}
++EXPORT_SYMBOL(msleep_idle);
+--- a/include/linux/delay.h
++++ b/include/linux/delay.h
+@@ -58,6 +58,9 @@
+ void msleep(unsigned int msecs);
+ unsigned long msleep_interruptible(unsigned int msecs);
+ void usleep_range(unsigned long min, unsigned long max);
++/* thunder: same, in TASK_IDLE (out of the load average) */
++void usleep_idle_range(unsigned long min, unsigned long max);
++void msleep_idle(unsigned int msecs);
+ 
+ static inline void ssleep(unsigned int seconds)
+ {
+--- a/drivers/misc/mediatek/aee/hangdet/aee_hangdet.c
++++ b/drivers/misc/mediatek/aee/hangdet/aee_hangdet.c
+@@ -617,7 +617,8 @@
+ 			spin_unlock_bh(&lock);
+ 		}
+ 
+-		usleep_range(curInterval, curInterval + SOFT_KICK_RANGE);
++		/* thunder: TASK_IDLE, out of the load average */
++		usleep_idle_range(curInterval, curInterval + SOFT_KICK_RANGE);
+ 	}
+ 	pr_debug("[wdk] wdk thread stop, cpu:%d, pid:%d\n", cpu, current->pid);
+ 	return 0;
+--- a/drivers/power/supply/mediatek/misc/mtk_gauge_time_service.c
++++ b/drivers/power/supply/mediatek/misc/mtk_gauge_time_service.c
+@@ -257,7 +257,8 @@
+ 	struct timespec stime, endtime, duraction;
+ 
+ 	while (1) {
+-		wait_event(wait_que, (gtimer_thread_timeout == true));
++		/* thunder: TASK_IDLE, out of the load average */
++		wait_event_idle(wait_que, (gtimer_thread_timeout == true));
+ 		gtimer_thread_timeout = false;
+ 		get_monotonic_boottime(&stime);
+ 		mutex_gtimer_lock();
+--- a/drivers/misc/mediatek/pmic/mt6360/v1/pmu/mt6360_pmu_chg.c
++++ b/drivers/misc/mediatek/pmic/mt6360/v1/pmu/mt6360_pmu_chg.c
+@@ -2803,7 +2803,8 @@
+ 
+ 	dev_info(mpci->dev, "%s ++\n", __func__);
+ 	while (!kthread_should_stop()) {
+-		wait_event(mpci->waitq, atomic_read(&mpci->mivr_cnt) > 0);
++		/* thunder: TASK_IDLE, out of the load average */
++		wait_event_idle(mpci->waitq, atomic_read(&mpci->mivr_cnt) > 0);
+ 		mt_dbg(mpci->dev, "%s: enter mivr thread\n", __func__);
+ 		pm_stay_awake(mpci->dev);
+ 		/* check real mivr stat or not */
+@@ -2832,7 +2833,7 @@
+ 		pm_relax(mpci->dev);
+ 		atomic_set(&mpci->mivr_cnt, 0);
+ 		mt6360_pmu_chg_irq_enable("chg_mivr_evt", 1);
+-		msleep(200);
++		msleep_idle(200);
+ 	}
+ 	dev_info(mpci->dev, "%s --\n", __func__);
+ 	return 0;
+--- a/drivers/misc/mediatek/pmic/mt6359p/v1/pmic_auxadc.c
++++ b/drivers/misc/mediatek/pmic/mt6359p/v1/pmic_auxadc.c
+@@ -354,6 +354,13 @@
+ 	unsigned int rdy_time;
+ 	unsigned int temp_mdrt_adc;
+ 
++	/*
++	 * thunder: kthread_create() left this thread never started, in TASK_UNINTERRUPTIBLE
++	 * (load average) until the first MDRT stall. Started at init, it parks here instead.
++	 */
++	set_current_state(TASK_INTERRUPTIBLE);
++	schedule();
++
+ 	/* Run on a process content */
+ 	while (1) {
+ 		mutex_lock(&mdrt_mutex);
+@@ -404,8 +411,10 @@
+ 	if (IS_ERR(mdrt_thread_handle)) {
+ 		mdrt_thread_handle = NULL;
+ 		pr_notice(PMICTAG "[%s] creation fails\n", __func__);
+-	} else
++	} else {
++		wake_up_process(mdrt_thread_handle);	/* thunder: parks itself */
+ 		HKLOG("[%s] creation Done\n", __func__);
++	}
+ }
+ 
+ /*********************************
+--- a/drivers/misc/mediatek/monitor_hang/monitor_hang.c
++++ b/drivers/misc/mediatek/monitor_hang/monitor_hang.c
+@@ -1940,7 +1940,8 @@
+ 
+ 	sched_setscheduler(current, SCHED_FIFO, &param);
+ 	reset_hang_info();
+-	msleep(120 * 1000);
++	/* thunder: TASK_IDLE, out of the load average */
++	msleep_idle(120 * 1000);
+ 	pr_debug("[Hang_Detect] hang_detect thread starts.\n");
+ 
+ #ifdef BOOT_UP_HANG
+@@ -1999,7 +2000,7 @@
+ 			hang_detect_counter--;
+ 		}
+ 
+-		msleep((HD_INTER) * 1000);
++		msleep_idle((HD_INTER) * 1000);
+ 	}
+ 	return 0;
+ }
+--- a/drivers/misc/mediatek/eccci/fsm/ccci_fsm_poller.c
++++ b/drivers/misc/mediatek/eccci/fsm/ccci_fsm_poller.c
+@@ -93,7 +93,7 @@
+ 				CCCI_STATUS_TX, 0, 0, 1);
+ 		CCCI_NORMAL_LOG(poller_ctl->md_id, FSM,
+ 				"poll MD status send msg %d\n", ret);
+-		ret = wait_event_timeout(poller_ctl->status_rx_wq,
++		ret = wait_event_idle_timeout(poller_ctl->status_rx_wq,
+ 		poller_ctl->poller_state == FSM_POLLER_RECEIVED_RESPONSE,
+ 		POLLING_TIMEOUT * HZ);
+ 		CCCI_NORMAL_LOG(poller_ctl->md_id, FSM,
+@@ -123,7 +123,7 @@
+ 						break;
+ 					}
+ 					count++;
+-					msleep(200);
++					msleep_idle(200);
+ 				}
+ 				if (count) {
+ 					CCCI_ERROR_LOG(poller_ctl->md_id, FSM,
+@@ -136,7 +136,8 @@
+ 			}
+ 		}
+ next:
+-		msleep(POLLING_INTERVAL_TIME);
++		/* thunder: TASK_IDLE, out of the load average */
++		msleep_idle(POLLING_INTERVAL_TIME);
+ 	}
+ 	return 0;
+ }
+--- a/drivers/misc/mediatek/mddp/ctrl/mddp_ipc.c
++++ b/drivers/misc/mediatek/mddp/ctrl/mddp_ipc.c
+@@ -139,7 +139,8 @@
+ 			MDDP_C_LOG(MDDP_LL_WARN,
+ 					"%s: ipc_tty_port is invalid(%d)!\n",
+ 					__func__, mddp_ipc_tty_port_s);
+-			msleep(5000);
++			/* thunder: TASK_IDLE, out of the load average */
++			msleep_idle(5000);
+ 			continue;
+ 		}
+ 
+@@ -159,7 +160,7 @@
+ 					"%s: Failed to read TTY (%d), count(%d)!\n",
+ 					__func__,
+ 					mddp_ipc_tty_port_s, rx_count);
+-			msleep(1000);
++			msleep_idle(1000);
+ 			continue;
+ 		}
+ 	}
+--- a/drivers/gpu/drm/mediatek/mtk_disp_recovery.c
++++ b/drivers/gpu/drm/mediatek/mtk_disp_recovery.c
+@@ -570,7 +570,8 @@
+ 	}
+ 
+ 	while (1) {
+-		msleep(ESD_CHECK_PERIOD);
++		/* thunder: TASK_IDLE, out of the load average */
++		msleep_idle(ESD_CHECK_PERIOD);
+ 		ret = wait_event_interruptible(
+ 			esd_ctx->check_task_wq,
+ 			atomic_read(&esd_ctx->check_wakeup) &&

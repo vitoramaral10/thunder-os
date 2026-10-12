@@ -215,6 +215,15 @@ purpose: this 4.19.191 has at least six nf_tables bugs with public exploits reac
 an unprivileged user namespace; it needs a gate patch and fixes first
 (`build/research/pid1/kernel-config-plan.md`, revision rB).
 
+**fix-vendor-kthreads-idle-sleep.** Vendor kthreads that poll forever (`wdtk-0..7`,
+`gauge_timer_thr`, `mivr_thread`, `hang_detect`, `ccci_poll1`, `mddp_rx`, `disp_echk`) slept
+in `TASK_UNINTERRUPTIBLE`, which counts in the load average: an idle phone showed ~16.
+They now sleep in `TASK_IDLE`, which is not counted, with the same timing:
+`usleep_idle_range()` (mainline 5.16) and `msleep_idle()` (ours) in
+`kernel/time/timer.c`, `wait_event_idle()` and `wait_event_idle_timeout()`. `mdrt_thread` was
+created and never woken, so it sat in `kthread()`; it is now started at init and parks
+itself until the first MDRT stall. Measured: load 2.1 five minutes after boot.
+
 ## Connectivity graft
 
 The Wi-Fi, Bluetooth and WMT drivers are not in the Xiaomi tree for this SoC in a usable
