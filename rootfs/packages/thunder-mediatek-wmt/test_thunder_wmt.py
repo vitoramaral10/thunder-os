@@ -336,6 +336,186 @@ class WifiOnTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, t.EX_UNAVAILABLE)
 
 
+class BluetoothTest(unittest.TestCase):
+    ADDR = bytes.fromhex("1c77f6a1b2c3")      # ordem de exibicao, como na NVRAM
+
+    def test_config(self):
+        c = t.config_from_mapping(t.parse_config(
+            "WMT_BT_MODULES=btmtk_stp\nWMT_BT_ADDR=nvdata:/APCFG/APRDEB/BT_Addr\n"))
+        self.assertEqual(c.bt_modules, ("btmtk_stp",))
+        self.assertEqual(c.bt_addr, ("nvdata", "/APCFG/APRDEB/BT_Addr"))
+        self.assertIsNone(t.config_from_mapping({}).bt_addr)
+        with self.assertRaises(t.ConfigError) as cm:
+            t.config_from_mapping({"WMT_BT_ADDR": ["BT_Addr"]})
+        self.assertIn("WMT_BT_ADDR", str(cm.exception))
+
+    def test_addr_is_reversed_for_hci(self):
+        nv = bytes.fromhex("1c77f6a1b2c3") + b"\x00" * 4     # arquivo maior que 6 bytes
+        self.assertEqual(t.bt_addr_from_nvram(nv), bytes.fromhex("c3b2a1f6771c"))
+
+    def test_unset_addresses_are_refused(self):
+        for bad in (b"\x00" * 6, b"\xff" * 6, t.BT_PLACEHOLDER_ADDR, b"\x01" + b"\x22" * 5,
+                    b"\x1c\x77"):
+            with self.subTest(bad=bad.hex()), self.assertRaises(t.NvramError):
+                t.bt_addr_from_nvram(bad)
+
+    def test_set_public_address_packet(self):
+        pkt = t.mgmt_set_public_address(1, bytes(range(6)))
+        self.assertEqual(pkt, struct.pack("<HHH", 0x0039, 1, 6) + bytes(range(6)))
+        with self.assertRaises(ValueError):
+            t.mgmt_set_public_address(0, b"\x00" * 5)
+
+    def test_reply(self):
+        def ev(event, index, op, status, params=b""):
+            body = struct.pack("<HB", op, status) + params
+            return struct.pack("<HHH", event, index, len(body)) + body
+        self.assertEqual(t.mgmt_reply(ev(1, 0, 0x39, 0), 0, 0x39), (0, b""))
+        self.assertEqual(t.mgmt_reply(ev(2, 0, 0x39, 0x0d), 0, 0x39), (0x0d, b""))
+        self.assertEqual(t.mgmt_reply(ev(1, 0, 4, 0, b"abcdef") + b"lixo", 0, 4),
+                         (0, b"abcdef"))
+        self.assertIsNone(t.mgmt_reply(ev(1, 1, 0x39, 0), 0, 0x39))    # outro hci
+        self.assertIsNone(t.mgmt_reply(ev(1, 0, 0x05, 0), 0, 0x39))    # outro comando
+        self.assertIsNone(t.mgmt_reply(ev(0x0f, 0, 0x39, 0), 0, 0x39)) # outro evento
+        self.assertIsNone(t.mgmt_reply(b"\x01\x00", 0, 0x39))
+
+    def test_dev_info_flags(self):
+        info = struct.pack("<H8s6sI", 0, b"hci0", bytes(6), 0x5) + bytes(72)
+        self.assertEqual(len(info), t.HCI_DEV_INFO_SIZE)
+        self.assertEqual(t.hci_dev_info_flags(info), 5)
+        self.assertTrue(t.hci_dev_info_flags(info) & t.HCI_UP)
+        self.assertTrue(t.hci_dev_info_flags(info) & t.HCI_RUNNING)
+        self.assertEqual(t.HCIGETDEVINFO, 0x800448D3)     # _IOR('H', 211, int)
+        with self.assertRaises(ValueError):
+            t.hci_dev_info_flags(bytes(10))
+
+    def test_index_list(self):
+        self.assertEqual(t.mgmt_index_list(struct.pack("<HHH", 2, 0, 3)), [0, 3])
+        self.assertEqual(t.mgmt_index_list(struct.pack("<H", 0)), [])
+        self.assertEqual(t.mgmt_index_list(struct.pack("<HH", 2, 0)), [])    # truncado
+        self.assertEqual(t.mgmt_index_list(b""), [])
+
+    def test_hci_index(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(t.hci_index(d))
+            for n in ("hci1", "hci0:1", "rfkill0", "hci3"):
+                os.mkdir(os.path.join(d, n))
+            self.assertEqual(t.hci_index(d), 1)
+        self.assertIsNone(t.hci_index("/nonexistent"))
+
+    def test_bt_on_requires_connsys(self):
+        cfg = t.config_from_mapping({"WMT_BT_MODULES": ["btmtk_stp"]})
+        with mock.patch.object(t, "READY_MARK", "/nonexistent/ready"), \
+                mock.patch.object(t, "modprobe") as mp, self.assertRaises(t.Failure) as cm:
+            t.cmd_bt_on(cfg)
+        self.assertEqual(cm.exception.code, t.EX_UNAVAILABLE)
+        mp.assert_not_called()
+
+    def test_bt_on_unset_nvram_fails(self):
+        cfg = t.config_from_mapping({"WMT_BT_MODULES": ["btmtk_stp"],
+                                     "WMT_BT_ADDR": ["nvdata:/APCFG/APRDEB/BT_Addr"]})
+        with tempfile.NamedTemporaryFile() as ready, \
+                mock.patch.object(t, "READY_MARK", ready.name), \
+                mock.patch.object(t, "modprobe"), \
+                mock.patch.object(t, "hci_index", return_value=0), \
+                mock.patch.object(t, "read_partition_file", return_value=b"\x00" * 6), \
+                mock.patch.object(t, "Mgmt") as mg, self.assertRaises(t.Failure) as cm:
+            t.cmd_bt_on(cfg)
+        self.assertEqual(cm.exception.code, t.EX_NOINPUT)
+        mg.assert_not_called()
+
+    def test_bt_on_refused_address_fails(self):
+        cfg = t.config_from_mapping({"WMT_BT_MODULES": ["btmtk_stp"],
+                                     "WMT_BT_ADDR": ["nvdata:/APCFG/APRDEB/BT_Addr"]})
+        with tempfile.NamedTemporaryFile() as ready, \
+                mock.patch.object(t, "READY_MARK", ready.name), \
+                mock.patch.object(t, "modprobe"), \
+                mock.patch.object(t, "hci_index", return_value=0), \
+                mock.patch.object(t, "read_partition_file", return_value=self.ADDR), \
+                mock.patch.object(t, "wait_controller"), \
+                mock.patch.object(t, "wait_down"), \
+                mock.patch.object(t, "wait_address") as wa, \
+                mock.patch.object(t, "Mgmt") as mg, \
+                self.assertRaises(t.Failure) as cm:
+            mg.return_value.command.return_value = (t.MGMT_STATUS_REJECTED, b"")
+            t.cmd_bt_on(cfg)
+        self.assertEqual(cm.exception.code, t.EX_IOERR)
+        op, index, params = mg.return_value.command.call_args[0]
+        self.assertEqual((op, index, params), (0x39, 0, self.ADDR[::-1]))
+        wa.assert_not_called()
+        mg.return_value.close.assert_called_once()
+
+    def test_bt_on_waits_for_the_address(self):
+        cfg = t.config_from_mapping({"WMT_BT_MODULES": ["btmtk_stp"],
+                                     "WMT_BT_ADDR": ["nvdata:/APCFG/APRDEB/BT_Addr"]})
+        with tempfile.NamedTemporaryFile() as ready, \
+                mock.patch.object(t, "READY_MARK", ready.name), \
+                mock.patch.object(t, "modprobe"), \
+                mock.patch.object(t, "hci_index", return_value=0), \
+                mock.patch.object(t, "read_partition_file", return_value=self.ADDR), \
+                mock.patch.object(t, "wait_controller") as wc, \
+                mock.patch.object(t, "wait_down") as wd, \
+                mock.patch.object(t, "wait_address") as wa, \
+                mock.patch.object(t, "Mgmt") as mg:
+            mg.return_value.command.return_value = (0, b"")
+            self.assertEqual(t.cmd_bt_on(cfg), t.EX_OK)
+        wc.assert_called_once()
+        wd.assert_called_once()
+        self.assertEqual(wa.call_args[0][2], self.ADDR[::-1])
+
+    def test_wait_address_accepts_only_the_new_address(self):
+        m = mock.Mock()
+        new = self.ADDR[::-1]
+        m.command.side_effect = [(t.MGMT_STATUS_INVALID_INDEX, b""), (0, bytes(6) + b"x"),
+                                 (0, new + b"rest")]
+        with mock.patch.object(t.time, "sleep"):
+            t.wait_address(m, 0, new, t.time.monotonic() + 60)
+        self.assertEqual(m.command.call_count, 3)
+        m.command.side_effect = [(0, bytes(6))]
+        self.assertFalse(t.wait_address(m, 0, new, t.time.monotonic() - 1))
+        m.command.side_effect = [(t.MGMT_STATUS_INVALID_INDEX, b"")]
+        with self.assertRaises(t.Failure):
+            t.wait_address(m, 0, new, t.time.monotonic() - 1)
+
+    def test_bt_on_power_cycles_until_the_address_sticks(self):
+        cfg = t.config_from_mapping({"WMT_BT_MODULES": ["btmtk_stp"],
+                                     "WMT_BT_ADDR": ["nvdata:/APCFG/APRDEB/BT_Addr"]})
+        with tempfile.NamedTemporaryFile() as ready, \
+                mock.patch.object(t, "READY_MARK", ready.name), \
+                mock.patch.object(t, "modprobe"), \
+                mock.patch.object(t, "hci_index", return_value=0), \
+                mock.patch.object(t, "read_partition_file", return_value=self.ADDR), \
+                mock.patch.object(t, "wait_controller"), \
+                mock.patch.object(t, "wait_down"), \
+                mock.patch.object(t, "wait_address", return_value=False), \
+                mock.patch.object(t, "power_cycle_address", side_effect=[False, True]) as pc, \
+                mock.patch.object(t, "Mgmt") as mg:
+            mg.return_value.command.return_value = (0, b"")
+            self.assertEqual(t.cmd_bt_on(cfg), t.EX_OK)
+        self.assertEqual(pc.call_count, 2)
+        with tempfile.NamedTemporaryFile() as ready, \
+                mock.patch.object(t, "READY_MARK", ready.name), \
+                mock.patch.object(t, "modprobe"), \
+                mock.patch.object(t, "hci_index", return_value=0), \
+                mock.patch.object(t, "read_partition_file", return_value=self.ADDR), \
+                mock.patch.object(t, "wait_controller"), \
+                mock.patch.object(t, "wait_down"), \
+                mock.patch.object(t, "wait_address", return_value=False), \
+                mock.patch.object(t, "power_cycle_address", return_value=False), \
+                mock.patch.object(t, "Mgmt") as mg, self.assertRaises(t.Failure) as cm:
+            mg.return_value.command.return_value = (0, b"")
+            t.cmd_bt_on(cfg)
+        self.assertEqual(cm.exception.code, t.EX_IOERR)
+
+    def test_power_cycle_counts_a_failed_power_on_as_a_miss(self):
+        m = mock.Mock()
+        m.command.side_effect = [(0x03, b""), (0, b"")]
+        self.assertFalse(t.power_cycle_address(m, 0, self.ADDR[::-1]))
+        self.assertEqual(m.command.call_count, 1)
+        m.command.side_effect = [(0, b""), (0, self.ADDR[::-1] + b"rest"), (0, b"")]
+        self.assertTrue(t.power_cycle_address(m, 0, self.ADDR[::-1]))
+        self.assertEqual(m.command.call_args[0][2], b"\x00")
+
+
 @unittest.skipUnless(sys.platform.startswith("linux"), "ethtool ioctl")
 class EthtoolTest(unittest.TestCase):
     def test_loopback_has_zero_permanent_address(self):

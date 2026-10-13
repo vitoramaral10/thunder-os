@@ -495,10 +495,9 @@ go-ahead.
      1); record whether Wi-Fi dropped.
   If association fails in any of these, the restart paths stay documented as
   unverified (or unsupported) and the radio is only recovered by reboot.
-- **T5, Bluetooth depends on CONNSYS, not on Wi-Fi.** With the edited
-  `bluetooth-thunder.service` installed by hand and the Wi-Fi unit stopped,
-  `hci0` appears and `systemctl list-dependencies bluetooth-thunder` shows only
-  `thunder-wmt-connsys`.
+- **T5, Bluetooth depends on CONNSYS, not on Wi-Fi.** With the Wi-Fi unit stopped,
+  `thunder-wmt-bt` still brings up `hci0`, and
+  `systemctl list-dependencies thunder-wmt-bt` shows only `thunder-wmt-connsys`.
 - **T6, shutdown.** After a reboot, the previous boot's journal shows
   `Wi-Fi off` before `launcher stopping`, and SSH returns in the usual time.
 - **T7, rollback.** `disable --now` the two units, re-enable the old unit

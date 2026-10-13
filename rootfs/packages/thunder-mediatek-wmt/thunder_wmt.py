@@ -9,11 +9,15 @@ Faz o papel de tres servicos do Android, na ordem do init deles:
   wlan_assistant  entrega a NVRAM de fabrica do Wi-Fi (MAC e calibracao de RF) ao driver,
                   antes do primeiro power-on
 
+e, no lugar da pilha de Bluetooth do Android, sobe o driver HCI do kernel (btmtk_stp,
+BlueZ) e grava nele o endereco de fabrica do BT.
+
 Comandos (um por unit do systemd):
 
   thunder-wmt connsys    loader + launcher residente (Type=notify; SIGTERM encerra)
   thunder-wmt wifi-on    modulos do Wi-Fi, NVRAM, power-on, espera a interface
   thunder-wmt wifi-off   power-off do Wi-Fi (nao le a configuracao: e o ExecStop)
+  thunder-wmt bt-on      modulo HCI do BT, endereco de fabrica pelo mgmt do BlueZ
   thunder-wmt nvram-check  so le e valida a NVRAM, sem tocar no driver (diagnostico)
 
 Configuracao: /etc/thunder/wmt.conf (gerado pelo rootfs/configure.sh a partir das WMT_*
@@ -50,7 +54,8 @@ EX_UNAVAILABLE = 69  # o driver nao subiu: no de dispositivo ausente, DO_MODULE_
 EX_SOFTWARE = 70     # bug nosso
 EX_OSERR = 71        # modprobe falhou, ou o marcador de pronto nao foi gravado
 EX_OSFILE = 72       # ROM patch ausente ou com cabecalho invalido
-EX_IOERR = 74        # power-on/off do Wi-Fi falhou ou a interface nao apareceu
+EX_IOERR = 74        # power-on/off do Wi-Fi falhou, a interface nao apareceu, ou o
+                     # controlador BT recusou o endereco
 EX_PROTOCOL = 76     # o driver recusou um ioctl do launcher
 EX_CONFIG = 78       # /etc/thunder/wmt.conf ausente ou invalido
 
@@ -68,6 +73,9 @@ DEV_WIFI = "/dev/wmtWifi"       # wmt_chrdev_wifi, no load do modulo
 NODE_TIMEOUT = 5.0
 # A interface nasce no probe do gen4m, dentro do write("1"); espera curta.
 IFACE_TIMEOUT = 10.0
+# Registro do hci_dev no load do btmtk_stp (o power-on do BT fica com o bluetoothd).
+HCI_TIMEOUT = 10.0
+SYS_BLUETOOTH = "/sys/class/bluetooth"
 # Um chip reset inteiro em andamento faz o driver recusar operacoes com EIO
 # (wmt_lib_put_act_op, wmt_lib.c:1623-1627). O driver nao expoe esse estado em sysfs/proc,
 # entao nao ha sinal para consultar: uma unica nova tentativa depois de uma pausa curta.
@@ -106,6 +114,38 @@ DRIVER_FALLBACK_OUI = b"\x00\x08\x22"   # wlanUpdateNetworkAddress: 00:08:22 + s
 # --- ethtool (MAC permanente: o gen4m copia o MAC do probe em perm_addr) ------------
 SIOCETHTOOL = 0x8946
 ETHTOOL_GPERMADDR = 0x20
+
+# mgmt do BlueZ (doc/mgmt-api.txt): socket HCI no canal de controle.
+BTPROTO_HCI = 1
+HCI_CHANNEL_CONTROL = 3
+MGMT_INDEX_NONE = 0xFFFF
+# ioctl HCIGETDEVINFO (hci_sock.h): struct hci_dev_info, flags em 16 (dev_id, name[8],
+# bdaddr[6] antes). HCI_UP (bit 0) vem mascarado enquanto HCI_AUTO_OFF esta ativo
+# (hci_get_dev_info); HCI_RUNNING (bit 2) nao: sobe no hci_dev_do_open e cai no close.
+HCIGETDEVINFO = _ioc(_IOC_READ, ord("H"), 211, 4)
+HCI_DEV_INFO_SIZE = 92
+HCI_DEV_INFO_FLAGS = 16
+HCI_UP = 1 << 0
+HCI_RUNNING = 1 << 2
+MGMT_OP_READ_INDEX_LIST = 0x0003
+MGMT_OP_READ_INFO = 0x0004
+MGMT_OP_SET_POWERED = 0x0005
+MGMT_OP_SET_PUBLIC_ADDRESS = 0x0039
+MGMT_EV_CMD_COMPLETE = 0x0001
+MGMT_EV_CMD_STATUS = 0x0002
+MGMT_STATUS_REJECTED = 0x0b
+MGMT_STATUS_INVALID_INDEX = 0x11
+MGMT_HDR = struct.Struct("<HHH")       # opcode/evento, indice do controlador, tamanho
+MGMT_TIMEOUT = 5.0
+# Setup do controlador (power-on do BT pelo WMT, firmware, init do HCI) e a reconfiguracao
+# depois do Set Public Address. Leva ~4 s; no pior caso a gravacao do endereco no driver
+# esgota tres tentativas de tres comandos de 2 s (18 s) antes de o power-on terminar.
+BT_SETUP_TIMEOUT = 40.0
+# Tentativas de gravar o endereco: a do Set Public Address e mais duas por power-on.
+BT_ADDR_ATTEMPTS = 3
+# Endereco que o controlador da MediaTek traz quando ninguem gravou nada (igual em todo
+# aparelho): na NVRAM ele quer dizer "nao gravado".
+BT_PLACEHOLDER_ADDR = bytes.fromhex("000046676101")
 
 _NAME = re.compile(r"[A-Za-z0-9_.+-]+\Z")
 _KEY = re.compile(r"[A-Z][A-Z0-9_]*\Z")
@@ -174,11 +214,11 @@ def parse_config(text: str) -> dict[str, list[str]]:
     return out
 
 
-def parse_nvram_spec(spec: str) -> tuple[str, str]:
+def parse_nvram_spec(spec: str, key: str = "WMT_WIFI_NVRAM") -> tuple[str, str]:
     """'<partlabel>:<caminho absoluto no ext4>' -> (partlabel, caminho)."""
     label, sep, path = spec.partition(":")
     if not sep or not _NAME.match(label) or not path.startswith("/") or "//" in path:
-        raise ConfigError(f"WMT_WIFI_NVRAM: expected <partlabel>:/path, got {spec!r}")
+        raise ConfigError(f"{key}: expected <partlabel>:/path, got {spec!r}")
     return label, path
 
 
@@ -191,6 +231,8 @@ class Config:
     wifi_modules: tuple[str, ...]
     wifi_interface: str
     wifi_nvram: tuple[str, str] | None
+    bt_modules: tuple[str, ...] = ()
+    bt_addr: tuple[str, str] | None = None
 
 
 def config_from_mapping(m: dict[str, list[str]]) -> Config:
@@ -222,6 +264,7 @@ def config_from_mapping(m: dict[str, list[str]]) -> Config:
     if iface and (not _NAME.match(iface) or len(iface) > 15):
         raise ConfigError(f"WMT_WIFI_INTERFACE: invalid interface name {iface!r}")
     nv = scalar("WMT_WIFI_NVRAM", "")
+    bt_addr = scalar("WMT_BT_ADDR", "")
     return Config(
         core_modules=names("WMT_CORE_MODULES"),
         rom_patches=names("WMT_ROM_PATCHES"),
@@ -229,7 +272,9 @@ def config_from_mapping(m: dict[str, list[str]]) -> Config:
         firmware_dir=fw.rstrip("/") or "/",
         wifi_modules=names("WMT_WIFI_MODULES"),
         wifi_interface=iface,
-        wifi_nvram=parse_nvram_spec(nv) if nv else None,
+        wifi_nvram=parse_nvram_spec(nv, "WMT_WIFI_NVRAM") if nv else None,
+        bt_modules=names("WMT_BT_MODULES"),
+        bt_addr=parse_nvram_spec(bt_addr, "WMT_BT_ADDR") if bt_addr else None,
     )
 
 
@@ -339,6 +384,73 @@ def nvram_outcome(expected: bytes, permanent: bytes) -> tuple[int, str]:
                              "not sent to the firmware)")
     return LOG_WARNING, (f"{VERDICT}not applied (the interface MAC is neither the factory nor "
                          "the driver fallback MAC)")
+
+
+# --- endereco do Bluetooth (funcoes puras) -----------------------------------------
+def bt_addr_from_nvram(data: bytes) -> bytes:
+    """BT_Addr da NVRAM (6 bytes na ordem de exibicao) -> bdaddr do HCI (LSB primeiro).
+    A ordem foi medida no aparelho: gravado invertido, o Read_BD_ADDR devolve exatamente o
+    que esta na NVRAM (docs/bluetooth-bringup.md)."""
+    if len(data) < 6:
+        raise NvramError(f"BT address of {len(data)} bytes (want 6)")
+    addr = bytes(data[:6])
+    if addr in (b"\x00" * 6, b"\xff" * 6, BT_PLACEHOLDER_ADDR):
+        raise NvramError("BT address in NVRAM is unset (zero, ff or the MediaTek placeholder)")
+    if addr[0] & 1:
+        raise NvramError("BT address in NVRAM is a multicast address")
+    return addr[::-1]
+
+
+def mgmt_packet(opcode: int, index: int, params: bytes = b"") -> bytes:
+    return MGMT_HDR.pack(opcode, index, len(params)) + params
+
+
+def mgmt_set_public_address(index: int, bdaddr: bytes) -> bytes:
+    """Comando mgmt Set Public Address (bdaddr LSB primeiro, como no HCI)."""
+    if len(bdaddr) != 6:
+        raise ValueError("bdaddr must be 6 bytes")
+    return mgmt_packet(MGMT_OP_SET_PUBLIC_ADDRESS, index, bdaddr)
+
+
+def mgmt_reply(packet: bytes, index: int, opcode: int) -> tuple[int, bytes] | None:
+    """(status, parametros de retorno) da resposta a 'opcode' no controlador 'index';
+    None se o pacote e outro evento (o canal de controle tambem entrega eventos que nao
+    pedimos)."""
+    if len(packet) < MGMT_HDR.size + 3:
+        return None
+    event, idx, plen = MGMT_HDR.unpack_from(packet)
+    if event not in (MGMT_EV_CMD_COMPLETE, MGMT_EV_CMD_STATUS) or idx != index:
+        return None
+    op, status = struct.unpack_from("<HB", packet, MGMT_HDR.size)
+    if op != opcode:
+        return None
+    end = MGMT_HDR.size + plen
+    return status, bytes(packet[MGMT_HDR.size + 3:end])
+
+
+def hci_dev_info_flags(info: bytes) -> int:
+    """flags de um struct hci_dev_info devolvido pelo HCIGETDEVINFO."""
+    if len(info) < HCI_DEV_INFO_FLAGS + 4:
+        raise ValueError("short hci_dev_info")
+    return struct.unpack_from("<I", info, HCI_DEV_INFO_FLAGS)[0]
+
+
+def mgmt_index_list(params: bytes) -> list[int]:
+    """Read Controller Index List: num (2 bytes) e os indices."""
+    if len(params) < 2:
+        return []
+    (num,) = struct.unpack_from("<H", params)
+    return list(struct.unpack_from(f"<{num}H", params, 2)) if len(params) >= 2 + 2 * num else []
+
+
+def hci_index(sys_bluetooth: str = SYS_BLUETOOTH) -> int | None:
+    """Indice do primeiro controlador hciN registrado, ou None."""
+    try:
+        names = os.listdir(sys_bluetooth)
+    except OSError:
+        return None
+    idx = sorted(int(n[3:]) for n in names if re.fullmatch(r"hci[0-9]+", n))
+    return idx[0] if idx else None
 
 
 # --- utilitarios de sistema ---------------------------------------------------------
@@ -567,8 +679,8 @@ def find_partition(label: str, sys_block: str = "/sys/class/block",
     return found[0]
 
 
-def read_nvram(spec: tuple[str, str], sys_block: str = "/sys/class/block",
-               dev_dir: str = "/dev") -> bytes:
+def read_partition_file(spec: tuple[str, str], sys_block: str = "/sys/class/block",
+                        dev_dir: str = "/dev") -> bytes:
     """Le o arquivo do ext4 da particao sem montar (debugfs abre so leitura sem -w, e
     aqui nunca se passa -w): nada de mount, de replay de journal nem de copia da
     calibracao em disco."""
@@ -586,8 +698,15 @@ def read_nvram(spec: tuple[str, str], sys_block: str = "/sys/class/block",
     if r.returncode != 0 or not r.stdout:
         err = r.stderr.decode(errors="replace").strip().splitlines()
         raise NvramError(f"cannot read {label}:{path} ({err[-1] if err else 'empty output'})")
-    validate_nvram(r.stdout)
     return r.stdout
+
+
+def read_nvram(spec: tuple[str, str], sys_block: str = "/sys/class/block",
+               dev_dir: str = "/dev") -> bytes:
+    """NVRAM do Wi-Fi: o arquivo da particao, validado."""
+    data = read_partition_file(spec, sys_block, dev_dir)
+    validate_nvram(data)
+    return data
 
 
 def push_nvram(data: bytes) -> None:
@@ -724,11 +843,174 @@ def cmd_nvram_check(cfg: Config) -> int:
     return EX_OK
 
 
+# --- Bluetooth -------------------------------------------------------------------------
+class Mgmt:
+    """Canal de controle do BlueZ (mgmt) no kernel."""
+
+    def __init__(self) -> None:
+        self.sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW | socket.SOCK_CLOEXEC,
+                                  BTPROTO_HCI)
+        try:
+            self.sock.bind((MGMT_INDEX_NONE, HCI_CHANNEL_CONTROL))
+        except OSError:
+            self.sock.close()
+            raise
+
+    def close(self) -> None:
+        self.sock.close()
+
+    def command(self, opcode: int, index: int, params: bytes = b"",
+                timeout: float = MGMT_TIMEOUT) -> tuple[int, bytes]:
+        self.sock.send(mgmt_packet(opcode, index, params))
+        deadline = time.monotonic() + timeout
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise Failure(EX_IOERR, f"mgmt: no reply to opcode {opcode:#06x} "
+                                        f"within {timeout:g} s")
+            ready, _, _ = select.select([self.sock], [], [], left)
+            if ready:
+                reply = mgmt_reply(self.sock.recv(1024), index, opcode)
+                if reply is not None:
+                    return reply
+
+
+def wait_controller(mgmt: Mgmt, index: int, deadline: float) -> None:
+    """O hciN aparece no sysfs no hci_register_dev(), antes do setup; o mgmt so o lista
+    (Index Added) depois do setup e da configuracao, e antes disso recusa os comandos."""
+    while True:
+        status, params = mgmt.command(MGMT_OP_READ_INDEX_LIST, MGMT_INDEX_NONE)
+        if status == 0 and index in mgmt_index_list(params):
+            return
+        if time.monotonic() >= deadline:
+            raise Failure(EX_UNAVAILABLE, f"hci{index} did not finish its setup within "
+                                          f"{BT_SETUP_TIMEOUT:g} s (see the kernel log)")
+        time.sleep(0.2)
+
+
+def hci_is_running(index: int) -> bool:
+    s = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW | socket.SOCK_CLOEXEC, BTPROTO_HCI)
+    try:
+        buf = bytearray(HCI_DEV_INFO_SIZE)
+        struct.pack_into("<H", buf, 0, index)
+        fcntl.ioctl(s, HCIGETDEVINFO, buf)
+    finally:
+        s.close()
+    return bool(hci_dev_info_flags(buf) & HCI_RUNNING)
+
+
+def wait_down(index: int, deadline: float) -> None:
+    """Depois do setup o kernel deixa o controlador ligado por 2 s (HCI_AUTO_OFF) e o mgmt
+    ja o trata como desligado. Um Set Public Address nessa janela marca HCI_CONFIG, mas o
+    hci_power_on() do 4.19 ve HCI_UP e so liga pelo mgmt, sem reabrir: a configuracao
+    nunca roda e o indice some do mgmt ate o reboot. Espera o transporte fechar: o
+    HCI_UP vem mascarado nessa janela, o HCI_RUNNING nao."""
+    while hci_is_running(index):
+        if time.monotonic() >= deadline:
+            raise Failure(EX_UNAVAILABLE, f"hci{index} still up {BT_SETUP_TIMEOUT:g} s after "
+                                          "its setup (something powered it on?)")
+        time.sleep(0.2)
+
+
+def wait_address(mgmt: Mgmt, index: int, bdaddr: bytes, deadline: float) -> bool:
+    """Set Public Address responde antes de o kernel religar o controlador e gravar o
+    endereco: confirma pelo Read Controller Information, que traz o Read_BD_ADDR. False se
+    o controlador voltou ao mgmt com outro endereco (o driver nao derruba o power-on quando
+    a gravacao falha); erro se ele nao voltou."""
+    while True:
+        status, params = mgmt.command(MGMT_OP_READ_INFO, index)
+        if status == 0 and params[:6] == bdaddr:
+            return True
+        if status not in (0, MGMT_STATUS_INVALID_INDEX):
+            raise Failure(EX_IOERR, f"hci{index}: Read Controller Information failed "
+                                    f"(mgmt status {status:#04x})")
+        if time.monotonic() >= deadline:
+            if status == 0:
+                return False
+            raise Failure(EX_IOERR, f"hci{index} did not come back to mgmt within "
+                                    f"{BT_SETUP_TIMEOUT:g} s after the address change "
+                                    "(see the kernel log)")
+        time.sleep(0.2)
+
+
+def power_cycle_address(mgmt: Mgmt, index: int, bdaddr: bytes) -> bool:
+    """Liga e desliga o controlador pelo mgmt: o setup() do driver roda a cada abertura e
+    grava o endereco de novo, e um power-on em que a gravacao falha falha inteiro. True se,
+    ligado, ele devolveu o endereco de fabrica."""
+    status, _ = mgmt.command(MGMT_OP_SET_POWERED, index, b"\x01", timeout=BT_SETUP_TIMEOUT)
+    if status:
+        log(LOG_WARNING, f"hci{index}: power on failed (mgmt status {status:#04x})")
+        return False
+    try:
+        status, params = mgmt.command(MGMT_OP_READ_INFO, index)
+        return status == 0 and params[:6] == bdaddr
+    finally:
+        mgmt.command(MGMT_OP_SET_POWERED, index, b"\x00", timeout=BT_SETUP_TIMEOUT)
+
+
+def cmd_bt_on(cfg: Config) -> int:
+    if not cfg.bt_modules:
+        raise Failure(EX_CONFIG, "WMT_BT_MODULES must be set")
+    if not os.path.exists(READY_MARK):
+        raise Failure(EX_UNAVAILABLE, "thunder-wmt-connsys is not ready "
+                                      f"({READY_MARK} absent): see its journal")
+    modprobe(cfg.bt_modules)
+    deadline = time.monotonic() + HCI_TIMEOUT
+    while (index := hci_index()) is None:
+        if time.monotonic() >= deadline:
+            raise Failure(EX_UNAVAILABLE, f"no hci device within {HCI_TIMEOUT:g} s "
+                                          f"after loading {' '.join(cfg.bt_modules)}")
+        time.sleep(POLL_STEP)
+    if cfg.bt_addr is None:
+        log(LOG_NOTICE, f"hci{index} registered; WMT_BT_ADDR is empty: it keeps the MediaTek "
+                        "placeholder address, the same on every unit")
+        return EX_OK
+    # Sem o endereco de fabrica a unit falha, e o bluetooth.service, que depende dela, nao
+    # sobe: o endereco provisorio e o mesmo em todo aparelho.
+    try:
+        bdaddr = bt_addr_from_nvram(read_partition_file(cfg.bt_addr))
+    except NvramError as e:
+        raise Failure(EX_NOINPUT, f"no factory BT address ({e}); Bluetooth stays off "
+                                  "rather than use the MediaTek placeholder") from None
+    mgmt = Mgmt()
+    try:
+        deadline = time.monotonic() + BT_SETUP_TIMEOUT
+        wait_controller(mgmt, index, deadline)
+        wait_down(index, deadline)
+        status, _ = mgmt.command(MGMT_OP_SET_PUBLIC_ADDRESS, index, bdaddr)
+        if status == MGMT_STATUS_REJECTED:
+            raise Failure(EX_IOERR, f"hci{index} is powered: Set Public Address needs it off "
+                                    "(this unit runs before bluetooth.service)")
+        if status:
+            raise Failure(EX_IOERR, f"hci{index}: Set Public Address refused (mgmt status "
+                                    f"{status:#04x})")
+        # O driver regrava o endereco a cada power-on (setup do HCI): vale para os
+        # power-on do bluetoothd e para o reset do CONNSYS.
+        ok = wait_address(mgmt, index, bdaddr, time.monotonic() + BT_SETUP_TIMEOUT)
+        for attempt in range(2, BT_ADDR_ATTEMPTS + 1):
+            if ok:
+                break
+            log(LOG_WARNING, f"hci{index}: factory address not taken; power cycle "
+                             f"{attempt} of {BT_ADDR_ATTEMPTS}")
+            wait_down(index, time.monotonic() + BT_SETUP_TIMEOUT)
+            ok = power_cycle_address(mgmt, index, bdaddr)
+        if not ok:
+            raise Failure(EX_IOERR, f"hci{index}: the controller did not take the factory "
+                                    f"address after {BT_ADDR_ATTEMPTS} attempts (vendor "
+                                    "command 0xfc1a, see the kernel log)")
+    finally:
+        mgmt.close()
+    # Sem o endereco no log: o journal pode ir para relatorio.
+    log(LOG_INFO, f"hci{index}: factory address set and read back")
+    return EX_OK
+
+
 COMMANDS = {
     "connsys": cmd_connsys,
     "wifi-on": cmd_wifi_on,
     "wifi-off": cmd_wifi_off,
     "nvram-check": cmd_nvram_check,
+    "bt-on": cmd_bt_on,
 }
 
 

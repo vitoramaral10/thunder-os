@@ -48,3 +48,5 @@ fix-sia81xx-speaker-amp-dapm.patch
 fix-mt6359-vow-enable-stuck.patch
 fix-mt6833-afe-no-s32.patch
 add-accdet-alsa-jack.patch
+# thunder Bluetooth: driver HCI sobre o STP (docs/bluetooth-bringup.md)
+add-btmtk-stp-hci-driver.patch

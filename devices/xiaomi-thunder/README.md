@@ -22,7 +22,7 @@ and MediaTek never published a newer BSP.
 | Touchscreen | works | wake service included | needs the Novatek firmware from your phone |
 | GPU (Mali-G57) | works | not wired | panfrost backported to 4.19, see [docs/gpu-bringup.md](docs/gpu-bringup.md) |
 | Wi-Fi | works | works | gen4m stack rebuilt for MT6833, 2.4 and 5 GHz; connects from the installer or `thunder-wifi`, see [docs/wifi-bringup.md](docs/wifi-bringup.md) |
-| Bluetooth | works | not wired | BR/EDR and LE, no audio yet, see [docs/bluetooth-bringup.md](docs/bluetooth-bringup.md) |
+| Bluetooth | works | works | BlueZ through the `btmtk_stp` HCI driver, factory address; BR/EDR and LE, no audio yet, see [docs/bluetooth-bringup.md](docs/bluetooth-bringup.md) |
 | Battery and charging | works | — | fuel gauge algorithm runs in the kernel |
 | Sensors | works | not wired | light, accelerometer, proximity as IIO, see [docs/sensors.md](docs/sensors.md) |
 | Audio | works | works | speaker and internal mic through PipeWire (UCM); headphones without jack detection, no earpiece yet, see [docs/audio.md](docs/audio.md) |
@@ -69,6 +69,5 @@ patches/         kernel patches, applied in patches/series order
 connectivity/    MediaTek Wi-Fi/BT driver source grafted over the kernel
 overlay/         files added to the rootfs: touchscreen-wake rule, NetworkManager and
                  sleep policy (Wi-Fi/BT bring-up is the thunder-mediatek-wmt package)
-bluetooth/       Bluetooth bring-up (`bluetooth-thunder.service`), not in the image yet
 docs/            kernel catalogue, firmware, hardware bring-up write-ups
 ```

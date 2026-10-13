@@ -9,10 +9,11 @@ BT driver needs are already exported by the loaded `wmt_drv`.
 What was missing was everything *above* the radio, and it was missing in two
 independent places.
 
-**Status under Arch Linux ARM.** Every result here was measured on this kernel
-with the previous userland. The Arch image boots, but the unit in
-`devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service` is not yet installed or enabled in the
-Arch image (it also needs python3).
+**Status under Arch Linux ARM (2026-10-12).** Bluetooth is in the image and comes up at
+boot: the `btmtk_stp` kernel driver registers `hci0` with BlueZ, `thunder-wmt-bt`
+programs the factory address, and `bluetooth.service` (bluez) runs on top. The
+earlier userspace bridge (`stpbt-vhci-bridge.py` over `hci_vhci`) is gone; what it
+taught is kept below, because the driver repeats it.
 
 ## Two holes, and neither is the chip
 
@@ -59,35 +60,38 @@ that do not exist here). It ships inside
 `devices/xiaomi-thunder/connectivity/mtk-connectivity-gen4m-mt6833-2.tar.gz` and is grafted by
 `tools/build-kernel.sh` (see [kernel.md](kernel.md#connectivity-graft)).
 
-## Why there is a userspace bridge
+## The HCI driver: `btmtk_stp`
 
-The driver hands you a character device and nothing else. BlueZ wants an
-`hci_dev` registered in the kernel.
+The vendor driver hands you a character device and nothing else; BlueZ wants an
+`hci_dev` registered in the kernel. MediaTek *has* a BlueZ variant — the vendor Kconfig
+describes `CONFIG_MTK_COMBO_BT_HCI` as "MTK BT driver for BlueZ" — but **the code is not
+published in any tree we can reach**.
 
-MediaTek *has* a BlueZ variant — the vendor Kconfig describes
-`CONFIG_MTK_COMBO_BT_HCI` as "MTK BT driver for BlueZ" — but **the code is not
-published in any tree we can reach**: only the Kconfig option survives.
-Searching the whole `bt/` tree for `hci_register_dev` finds it only in the
-`btmtk_main.c` of the conninfra-based variants.
+`wmt_drv` still carries the hook it used: an STP **BlueZ mode**
+(`mtk_wcn_stp_set_bluez(1)`). In it, `stp_core.c` hands every BT packet straight to the
+callback registered with `mtk_wcn_stp_register_if_rx()` instead of queueing it for
+`/dev/stpbt`. `btmtk_stp.ko` (patch `add-btmtk-stp-hci-driver`, built next to `bt_drv` in
+the connectivity graft) is a regular `hci_dev` on top of that:
 
-So the link is made in userspace, with the kernel's own `hci_vhci`:
-`devices/xiaomi-thunder/bluetooth/stpbt-vhci-bridge.py` creates a virtual controller and shuttles
-packets both ways. `devices/xiaomi-thunder/kernel-config` sets `CONFIG_BT_HCIVHCI=y` for it.
+- **open/close:** `mtk_wcn_wmt_func_on/off(WMTDRV_TYPE_BT)` (the BT ROM patch download
+  happens there) and the BlueZ mode on/off.
+- **rx:** the callback runs in the `btif_rxd` kthread. Both directions carry H4 framing,
+  and STP may split a packet. The kernel's own `h4_recv_buf()` reassembles it, under a
+  spinlock shared with close.
+- **tx:** the H4 type byte goes in front, and the packet goes into the driver's own
+  queue; a work item hands it to `mtk_wcn_stp_send_data()` in order. STP returns 0
+  while its queue is full, and the work waits and tries again. Dropping the packet
+  instead would cost a controller credit for good: the core counts an ACL packet once
+  `send()` returns, whatever it returned.
+- **CONNSYS whole-chip reset (WMT message):** `hci_reset_dev()`, which closes and reopens
+  the device.
+- **Lifetime:** `wmt_drv` calls the rx and reset callbacks through plain pointers, with
+  no synchronisation against unregistering them. So they are registered on the first
+  open, after `hci_register_dev()` succeeded, and never taken back; the module has no
+  `module_exit`: a late call never runs freed code.
 
-### The framing mismatch
-
-The two sides do not have the same contract:
-
-```
-/dev/vhci   delivers and accepts ONE complete HCI packet per read()/write()
-/dev/stpbt  delivers a BYTE STREAM — one read() can return two events glued
-            together, or half of one
-```
-
-Copying byte-for-byte appears to work right up until the first burst of
-traffic. The controller→host direction therefore reassembles H4 framing before
-writing. The logic is unit-testable: `tamanho_do_pacote()` and
-`corrige_features()` are pure functions.
+It replaces `bt_drv_6833` (`/dev/stpbt`): both drive the BT function of the same chip,
+so only one of them may be loaded. `CONFIG_BT_HCIVHCI` is off again.
 
 ## Three things that actually blocked it
 
@@ -123,42 +127,20 @@ failing command anywhere in the init sequence tears down the whole open.
 
 This never shows up under Android, because that stack never walks this path.
 
-The bridge clears the bit instead of faking a reply to `0x0C77`: answering
-"success" for an unimplemented command would leave the kernel believing in
-sync-train parameters that do not exist. Clearing the bit tells the truth and
-lets the kernel's own logic decide — it then never sends the command. In a
-kernel driver this would be an `HCI_QUIRK_*`; the bridge plays the driver's
-role, so it lives there.
+The fix clears the bit instead of faking a reply to `0x0C77`: answering "success"
+for an unimplemented command would leave the kernel believing in sync-train
+parameters that do not exist. Clearing the bit tells the truth and lets the kernel's
+own logic decide — it then never sends the command. 4.19 has no quirk for it, so
+`btmtk_stp` edits the Read_Local_Extended_Features page 2 reply on its way in (the
+kernel log says `controller claims sync train, cleared` once per power-on).
 
-### 2. `BT_read()` waits uninterruptibly
+### 2. `BT_read()` waits uninterruptibly (bridge only)
 
-The first version of the bridge used two threads, each parked in a blocking
-`read()`. That worked until the first restart. Measured state:
-
-```
-tid=NNNN  state=Z (zombie)
-tid=NNNN  state=D (disk sleep)   wchan=BT_read
-```
-
-`BT_read()` waits with `wait_event()`, which is **not interruptible**. With the
-controller silent nothing wakes the queue, so the thread is stuck inside the
-kernel forever — `SIGKILL` will not move it. And while it is stuck:
-
-- the file descriptors never close;
-- `BT_release()` never runs, so the driver's `btonflag` stays `1` and every
-  later `open("/dev/stpbt")` returns `EIO` (`BT already on!`);
-- `/dev/vhci` stays open too, so `hci0` remains registered with nobody behind
-  it.
-
-Only a reboot clears it.
-
-The fix is to never enter that state: the driver implements `poll()`, so the
-bridge waits in `select()` and only calls `read()` when data is already there.
-A self-pipe joins the same `select()` for shutdown, which removed the threads
-entirely — one loop that can always exit and close its descriptors in order.
-
-This is also why the systemd unit (`devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service`) sets `KillSignal=SIGTERM`, `TimeoutStopSec=20` and `SendSIGKILL=no`: a `SIGKILL` would
-recreate the problem.
+The bridge sat on `/dev/stpbt`, whose `BT_read()` waits with `wait_event()`: not
+interruptible. A bridge thread blocked there could not be killed, kept `btonflag` set
+(every later `open()` returned `EIO`) and left `hci0` registered with nobody behind it,
+until a reboot. The bridge had to wait in `select()` and never be sent `SIGKILL`.
+`btmtk_stp` does not use the character device at all, so this is history.
 
 ### 3. The address was MediaTek's placeholder
 
@@ -174,39 +156,58 @@ stored makes the controller report a different address; sending them reversed
 makes `Read_BD_ADDR` return exactly what is in nvram. HCI carries `BD_ADDR`
 least-significant byte first, while nvram stores display order.
 
-The `devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service` unit extracts six bytes into `/lib/firmware/bt_addr.bin` on
-first start (mounting `nvdata` **read-only** and with `noload`, always), and the bridge writes it
-with the MediaTek vendor command `0xFC1A`, then reads it back to confirm. It
-survives the `HCI_Reset` the kernel issues during init.
+`thunder-wmt bt-on` (package `thunder-mediatek-wmt`, unit `thunder-wmt-bt`) reads the
+six bytes with `debugfs`, without mounting `nvdata`, as it does for the Wi-Fi NVRAM. It
+sets them through BlueZ's mgmt interface (Set Public Address); the driver's
+`set_bdaddr` programs them. Two details took measuring:
+
+- **The write needs a reset first.** Sent right after the BT power-on, `0xFC1A` does
+  not stick; after an `HCI_Reset` it does, and then survives the resets of the HCI
+  init. `set_bdaddr` therefore sends `HCI_Reset`, then `0xFC1A` with its status
+  checked, then `Read_BD_ADDR`, and fails if the address differs.
+- **Every BT power-on loses it.** `func_on` reloads the firmware, and so does a CONNSYS
+  reset. With `HCI_QUIRK_NON_PERSISTENT_SETUP` the core runs the driver's `setup()` on
+  every open, and `setup()` programs the configured address again. Two power cycles
+  in a row keep it. If that write fails, the power-on fails, so the controller never
+  comes up with the placeholder; the next power-on tries again.
+- **Except on the configuration power-on.** The power-on that follows Set Public
+  Address (`HCI_CONFIG`) calls `set_bdaddr`, which never fails it: in 4.19 a failed
+  open there leaves the index out of mgmt until a reboot. On a failed write the
+  controller comes up with the placeholder, `bt-on` reads it back, and power-cycles it
+  (up to twice) so `setup()` writes again.
+- **Not inside the auto-off window.** After its first setup the core leaves the
+  controller up for 2 s (`HCI_AUTO_OFF`), and mgmt already calls it powered off. A Set
+  Public Address in that window marks `HCI_CONFIG`, but 4.19's `hci_power_on()` sees
+  `HCI_UP` and only powers on through mgmt without reopening. The configuration never
+  runs, and the index stays out of mgmt until a reboot. `HCIGETDEVINFO` hides `HCI_UP`
+  during that window, so `bt-on` waits for `HCI_RUNNING` to drop instead. It finishes
+  only when Read Controller Information returns the factory address. It runs before
+  `bluetooth.service`, because Set Public Address needs the controller off.
 
 This is **per-unit data: read from the device at run time, never committed to
 this repository.** Same rule as the Wi-Fi MAC.
 
 ## Result
 
+With the `btmtk_stp` driver, cold boot, no intervention (2026-10-12, kernel #1 Mon Oct 12
+18:03:12):
+
 ```
-Controller <MAC> (public)
+thunder-wmt-bt: hci0: factory address set and read back        (10 s after boot)
+Controller <factory address> (public)
         Manufacturer: 0x0046 (70)      <- MediaTek
         Version:      0x0a (10)        <- Bluetooth 5.1
         Powered: yes
 ```
 
-A 25-second scan finds devices with names and with LE random addresses, so
-both BR/EDR and LE work. Done with Wi-Fi associated throughout — the two
-radios share CONNSYS and coexist.
+`bluetooth.service` starts only after `thunder-wmt-bt`. A 10-second scan finds 19
+devices, with Wi-Fi associated throughout: the two radios share CONNSYS and coexist.
+Three `power off`/`power on` cycles keep the factory address. No unit fails.
 
-After a cold boot, with no intervention (history: measured on the earlier OpenRC
-image, where the Wi-Fi bring-up was a service called `wifi-thunder`; today it is
-`thunder-wmt-connsys` plus `thunder-wmt-wifi`):
+### Verified against a Linux host (with the earlier bridge)
 
-```
-wifi-thunder       started
-bluetooth-thunder  started
-bluetooth          started
-modules: bt_drv_6833 connfem wlan_drv_gen4m wmt_chrdev_wifi wmt_drv
-```
-
-### Verified against a Linux host
+Not repeated yet with `btmtk_stp`; the radio, ACL and pairing code paths are the same
+controller and the same BlueZ, only the transport changed.
 
 Pairing (SSP, Just Works with `NoInputNoOutput` agents on both ends) completes
 and both sides report `Paired: yes` / `Bonded: yes`.
@@ -268,10 +269,15 @@ to receive it. That is session/audio work, not Bluetooth work.
 
 ## Still open
 
-- **A2DP/HFP playback**, per above — blocked on the audio session, not on BT.
+- **Pairing and RFCOMM with `btmtk_stp`**: measured only with the bridge (above).
+- **A2DP/HFP playback.** The blocker above, no audio session, is gone: the Phosh image
+  has a logind seat, a user PipeWire and a working card (docs/audio.md). Not re-tested.
 - **The negotiated codec is 255** (vendor specific) rather than SBC (0). Worth
   understanding.
 - **Suspend/resume** and power saving are unexercised.
-- The bridge is Python. It is not on any hot path — Bluetooth packet rates are
-  trivial — but a small C or Rust daemon, or better a real in-kernel driver
-  using `mtk_wcn_stp_set_bluez(1)`, would be the upstream-shaped answer.
+- **A failure of the configuration power-on itself** (the WMT function on, or the HCI
+  init, during the `HCI_CONFIG` open) still leaves the index out of mgmt until a
+  reboot: 4.19 never clears `HCI_CONFIG` on that path and the module cannot be
+  reloaded. Upstream has the same path. `bt-on` then fails and Bluetooth stays off.
+- **A CONNSYS whole-chip reset** has no safe trigger; the reset path
+  (`hci_reset_dev()`, then `setup()` reprograms the address) is untested.

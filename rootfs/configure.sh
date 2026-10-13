@@ -65,6 +65,8 @@ if [ ${#wmt_core[@]} -gt 0 ]; then
 		echo "WMT_HIF=${WMT_HIF-}"
 		echo "WMT_WIFI_INTERFACE=$WIFI_INTERFACE"
 		echo "WMT_WIFI_NVRAM=${WMT_WIFI_NVRAM-}"
+		echo "WMT_BT_MODULES=${WMT_BT_MODULES[*]-}"
+		echo "WMT_BT_ADDR=${WMT_BT_ADDR-}"
 	} > "$wmtconf"
 else
 	rm -f "$wmtconf"

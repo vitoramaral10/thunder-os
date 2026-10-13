@@ -82,12 +82,20 @@ DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt)
 # alsa-restore.service -> /dev/null: sem asound.state gravado no desligamento, o restore
 # do boot cai no init do UCM em vez de devolver um estado antigo (ganho alto, amplificador
 # ligado).
-DEVICE_PACKAGES=(alsa-utils)
-DEVICE_SERVICES=(thunder-wmt-connsys.service thunder-wmt-wifi.service)
+# bluez: o bluetoothd do driver HCI btmtk_stp (thunder-wmt-bt).
+DEVICE_PACKAGES=(alsa-utils bluez)
+DEVICE_SERVICES=(thunder-wmt-connsys.service thunder-wmt-wifi.service
+	thunder-wmt-bt.service bluetooth.service)
 # Modulos do nucleo WMT, antes do DO_MODULE_INIT.
 WMT_CORE_MODULES=(wmt_drv connfem)
 # Modulos do Wi-Fi, depois do CONNSYS pronto (ordem do init.wlan_drv.rc do Android).
 WMT_WIFI_MODULES=(wmt_chrdev_wifi wlan_drv_gen4m)
+# Driver HCI do Bluetooth (BlueZ) sobre o STP, depois do CONNSYS pronto; substitui o
+# /dev/stpbt (bt_drv_6833) e a ponte em espaco de usuario (docs/bluetooth-bringup.md).
+WMT_BT_MODULES=(btmtk_stp)
+# Endereco BT de fabrica: <partlabel>:<arquivo no ext4>, 6 bytes na ordem de exibicao,
+# lido sem montar. Vazio = o controlador fica sem endereco (unconfigured no BlueZ).
+WMT_BT_ADDR=nvdata:/APCFG/APRDEB/BT_Addr
 # ROM patches que o launcher registra; tipo e endereco vem do cabecalho de cada .bin.
 # So a variante 1_1 foi validada neste aparelho (as 1a_1 tambem estao no firmware).
 WMT_ROM_PATCHES=(soc2_2_ram_mcu_1_1_hdr.bin soc2_2_ram_wifi_1_1_hdr.bin soc2_2_ram_bt_1_1_hdr.bin)

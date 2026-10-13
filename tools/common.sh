@@ -75,6 +75,8 @@ require_device() {
 	# Viram /etc/thunder/wmt.conf no rootfs/configure.sh.
 	WMT_CORE_MODULES=()
 	WMT_WIFI_MODULES=()
+	WMT_BT_MODULES=()
+	WMT_BT_ADDR=
 	WMT_ROM_PATCHES=()
 	WMT_HIF=
 	WMT_WIFI_NVRAM=

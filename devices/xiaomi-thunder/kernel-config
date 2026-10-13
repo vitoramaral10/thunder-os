@@ -575,9 +575,8 @@ CONFIG_DRM_FBDEV_EMULATION=y
 # direto com /dev/stpbt. Aqui e o contrario -- o BlueZ do userland PRECISA
 # do subsistema no kernel. Sem estas linhas nem /sys/class/bluetooth existe.
 #
-# CONFIG_BT_HCIVHCI e o transporte: o driver do chip (bt_drv_6833.ko) so
-# entrega um chardev, nao um hci_dev, entao um daemon em espaco de usuario faz
-# a ponte /dev/stpbt <-> /dev/vhci. Ver devices/xiaomi-thunder/bluetooth/stpbt-vhci-bridge.py.
+# O transporte e o btmtk_stp.ko (patch add-btmtk-stp-hci-driver), um driver HCI sobre
+# o modo BlueZ do STP; nao ha mais ponte em espaco de usuario nem hci_vhci.
 #
 # As dependencias de crypto (CMAC, ECDH, SHA256, ECB) sao 'select' do
 # CONFIG_BT no Kconfig e o olddefconfig as resolve sozinho.
@@ -591,7 +590,6 @@ CONFIG_BT_BNEP=y
 CONFIG_BT_BNEP_MC_FILTER=y
 CONFIG_BT_BNEP_PROTO_FILTER=y
 CONFIG_BT_HIDP=y
-CONFIG_BT_HCIVHCI=y
 CONFIG_SOFTLOCKUP_DETECTOR=y
 CONFIG_DETECT_HUNG_TASK=y
 

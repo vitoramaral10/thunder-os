@@ -1,0 +1,499 @@
+Driver HCI do BlueZ para o Bluetooth do CONNSYS (MT6833) sobre o STP: btmtk_stp.ko.
+
+O enxerto de conectividade so tem o /dev/stpbt (bt_drv_6833), o char device da pilha
+do Android; a variante BlueZ que a MediaTek descreve no Kconfig (CONFIG_MTK_COMBO_BT_HCI)
+nao foi publicada. Ate aqui uma ponte em Python ligava o /dev/stpbt ao hci_vhci.
+
+O wmt_drv tem um "modo BlueZ" no STP (mtk_wcn_stp_set_bluez): cada pacote do BT vai
+direto para o callback de mtk_wcn_stp_register_if_rx(), sem passar pela fila do char
+device. O driver registra um hci_dev normal em cima disso:
+- open/close: func_on/off do BT pelo WMT, modo BlueZ, callback de rx;
+- rx: reassembla o H4 com o h4_recv_buf() do kernel (o STP pode entregar pacote em
+  pedacos) e entrega ao nucleo; tx: byte de tipo H4 numa fila propria, que um work
+  entrega ao mtk_wcn_stp_send_data() em ordem, esperando enquanto o STP esta cheio
+  (descartar um ACL gastaria um credito do controlador para sempre);
+- o controlador anuncia Synchronization Train (pagina 2 dos features estendidos) e
+  recusa o Read_Synchronization_Train_Parameters que o nucleo manda por causa disso,
+  abortando o power-on: o driver limpa o bit, como a ponte fazia;
+- endereco: HCI_Reset, vendor 0xFC1A com status conferido, Read_BD_ADDR para
+  confirmar. Todo power-on (e o reset do CONNSYS) volta ao 00:00:46:67:61:01, igual
+  em todo aparelho; com HCI_QUIRK_NON_PERSISTENT_SETUP o setup() regrava a cada
+  abertura o endereco que o thunder-wmt bt-on entregou pelo mgmt (Set Public Address,
+  valor de fabrica da nvdata). No power-on do HCI_CONFIG (o que segue o Set Public
+  Address) o set_bdaddr() nunca falha, porque no 4.19 essa falha tira o indice do
+  mgmt ate o reboot; nos outros a falha de gravacao falha o power-on, e o controlador
+  nunca sobe com o endereco provisorio;
+- reset do chip inteiro (WMT): hci_reset_dev(), que fecha e reabre o controlador;
+- os callbacks do STP e do WMT sao ponteiros que o wmt_drv chama sem sincronizar com o
+  desregistro: registrados no primeiro open, depois do hci_register_dev(), e nunca
+  desfeitos; o modulo nao descarrega (sem module_exit).
+
+Modulo separado do bt_drv_6833: os dois nao podem ligar o BT ao mesmo tempo.
+
+diff --color -ruN a/drivers/misc/mediatek/connectivity/bt_drv/btmtk_stp.c b/drivers/misc/mediatek/connectivity/bt_drv/btmtk_stp.c
+--- a/drivers/misc/mediatek/connectivity/bt_drv/btmtk_stp.c	1969-12-31 21:00:00.000000000 -0300
++++ b/drivers/misc/mediatek/connectivity/bt_drv/btmtk_stp.c	2026-10-12 18:02:36.236581487 -0300
+@@ -0,0 +1,446 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Bluetooth HCI driver for the MediaTek CONNSYS combo chip (MT6833) over STP.
++ *
++ * thunder: the vendor ships only a character device (/dev/stpbt) for the Android
++ * stack, and the BlueZ variant MediaTek describes in Kconfig
++ * (CONFIG_MTK_COMBO_BT_HCI) is not published. This driver registers a regular
++ * hci_dev on top of the STP "BlueZ mode" of wmt_drv: STP hands every BT packet
++ * to the callback registered with mtk_wcn_stp_register_if_rx(), and packets go
++ * out through mtk_wcn_stp_send_data() on the BT queue. Both directions carry H4
++ * framing (a packet type byte in front of each HCI packet).
++ *
++ * Do not use it together with /dev/stpbt (bt_drv_<platform>): both drive the BT
++ * function of the same chip.
++ *
++ * The STP rx and WMT message callbacks are plain pointers that wmt_drv calls
++ * without any synchronisation with their unregistration. They are registered
++ * on the first open, once the device is registered, and never taken back; the
++ * module cannot be unloaded (no module_exit), so a late call never runs freed
++ * code or touches a freed device.
++ */
++
++#include <linux/module.h>
++#include <linux/kernel.h>
++#include <linux/skbuff.h>
++#include <linux/spinlock.h>
++#include <linux/workqueue.h>
++
++#include <net/bluetooth/bluetooth.h>
++#include <net/bluetooth/hci_core.h>
++
++#include "h4_recv.h"
++
++#include "wmt_exp.h"
++#include "stp_exp.h"
++
++#define VERSION "1.0"
++
++/* Vendor command that writes the public address; the address is LSB first. */
++#define HCI_OP_MTK_WRITE_BD_ADDR	0xfc1a
++
++/* Read_Local_Extended_Features, page 2: features[0] bit 2 */
++#define BTMTK_STP_SYNC_TRAIN		0x04
++
++/* STP returns 0 while its tx queue is full; try again after this long */
++#define BTMTK_STP_TX_RETRY_MS		30
++
++struct btmtk_stp {
++	struct hci_dev *hdev;
++	struct sk_buff *rx_skb;
++	bool opened;
++	struct work_struct reset_work;
++	struct sk_buff_head txq;
++	struct delayed_work tx_work;
++};
++
++/*
++ * One device, allocated at load and never freed. The lock covers the open state
++ * and the H4 reassembly state, and makes close wait for an rx callback that is
++ * already running.
++ */
++static DEFINE_SPINLOCK(btmtk_stp_lock);
++static struct btmtk_stp *btmtk_stp_dev;
++static bool btmtk_stp_callbacks;	/* registered; only open() touches it */
++
++/*
++ * The controller advertises Synchronization Train support (page 2, bit 2) and
++ * then rejects Read_Synchronization_Train_Parameters (0x0c77) with "Unknown HCI
++ * Command". hci_init4_req() sends that command whenever the bit is set, and the
++ * failure aborts the whole power on. Clear the bit, so the core never sends it.
++ */
++static int btmtk_stp_recv_event(struct hci_dev *hdev, struct sk_buff *skb)
++{
++	/* evt, plen, ncmd, opcode(2), status, page, max_page, features[8] */
++	if (skb->len >= 16 && skb->data[0] == HCI_EV_CMD_COMPLETE &&
++	    get_unaligned_le16(skb->data + 3) == HCI_OP_READ_LOCAL_EXT_FEATURES &&
++	    skb->data[5] == 0 && skb->data[6] == 2 &&
++	    (skb->data[8] & BTMTK_STP_SYNC_TRAIN)) {
++		skb->data[8] &= ~BTMTK_STP_SYNC_TRAIN;
++		bt_dev_info(hdev, "controller claims sync train, cleared");
++	}
++
++	return hci_recv_frame(hdev, skb);
++}
++
++static const struct h4_recv_pkt btmtk_stp_recv_pkts[] = {
++	{ H4_RECV_ACL,   .recv = hci_recv_frame },
++	{ H4_RECV_SCO,   .recv = hci_recv_frame },
++	{ H4_RECV_EVENT, .recv = btmtk_stp_recv_event },
++};
++
++static void btmtk_stp_rx(const PUINT8 data, INT32 size)
++{
++	struct btmtk_stp *bdev;
++	unsigned long flags;
++
++	spin_lock_irqsave(&btmtk_stp_lock, flags);
++	bdev = btmtk_stp_dev;
++	if (!bdev || !bdev->opened || size <= 0)
++		goto out;
++
++	bdev->rx_skb = h4_recv_buf(bdev->hdev, bdev->rx_skb, data, size,
++				   btmtk_stp_recv_pkts,
++				   ARRAY_SIZE(btmtk_stp_recv_pkts));
++	if (IS_ERR(bdev->rx_skb)) {
++		bt_dev_err(bdev->hdev, "frame reassembly failed (%ld)",
++			   PTR_ERR(bdev->rx_skb));
++		bdev->hdev->stat.err_rx++;
++		bdev->rx_skb = NULL;
++	}
++out:
++	spin_unlock_irqrestore(&btmtk_stp_lock, flags);
++}
++
++/* Whole chip reset by WMT: the controller lost its state, let the core reset it. */
++static void btmtk_stp_reset_work(struct work_struct *work)
++{
++	struct btmtk_stp *bdev = container_of(work, struct btmtk_stp, reset_work);
++
++	hci_reset_dev(bdev->hdev);
++}
++
++static void btmtk_stp_wmt_cb(ENUM_WMTDRV_TYPE_T src, ENUM_WMTDRV_TYPE_T dst,
++			     ENUM_WMTMSG_TYPE_T type, PVOID buf, UINT32 sz)
++{
++	ENUM_WMTRSTMSG_TYPE_T msg;
++	struct btmtk_stp *bdev;
++	unsigned long flags;
++	bool opened;
++
++	if (src != WMTDRV_TYPE_WMT || dst != WMTDRV_TYPE_BT ||
++	    type != WMTMSG_TYPE_RESET || sz != sizeof(msg))
++		return;
++
++	memcpy(&msg, buf, sz);
++	if (msg != WMTRSTMSG_RESET_END)
++		return;
++
++	spin_lock_irqsave(&btmtk_stp_lock, flags);
++	bdev = btmtk_stp_dev;
++	opened = bdev && bdev->opened;
++	spin_unlock_irqrestore(&btmtk_stp_lock, flags);
++
++	/*
++	 * hci_reset_dev() injects a Hardware Error event: the core closes and
++	 * reopens the device, and setup() programs the address again.
++	 */
++	if (opened) {
++		bt_dev_warn(bdev->hdev, "CONNSYS reset done, resetting controller");
++		schedule_work(&bdev->reset_work);
++	}
++}
++
++static int btmtk_stp_open(struct hci_dev *hdev)
++{
++	struct btmtk_stp *bdev = hci_get_drvdata(hdev);
++	unsigned long flags;
++
++	/* the core serialises open, so a plain flag is enough */
++	if (!btmtk_stp_callbacks) {
++		/* STP calls it only in BlueZ mode, set below */
++		mtk_wcn_stp_register_if_rx(btmtk_stp_rx);
++		mtk_wcn_wmt_msgcb_reg(WMTDRV_TYPE_BT, btmtk_stp_wmt_cb);
++		btmtk_stp_callbacks = true;
++	}
++
++	if (mtk_wcn_wmt_func_on(WMTDRV_TYPE_BT) == MTK_WCN_BOOL_FALSE) {
++		bt_dev_err(hdev, "WMT BT function on failed");
++		return -EIO;
++	}
++	if (mtk_wcn_stp_is_ready() == MTK_WCN_BOOL_FALSE) {
++		bt_dev_err(hdev, "STP not ready");
++		mtk_wcn_wmt_func_off(WMTDRV_TYPE_BT);
++		return -EIO;
++	}
++
++	spin_lock_irqsave(&btmtk_stp_lock, flags);
++	bdev->opened = true;
++	spin_unlock_irqrestore(&btmtk_stp_lock, flags);
++
++	mtk_wcn_stp_set_bluez(MTK_WCN_BOOL_TRUE);
++
++	return 0;
++}
++
++static int btmtk_stp_close(struct hci_dev *hdev)
++{
++	struct btmtk_stp *bdev = hci_get_drvdata(hdev);
++	unsigned long flags;
++
++	cancel_delayed_work_sync(&bdev->tx_work);
++	skb_queue_purge(&bdev->txq);
++
++	mtk_wcn_stp_set_bluez(MTK_WCN_BOOL_FALSE);
++
++	/* waits for an rx callback that is still running */
++	spin_lock_irqsave(&btmtk_stp_lock, flags);
++	bdev->opened = false;
++	kfree_skb(bdev->rx_skb);
++	bdev->rx_skb = NULL;
++	spin_unlock_irqrestore(&btmtk_stp_lock, flags);
++
++	cancel_work_sync(&bdev->reset_work);
++
++	if (mtk_wcn_wmt_func_off(WMTDRV_TYPE_BT) == MTK_WCN_BOOL_FALSE)
++		bt_dev_warn(hdev, "WMT BT function off failed");
++
++	return 0;
++}
++
++static int btmtk_stp_flush(struct hci_dev *hdev)
++{
++	struct btmtk_stp *bdev = hci_get_drvdata(hdev);
++	unsigned long flags;
++
++	cancel_delayed_work_sync(&bdev->tx_work);
++	skb_queue_purge(&bdev->txq);
++
++	spin_lock_irqsave(&btmtk_stp_lock, flags);
++	kfree_skb(bdev->rx_skb);
++	bdev->rx_skb = NULL;
++	spin_unlock_irqrestore(&btmtk_stp_lock, flags);
++
++	return 0;
++}
++
++/*
++ * The core counts an ACL or SCO packet against the controller's buffers as soon
++ * as send() returns, whatever it returns, and gets the credit back only when
++ * the controller reports the packet sent. A packet dropped because STP was full
++ * would take that credit for good, so send() only queues, and this work hands
++ * the queue to STP in order, waiting while STP is full.
++ */
++static void btmtk_stp_tx_work(struct work_struct *work)
++{
++	struct btmtk_stp *bdev = container_of(to_delayed_work(work),
++					      struct btmtk_stp, tx_work);
++	struct hci_dev *hdev = bdev->hdev;
++	struct sk_buff *skb;
++	int ret;
++
++	while ((skb = skb_dequeue(&bdev->txq))) {
++		ret = mtk_wcn_stp_send_data(skb->data, skb->len, BT_TASK_INDX);
++		if (ret == 0) {
++			skb_queue_head(&bdev->txq, skb);
++			schedule_delayed_work(&bdev->tx_work,
++				msecs_to_jiffies(BTMTK_STP_TX_RETRY_MS));
++			return;
++		}
++		if (ret < 0) {
++			bt_dev_err(hdev, "STP send failed (%d)", ret);
++			hdev->stat.err_tx++;
++		} else {
++			hdev->stat.byte_tx += skb->len;
++		}
++		kfree_skb(skb);
++	}
++}
++
++static int btmtk_stp_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
++{
++	struct btmtk_stp *bdev = hci_get_drvdata(hdev);
++
++	switch (hci_skb_pkt_type(skb)) {
++	case HCI_COMMAND_PKT:
++		hdev->stat.cmd_tx++;
++		break;
++	case HCI_ACLDATA_PKT:
++		hdev->stat.acl_tx++;
++		break;
++	case HCI_SCODATA_PKT:
++		hdev->stat.sco_tx++;
++		break;
++	default:
++		/* on error the core (hci_send_frame) frees the skb */
++		return -EILSEQ;
++	}
++
++	memcpy(skb_push(skb, 1), &hci_skb_pkt_type(skb), 1);
++	skb_queue_tail(&bdev->txq, skb);
++	schedule_delayed_work(&bdev->tx_work, 0);
++
++	return 0;
++}
++
++static int btmtk_stp_cmd(struct hci_dev *hdev, u16 opcode, u32 plen,
++			 const void *param, struct sk_buff **out)
++{
++	struct sk_buff *skb;
++
++	/*
++	 * Measured: each of these answers within a few ms. HCI_CMD_TIMEOUT (2 s)
++	 * keeps a silent controller from holding a power on for minutes.
++	 */
++	skb = __hci_cmd_sync(hdev, opcode, plen, param, HCI_CMD_TIMEOUT);
++	if (IS_ERR(skb)) {
++		bt_dev_err(hdev, "command 0x%4.4x failed (%ld)", opcode, PTR_ERR(skb));
++		return PTR_ERR(skb);
++	}
++	/* Command Complete: the first return parameter is the status */
++	if (skb->len < 1 || skb->data[0]) {
++		bt_dev_err(hdev, "command 0x%4.4x: status 0x%2.2x", opcode,
++			   skb->len ? skb->data[0] : 0xff);
++		kfree_skb(skb);
++		return -EIO;
++	}
++	if (out)
++		*out = skb;
++	else
++		kfree_skb(skb);
++	return 0;
++}
++
++/*
++ * As the userspace bring-up measured it: HCI_Reset first, then the vendor write
++ * (0xfc1a, address LSB first), then Read_BD_ADDR to check it; the address then
++ * survives the resets of the HCI init.
++ */
++static int btmtk_stp_write_bdaddr(struct hci_dev *hdev, const bdaddr_t *bdaddr)
++{
++	struct hci_rp_read_bd_addr *rp;
++	struct sk_buff *skb;
++	int err;
++
++	err = btmtk_stp_cmd(hdev, HCI_OP_RESET, 0, NULL, NULL);
++	if (!err)
++		err = btmtk_stp_cmd(hdev, HCI_OP_MTK_WRITE_BD_ADDR, sizeof(*bdaddr),
++				    bdaddr, NULL);
++	if (!err)
++		err = btmtk_stp_cmd(hdev, HCI_OP_READ_BD_ADDR, 0, NULL, &skb);
++	if (err)
++		return err;
++
++	rp = (struct hci_rp_read_bd_addr *)skb->data;
++	if (skb->len < sizeof(*rp) || bacmp(&rp->bdaddr, bdaddr))
++		err = -EIO;
++	kfree_skb(skb);
++	return err;
++}
++
++static int btmtk_stp_try_bdaddr(struct hci_dev *hdev, const bdaddr_t *bdaddr)
++{
++	int i, err = 0;
++
++	for (i = 0; i < 3; i++) {
++		err = btmtk_stp_write_bdaddr(hdev, bdaddr);
++		if (!err)
++			return 0;
++	}
++	bt_dev_err(hdev, "the controller did not take the address (%d)", err);
++	return err;
++}
++
++/*
++ * The core calls it on the power on that follows mgmt Set Public Address
++ * (HCI_CONFIG), and it never fails that power on: a failed open there leaves
++ * HCI_CONFIG set and the index out of mgmt until a reboot in 4.19, since this
++ * module cannot be reloaded. The controller then comes up with the placeholder
++ * address; userspace (thunder-wmt bt-on) reads the address back, sees the
++ * mismatch and powers the controller on again, and setup() writes it again.
++ */
++static int btmtk_stp_set_bdaddr(struct hci_dev *hdev, const bdaddr_t *bdaddr)
++{
++	btmtk_stp_try_bdaddr(hdev, bdaddr);
++	return 0;
++}
++
++/*
++ * Every BT power on (open) reloads the controller firmware and brings back
++ * MediaTek's placeholder address 00:00:46:67:61:01, the same on every unit; so
++ * does a CONNSYS reset. With HCI_QUIRK_NON_PERSISTENT_SETUP the core calls setup
++ * on every open, and the address set through mgmt (Set Public Address, from the
++ * factory value in nvdata) is programmed again before Read_BD_ADDR. Outside the
++ * HCI_CONFIG power on a failed write fails the power on, so the controller never
++ * comes up with the placeholder there; the index stays in mgmt and the next
++ * power on tries again.
++ */
++static int btmtk_stp_setup(struct hci_dev *hdev)
++{
++	if (!bacmp(&hdev->public_addr, BDADDR_ANY))
++		return 0;
++
++	/* the core calls set_bdaddr() right after this one */
++	if (hci_dev_test_flag(hdev, HCI_CONFIG))
++		return 0;
++
++	return btmtk_stp_try_bdaddr(hdev, &hdev->public_addr);
++}
++
++static int __init btmtk_stp_init(void)
++{
++	struct btmtk_stp *bdev;
++	struct hci_dev *hdev;
++	unsigned long flags;
++	int err;
++
++	bdev = kzalloc(sizeof(*bdev), GFP_KERNEL);
++	if (!bdev)
++		return -ENOMEM;
++	INIT_WORK(&bdev->reset_work, btmtk_stp_reset_work);
++	INIT_DELAYED_WORK(&bdev->tx_work, btmtk_stp_tx_work);
++	skb_queue_head_init(&bdev->txq);
++
++	hdev = hci_alloc_dev();
++	if (!hdev) {
++		kfree(bdev);
++		return -ENOMEM;
++	}
++
++	bdev->hdev = hdev;
++	hdev->bus = HCI_UART;
++	hdev->manufacturer = 70;	/* MediaTek */
++	hci_set_drvdata(hdev, bdev);
++
++	hdev->open = btmtk_stp_open;
++	hdev->close = btmtk_stp_close;
++	hdev->flush = btmtk_stp_flush;
++	hdev->send = btmtk_stp_send_frame;
++	hdev->setup = btmtk_stp_setup;
++	hdev->set_bdaddr = btmtk_stp_set_bdaddr;
++	set_bit(HCI_QUIRK_NON_PERSISTENT_SETUP, &hdev->quirks);
++
++	spin_lock_irqsave(&btmtk_stp_lock, flags);
++	btmtk_stp_dev = bdev;
++	spin_unlock_irqrestore(&btmtk_stp_lock, flags);
++
++	/* the callbacks come with the first open, see the comment at the top */
++	err = hci_register_dev(hdev);
++	if (err < 0) {
++		spin_lock_irqsave(&btmtk_stp_lock, flags);
++		btmtk_stp_dev = NULL;
++		spin_unlock_irqrestore(&btmtk_stp_lock, flags);
++		hci_free_dev(hdev);
++		kfree(bdev);
++		return err;
++	}
++
++	return 0;
++}
++
++/* No module_exit: see the comment at the top. */
++module_init(btmtk_stp_init);
++
++MODULE_DESCRIPTION("Bluetooth HCI driver for MediaTek CONNSYS over STP " VERSION);
++MODULE_VERSION(VERSION);
++MODULE_LICENSE("GPL");
+diff --color -ruN a/drivers/misc/mediatek/connectivity/bt_drv/Makefile b/drivers/misc/mediatek/connectivity/bt_drv/Makefile
+--- a/drivers/misc/mediatek/connectivity/bt_drv/Makefile	2026-10-12 15:01:26.738754287 -0300
++++ b/drivers/misc/mediatek/connectivity/bt_drv/Makefile	2026-10-12 15:01:26.746305481 -0300
+@@ -70,3 +70,13 @@
+ ifneq ($(CONFIG_MTK_CONNSYS_DEDICATED_LOG_PATH),)
+ $(MODULE_NAME)-objs += fw_log_bt.o
+ endif
++
++# thunder: driver HCI do BlueZ sobre o modo BlueZ do STP (btmtk_stp.c), no lugar do
++# /dev/stpbt. Modulo separado: o /dev/stpbt continua compilando, mas os dois nao podem
++# ligar o BT ao mesmo tempo. h4_recv.h vem de drivers/bluetooth.
++ifeq ($(CONFIG_WLAN_DRV_BUILD_IN),y)
++obj-y += btmtk_stp.o
++else
++obj-m += btmtk_stp.o
++endif
++CFLAGS_btmtk_stp.o += -I$(srctree)/drivers/bluetooth

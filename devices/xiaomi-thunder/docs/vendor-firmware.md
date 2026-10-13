@@ -80,9 +80,10 @@ to disk. See
 [wifi-bringup.md](wifi-bringup.md#the-factory-nvram-mac-and-rf-calibration).
 
 The Bluetooth address lives in the same place, at `/APCFG/APRDEB/BT_Addr`: six
-bytes, same OUI as the Wi-Fi MAC. [`devices/xiaomi-thunder/bluetooth/bluetooth-thunder.service`](../bluetooth/bluetooth-thunder.service)
-extracts it into `/lib/firmware/bt_addr.bin` on first start, again with the
-partition mounted read-only and without journal replay (`ro,noload`), and the bridge writes it to the controller.
+bytes, same OUI as the Wi-Fi MAC. `thunder-wmt bt-on` (unit `thunder-wmt-bt`) reads it
+at every boot the same way, without mounting, and sets it through BlueZ's mgmt (Set
+Public Address); the `btmtk_stp` driver programs it on every power-on. See
+[bluetooth-bringup.md](bluetooth-bringup.md).
 
 Because it is per-unit data, no MAC address or calibration blob belongs in
 this repository.

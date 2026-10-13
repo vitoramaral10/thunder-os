@@ -1,0 +1,38 @@
+# Bluetooth da MediaTek sobre o CONNSYS: carrega o driver HCI do kernel (btmtk_stp, o
+# controlador entra no BlueZ como hciN) e grava o endereco de fabrica da NVRAM pelo mgmt;
+# so termina quando o controlador devolve esse endereco. O driver o regrava a cada power-on.
+# Antes do bluetooth.service, que depende desta unit (drop-in do pacote): o Set Public
+# Address exige o controlador desligado, e o bluetoothd o liga ao subir. Sem endereco de
+# fabrica (NVRAM ilegivel, 66) a unit falha e o bluetoothd nao sobe. O modulo nao
+# descarrega (os callbacks do wmt_drv nao tem desregistro sincronizado): parar a unit nao
+# desliga nada, quem liga e desliga e o bluetoothd.
+[Unit]
+Description=MediaTek Bluetooth controller (HCI driver and factory address)
+Documentation=file:/usr/lib/thunder/wmt/thunder-wmt
+ConditionPathExists=/etc/thunder/wmt.conf
+Wants=thunder-wmt-connsys.service
+After=thunder-wmt-connsys.service
+Before=bluetooth.service
+# Sobe o bluetoothd depois de um sucesso, inclusive o de uma nova tentativa (Restart=).
+Wants=bluetooth.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/thunder/wmt/thunder-wmt bt-on
+Restart=on-failure
+RestartSec=3
+RestartPreventExitStatus=66 78
+# Cada espera do bt-on vai ate 40 s (BT_SETUP_TIMEOUT); o caminho normal leva ~4 s.
+TimeoutStartSec=300
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# socket AF_BLUETOOTH do mgmt
+RestrictAddressFamilies=AF_UNIX AF_BLUETOOTH
+
+[Install]
+WantedBy=multi-user.target
