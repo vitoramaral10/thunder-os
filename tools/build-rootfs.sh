@@ -37,7 +37,8 @@ THUNDER_TIMEZONE=${THUNDER_TIMEZONE:-UTC}
 THUNDER_HOSTNAME=${THUNDER_HOSTNAME:-$DEVICE_CODENAME}
 pac="pacman --noconfirm --needed --disable-sandbox"
 
-[ -d "$KERNEL_OUT/lib/modules/$KVER" ] || { echo "sem modulos: rode tools/build-kernel.sh" >&2; exit 1; }
+KERNEL_PKG=$OUT/linux-$DEVICE.pkg.tar.zst
+[ -s "$KERNEL_PKG" ] || { echo "sem o pacote do kernel: rode tools/build-kernel.sh e tools/package-kernel.sh" >&2; exit 1; }
 for f in "${FIRMWARE_REQUIRED[@]}" "${INITRAMFS_FIRMWARE[@]}"; do
 	[ -s "$FIRMWARE/$f" ] || { echo "sem $f em $FIRMWARE (devices/$DEVICE/docs)" >&2; exit 1; }
 done
@@ -50,6 +51,7 @@ profile_file=$repo/rootfs/profiles/$THUNDER_PROFILE.sh
 [[ " ${DEVICE_PROFILES[*]} " == *" $THUNDER_PROFILE "* ]] ||
 	{ echo "$DEVICE nao aceita o perfil $THUNDER_PROFILE (${DEVICE_PROFILES[*]})" >&2; exit 1; }
 PROFILE_PACKAGES=() PROFILE_SERVICES=() PROFILE_LOCAL_PACKAGES=() PROFILE_BUILD_DEPENDS=()
+PROFILE_GROUPS=()
 PROFILE_STATUS=experimental PROFILE_BLOCKERS=
 . "$profile_file"
 if [ "${PROFILE_STATUS:-}" = planned ] && [ "${THUNDER_ALLOW_PLANNED:-0}" != 1 ]; then
@@ -57,7 +59,14 @@ if [ "${PROFILE_STATUS:-}" = planned ] && [ "${THUNDER_ALLOW_PLANNED:-0}" != 1 ]
 	echo "(THUNDER_ALLOW_PLANNED=1 monta assim mesmo, para quem esta portando)" >&2
 	exit 1
 fi
-LOCAL_PACKAGES=(openrc "${PROFILE_LOCAL_PACKAGES[@]}")
+# Pacotes nossos: os do aparelho e depois os do perfil, sem repetir.
+LOCAL_PACKAGES=()
+for p in ${DEVICE_LOCAL_PACKAGES[@]+"${DEVICE_LOCAL_PACKAGES[@]}"} \
+	${PROFILE_LOCAL_PACKAGES[@]+"${PROFILE_LOCAL_PACKAGES[@]}"}; do
+	[ -f "$repo/rootfs/packages/$p/PKGBUILD" ] ||
+		{ echo "pacote local sem receita: rootfs/packages/$p/PKGBUILD" >&2; exit 1; }
+	[[ " ${LOCAL_PACKAGES[*]} " == *" $p "* ]] || LOCAL_PACKAGES+=("$p")
+done
 echo "perfil: $THUNDER_PROFILE ($PROFILE_TITLE)"
 
 echo "== qemu-aarch64 estatico"
@@ -114,7 +123,7 @@ export ROOTFS
 
 # Pacotes nossos e o thunder-reboot: guardados em $LOCAL_PKGS/<nome>/<hash da receita>.
 # So o que mudou e compilado, num chroot de build ($BUILDROOT) que fica fora do rootfs.
-recipe_hash() { (cd "$1" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) | sha256sum | cut -c1-16; }
+recipe_hash() { (cd "$1" && find . -name __pycache__ -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum) | sha256sum | cut -c1-16; }
 declare -A PKG_DIR
 need_build=()
 for p in "${LOCAL_PACKAGES[@]}"; do
@@ -131,12 +140,17 @@ else
 	if [ ! -d "$BUILDROOT/usr" ]; then
 		tree_copy "$BASE" "$BUILDROOT"
 	fi
-	ROOTFS=$BUILDROOT tools_achroot /bin/bash -c "$pac -Syu base-devel meson psmisc ${PROFILE_BUILD_DEPENDS[*]} && (id builder >/dev/null 2>&1 || useradd -m builder)"
+	ROOTFS=$BUILDROOT tools_achroot /bin/bash -c "$pac -Syu base-devel ${PROFILE_BUILD_DEPENDS[*]} && (id builder >/dev/null 2>&1 || useradd -m builder)"
 	# Valores entram nos shells do namespace pelo ambiente, nunca colados no codigo: um
 	# caminho ou uma senha com apostrofo quebraria a sintaxe.
 	export repo BUILDROOT
 	UIDGID=$(userns awk -F: '$1=="builder"{print $3":"$4}' "$BUILDROOT/etc/passwd")
 	export UIDGID
+	# Dependencias da receita que faltam no chroot de build: o makepkg recusa compilar sem
+	# elas (depends, makedepends, checkdepends) e o -s dele nao roda como builder. pacman -T
+	# lista so as ausentes; as nossas ja entraram no chroot nas voltas anteriores.
+	recipe_deps='. ./PKGBUILD; missing=$(pacman -T "${depends[@]}" "${makedepends[@]}" "${checkdepends[@]}") || true
+		[ -z "$missing" ] || pacman --noconfirm --needed --disable-sandbox -S --asdeps $missing'
 	# Na ordem: cada pacote entra no buildroot depois de pronto (ou do cache), para o
 	# seguinte poder depender dele.
 	for p in "${LOCAL_PACKAGES[@]}"; do
@@ -148,6 +162,7 @@ else
 				rm -rf "${w:?}/$p"; mkdir -p "$w"
 				cp -a "$repo/rootfs/packages/$p" "$w/$p"
 				chown -R "$UIDGID" "$w/$p"'
+			ROOTFS=$BUILDROOT tools_achroot /bin/bash -c "cd /home/builder/work/$p && $recipe_deps"
 			ROOTFS=$BUILDROOT tools_achroot /bin/bash -c "cd /home/builder/work/$p &&
 				su builder -c 'MAKEFLAGS=-j\$(nproc) makepkg -f --noconfirm'"
 			userns bash -c 'set -e
@@ -181,7 +196,8 @@ stage_config=$(
 	for v in DEVICE DEVICE_NAME DEVICE_VENDOR DEVICE_CODENAME KVER THUNDER_USER \
 		THUNDER_PASSWORD THUNDER_ROOT_PASSWORD THUNDER_LOCALE THUNDER_TIMEZONE \
 		THUNDER_HOSTNAME THUNDER_PROFILE WIFI_INTERFACE THUNDER_WIFI_SSID \
-		THUNDER_WIFI_PASSWORD; do
+		THUNDER_WIFI_PASSWORD WMT_HIF WMT_WIFI_NVRAM WMT_BT_ADDR ZRAM_SIZE ZRAM_ALGORITHM \
+		SWAPFILE_SIZE; do
 		echo "$v=$(q "${!v}")"
 	done
 	qa() { local x; for x in "$@"; do printf '%s ' "$(q "$x")"; done; }
@@ -189,24 +205,33 @@ stage_config=$(
 	echo "DEVICE_SERVICES=($(qa "${DEVICE_SERVICES[@]}"))"
 	echo "PROFILE_PACKAGES=($(qa "${PROFILE_PACKAGES[@]}"))"
 	echo "PROFILE_SERVICES=($(qa "${PROFILE_SERVICES[@]}"))"
+	echo "PROFILE_GROUPS=($(qa "${PROFILE_GROUPS[@]}"))"
 	echo "EXTRA_PACKAGES=($(qa "${EXTRA_PACKAGES[@]}"))"
 	echo "LOCAL_PACKAGES=($(qa "${LOCAL_PACKAGES[@]}"))"
+	echo "WMT_CORE_MODULES=($(qa "${WMT_CORE_MODULES[@]}"))"
+	echo "WMT_WIFI_MODULES=($(qa "${WMT_WIFI_MODULES[@]}"))"
+	echo "WMT_ROM_PATCHES=($(qa "${WMT_ROM_PATCHES[@]}"))"
+	echo "WMT_BT_MODULES=($(qa "${WMT_BT_MODULES[@]}"))"
 )
 LOCAL_DIRS=$(for p in "${LOCAL_PACKAGES[@]}"; do printf '%s=%s\n' "$p" "${PKG_DIR[$p]}"; done)
-export stage_config THUNDER_PROFILE LOCAL_DIRS REBOOT_DIR repo KVER KERNEL_OUT FIRMWARE AUTHORIZED_KEYS DEVICE_DIR
+export stage_config THUNDER_PROFILE LOCAL_DIRS REBOOT_DIR repo KVER KERNEL_PKG FIRMWARE AUTHORIZED_KEYS DEVICE_DIR
 userns bash -c 'set -e
-	rm -rf "${S:?}"; mkdir -p "$S/packages" "$S/modules" "$S/firmware"
+	rm -rf "${S:?}"; mkdir -p "$S/packages/kernel" "$S/firmware"
 	cp -a "$repo/rootfs/overlay" "$S/overlay"
 	if [ -d "$DEVICE_DIR/overlay" ]; then cp -a "$DEVICE_DIR/overlay" "$S/device-overlay"; fi
 	pd=$repo/rootfs/profiles/$THUNDER_PROFILE
 	if [ -d "$pd/overlay" ]; then cp -a "$pd/overlay" "$S/profile-overlay"; fi
 	if [ -f "$pd/configure.sh" ]; then cp "$pd/configure.sh" "$S/profile-configure.sh"; fi
 	install -Dm755 "$REBOOT_DIR/thunder-reboot" "$S/overlay/usr/local/bin/thunder-reboot"
+	# A receita do boot.img vai para dentro da imagem: o aparelho remonta o boot.img
+	# sozinho quando o pacote do kernel atualiza (boot-deploy).
+	install -Dm755 "$repo/initramfs/init" "$S/overlay/usr/lib/thunder/initramfs/init"
+	install -Dm755 "$repo/initramfs/thunder-mkboot" "$S/overlay/usr/lib/thunder/thunder-mkboot"
+	cp "$(readlink -f "$KERNEL_PKG")" "$S/packages/kernel/"
 	while IFS="=" read -r p dir; do
 		[ -n "$p" ] || continue
 		mkdir -p "$S/packages/$p"; cp "$dir"/*.pkg.tar.* "$S/packages/$p/"
 	done <<< "$LOCAL_DIRS"
-	cp -a "$KERNEL_OUT/lib/modules/$KVER" "$S/modules/"
 	if [ -d "$FIRMWARE" ]; then cp -a "$FIRMWARE/." "$S/firmware/"; fi
 	if [ -n "$AUTHORIZED_KEYS" ]; then cp "$AUTHORIZED_KEYS" "$S/authorized_keys"; fi
 	printf "%s\n" "$stage_config" > "$S/config"

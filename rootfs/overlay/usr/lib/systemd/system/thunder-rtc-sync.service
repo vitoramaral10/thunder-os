@@ -1,0 +1,14 @@
+# Grava o RTC com a hora do sistema: ao subir (logo depois do 1o acerto do NTP neste
+# boot, pelo thunder-rtc-sync.path) e ao parar (no desligamento, com a hora ainda
+# disciplinada). Sem isto, um RTC que voltou a 2009 (bateria zerada) segue errado no
+# proximo boot ate a rede subir (o PID 1 e o timesyncd so adiantam o relogio para a data
+# do build e a do ultimo acerto salvo).
+[Unit]
+Description=Write network time to the RTC
+After=systemd-timesyncd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/hwclock --systohc --utc
+ExecStop=/usr/bin/hwclock --systohc --utc

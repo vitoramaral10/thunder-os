@@ -42,6 +42,11 @@ compile-time constants, so the speaker codec builds.
 **build-mt6833-dtb.** The arm64 MediaTek DTS Makefile does not list `mt6833.dtb`.
 The patch adds it so `dtbs_install` produces `boot/dtbs/mediatek/mt6833.dtb`.
 
+**add-thunder-dt-compatible-chassis.** The root node said only `mediatek,MT6833`. It now
+lists `xiaomi,thunder` first, so gmobile (Phosh) can match the phone's display data, and
+sets `chassis-type = "handset"` for hostnamed. `mediatek,MT6833` stays: `clkchk-mt6833`
+and `clkdbg-mt6833` check it. The bootloader rewrites `model` but leaves both alone.
+
 **fix-u-serial-null-close.** `gs_open()` in the USB serial gadget sets
 `tty->driver_data` near its end, after several early error returns. The tty layer still
 calls `gs_close()` on the release path of a failed open, so `port` can be NULL there and
@@ -106,6 +111,12 @@ rate. Each `.clock` is now computed from the mode's own timings (60 Hz: 308356 k
 The DSI link takes its rate from the panel's `pll_clk`/`data_rate` params, so only the
 advertised rate changes. Timing vblanks with `DRM_IOCTL_WAIT_VBLANK` gives 60.5 Hz.
 
+**fix-panel-pwm-gpio-optional.** The Tianma and JDI panel drivers take a `pwm` GPIO on
+prepare and unprepare, but the DT has no `pwm-gpios`. The error pointer from
+`devm_gpiod_get()` went to `gpiod_set_value()` ("invalid GPIO") and `devm_gpiod_put()`,
+which WARNs with a backtrace: one per screen-off. Both drivers skip the GPIO when the
+lookup fails.
+
 **backport-procfs-fdinfo-ptrace-read.** (r30) Backport of upstream 5.14 `7bc3fa0172a4`
 and `1927e498aee1`. A process that drops privileges without `exec()` becomes
 non-dumpable, its `/proc` files turn root-owned, and it cannot read its own
@@ -164,6 +175,163 @@ conntrack marked the segments INVALID and the firewall dropped them: ping and th
 USB). The patch linearizes the skb on that path. Measured after the fix: 50 MB over ssh
 in 2.7 s.
 
+### Backports for Arch's systemd 262 userland
+
+Arch's `systemd-libs` 262 (libudev, sd-event) and `systemd-udevd` assume a newer kernel
+and have no fallback for these four features. Without them libudev enumerated no
+devices on 4.19 (`udev_enumerate_scan_devices` returned `-EUNATCH`) and udevd failed
+on 192 devices, the touchscreen among them. With them, Arch's own udevd runs under
+OpenRC and tags the touchscreen (`ID_INPUT_TOUCHSCREEN=1`). Each was found and checked
+on the phone with a probe (`statx-mntid.py`, `waitid-pidfd.py`, `close-range.py`) or
+strace, and written from the upstream commit with two adversarial reviews.
+
+- **backport-statx-mount-id** (upstream fa2fcf4f1df1 + 80340fe3605c, 5.8): `statx`
+  returns `STATX_MNT_ID` and `STATX_ATTR_MOUNT_ROOT`. systemd's `chase()` needs the
+  mount ID to verify paths and does not fall back to `name_to_handle_at`.
+- **backport-waitid-pidfd** (3695eae5fee0, 5.4): `waitid(P_PIDFD)`. sd-event reaps
+  udevd's workers through pidfds.
+- **backport-close-range** (278a5fbaed89, 5.9, flags 0 only): `close_range` as
+  syscall 436, native and compat. Any non-zero flag returns `-EINVAL`, so callers that
+  ask for `CLOSE_RANGE_CLOEXEC` (OpenRC) fall back.
+- **backport-utimensat-empty-path** (44a3b8744405, 5.8): `utimensat(fd, "", ...,
+  AT_EMPTY_PATH)`. udevd touches tag files and device nodes this way; 4.19 returned
+  `EINVAL` and udevd dropped the whole event.
+
+- **backport-faccessat2** (94704515 + c8ffd8bcdd28, 5.8): syscall 439. Harmless for udevd
+  (glibc falls back), but required for systemd as PID 1: the executor checks every
+  `ExecStart=` with `faccessat(fd, "", X_OK, AT_EMPTY_PATH)`, which glibc 2.43 sends to
+  syscall 439 and fails with EINVAL when it is missing, so every service died with
+  `203/EXEC`.
+
+Still missing and harmless: `epoll_pwait2` (sd-event falls back), `openat2` (bubblewrap is
+rebuilt with its runtime fallback, see `rootfs/packages/bubblewrap-thunder`), the new
+mount API and per-mount procfs (systemd units that need them get drop-ins, see the
+systemd notes in the image).
+
+Kernel config for systemd as PID 1 (r40): `FHANDLE`, `CGROUP_PIDS`, `AUTOFS_FS`,
+`CHECKPOINT_RESTORE`, `NET_SCH_FQ_CODEL`, no `UEVENT_HELPER`; and for iwd, AF_ALG
+(`CRYPTO_USER_API_HASH/SKCIPHER/AEAD`) and `KEY_DH_OPERATIONS`. nf_tables is on since rB (next section).
+
+**fix-vendor-kthreads-idle-sleep.** Vendor kthreads that poll forever (`wdtk-0..7`,
+`gauge_timer_thr`, `mivr_thread`, `hang_detect`, `ccci_poll1`, `mddp_rx`, `disp_echk`) slept
+in `TASK_UNINTERRUPTIBLE`, which counts in the load average: an idle phone showed ~16.
+They now sleep in `TASK_IDLE`, which is not counted, with the same timing:
+`usleep_idle_range()` (mainline 5.16) and `msleep_idle()` (ours) in
+`kernel/time/timer.c`, `wait_event_idle()` and `wait_event_idle_timeout()`. `mdrt_thread` was
+created and never woken, so it sat in `kthread()`; it is now started at init and parks
+itself until the first MDRT stall. Measured: load 2.1 five minutes after boot.
+
+### rB: nf_tables, netfilter at 4.19.325, userns gate, no static usermode helper
+
+Design and evidence: `build/research/nft/DESIGN.md` (with R1 stable sweep, R2 CVE map, R4
+applicability). Flashed and tested on the phone on 2026-10-12; the acceptance list, the test plan and
+the results are in `netfilter.md`.
+
+**What.** Nine series entries, appended after `fix-vendor-kthreads-idle-sleep`:
+
+- **backport-netfilter-4.19.325.** The netfilter code of the tree becomes that of
+  `v4.19.325`: 191 stable commits, 109 files, +2669/-1483 (`net/netfilter`,
+  `net/{ipv4,ipv6}/netfilter`, `net/bridge/netfilter`, `br_netfilter_*`, `include/net/netfilter`,
+  `include/net/netns/nftables.h`, `include/{linux,uapi/linux}/netfilter*`). Left out: the 23 generic
+  `net/netlink` commits (a later revision, rD) and the DECnet removal (the vendor still has
+  DECnet). `uname` keeps saying 4.19.191. The patch header carries the exact recipe, the
+  list of commits and the sha256 of the body. Invariant: tree + patch compared with `v4.19.325`
+  on those paths differs only in the vendor files (`xt_quota2`, `xt_IDLETIMER`, `rcu_read_lock` in
+  `nf_reinject`, a non-static `nf_nat_ipv4_fn`, Kconfig, Makefile) and DECnet.
+- **add-netfilter-userns-restrict.** The gate, below.
+- **backport-nf-reject-ipv6-ll-max-header** (4ed234fe793f, CVE-2024-50256),
+  **backport-nf-ct-tcp-rst-direction** (bed6e04be8e6, CVE-2026-63913) and
+  **backport-nf-ct-reasm-mac-header** (3b08fed5b7e0, CVE-2026-72250): one to three lines
+  each, no 4.19.y fix.
+- **fix-mtk-default-no-dccp-act-ipt.** Removes three `select` lines of
+  `drivers/misc/mediatek/Kconfig.default` (`NF_CT_PROTO_DCCP`, `NF_NAT_PROTO_DCCP`,
+  `NET_ACT_IPT`). A `select` beats `# CONFIG_X is not set`, so the config alone would not do.
+- **backport-cgroup-v1-release-agent-capable** (stable 4.19.229, CVE-2022-0492): see Risks.
+- **backport-reboot-hw-protection-shutdown** (dfa19b11385d, 5.14) and
+  **fix-mtk-charger-battery-missing-poweroff**: the forced fallback of the missing-battery
+  shutdown, see Risks.
+
+**Config.** `kernel-config` gains the nftables group (`NF_TABLES`, inet/ip/ip6/arp/bridge families,
+ct, nat, masq, redir, reject, compat, fib, ...; 10 `nft_*` symbols are modules), and loses
+`STATIC_USERMODEHELPER`. `NF_CT_PROTO_DCCP` (CVE-2023-53333, remote stack OOB; the upstream fix does not fit the 4.19 layout and nobody
+uses DCCP), `NET_ACT_IPT` and `NF_CONNTRACK_TIMEOUT` are off; `NF_NAT_PROTO_DCCP` follows
+`NF_CT_PROTO_DCCP`. Not enabled: `NF_TABLES_NETDEV`, flow tables, `NFT_SOCKET/TPROXY/OSF/TUNNEL/DUP`, IPVS, ipset,
+legacy ebtables, `NF_CONNTRACK_SIP`. No NAT in the `inet` family (5.2): NAT goes in `ip`/`ip6`
+tables; firewalld does not run (needs 5.3); `iptables` works through its nft backend.
+
+**The gate.** Upstream accepts `CAP_NET_ADMIN` over the netns (`ns_capable(net->user_ns)`), and with
+`USER_NS` and `NET_NS` any user gets that from `unshare -Urn`. With
+`net.netfilter.nf_userns_restrict=1` (the default, in the code from boot) configuring netfilter also needs
+`CAP_NET_ADMIN` in the initial user namespace. Covered: `nfnetlink_rcv()` (nf_tables, ctnetlink,
+nfqueue, nflog, ipset), `nfnetlink_bind()` (event subscription and module autoload) and the sockopts of
+`ip_tables`, `ip6_tables`, `arp_tables`, `ebtables`, `ipset`, `ipvs`. Root, NetworkManager,
+systemd-networkd and `nftables.service` see no difference; an admin of a child user namespace gets `EPERM`.
+Because `act_ipt` (tc action `xt`) runs xtables targets with only `netlink_ns_capable` and no gate, it is
+compiled out instead. The sysctl exists only in `init_net`, range 0..1, and has its own `proc_handler`:
+`net_ctl_permissions()` lets any `CAP_NET_ADMIN` holder write network sysctls like root, so the handler
+requires `capable(CAP_SYS_ADMIN)` for writes (EPERM otherwise). Opt-out, owner decision only:
+`net.netfilter.nf_userns_restrict = 0` in `/etc/sysctl.d`. What the gate breaks at `=1`: podman rootless with
+bridge networking (netavark), Docker rootless, `nft`/`iptables` inside unprivileged containers (LXC/Incus,
+`systemd-nspawn --private-users`); bubblewrap and `unshare` itself keep working.
+
+**CVE policy** (86 CVEs with compiled code and no 4.19.y fix, R2):
+- nfnetlink (30) and sockopt (21) entry points: held by the gate; root is needed after it. `MODULE_SIG` is off, so
+  root and kernel are already one boundary.
+- Packet-path CVEs: per CVE. Fixed by the three backports; DCCP conntrack removed; conntrack helpers
+  (h323, irc, amanda, ...) need a `ct helper` rule and `nf_ct_auto_assign_helper` is false;
+  `connlimit` CVEs need a `connlimit` rule; `ct timeout` code is not compiled. **Policy for any ruleset we
+  ship: no `ct helper`, no `connlimit`, no `ct timeout`.**
+- Bridge CVEs (CVE-2024-27415, 35839, 2026-52912, 72255 and the like): any user can create a bridge in
+  its own netns, and `br_netfilter` hooks (`BRIDGE_NETFILTER=y`, forced by the vendor `select`) run in every netns.
+  So these are not limited to Waydroid or a hotspot; what holds them is the gate (configuring netfilter,
+  nfqueue and the ebtables sockopts from a user namespace is refused) together with `NET_ACT_IPT` being
+  off. If the gate is switched to 0, they are open. The gate does not cover the other case: when root keeps a
+  bridge in the initial netns with conntrack on (Waydroid's `waydroid0` with NAT, a bridged hotspot),
+  CVE-2024-27415 (bridge multicast with conntrack, adjacent attack vector) is reachable by traffic from the
+  neighbouring network.
+- CVE-2024-26921 (inet_defrag UAF, local, with an IPv6 conntrack in the initial netns) is **not** fixed: it is
+  core IP code, planned as rB.1. Until then do not enable a stateful IPv6 firewall by default (the
+  NetworkManager `shared` hotspot creates one).
+- The CNA data misses CVEs before Feb/2024, and nf_tables bugs without CVE exist: the gate is what carries the security
+  of rB; the slice and the backports are defence in depth against root and the packet path.
+
+**`STATIC_USERMODEHELPER=n`.** What works again: module autoload (`/sbin/modprobe`, so the `NFT_*=m` load on
+demand, as root only past the gate), the `core_pattern` pipe, `orderly_poweroff/reboot` (`/sbin/poweroff`,
+which is `systemctl`), `/sbin/request-key`. The bridge STP helper stays absent and `UEVENT_HELPER` is already off.
+
+**core_pattern.** 4.19 knows `%d` and `%I` but not `%F` (pidfd, 6.16). systemd 262 ships
+`kernel.core_pattern=|.../systemd-coredump %P %u %g %s %t %c %h %d %F %I`; without `%F` the
+split collapses the spaces and `%I` lands in the pidfd slot. systemd-coredump requires only up to
+`%c`. `tools/package-kernel.sh` therefore adds `usr/lib/sysctl.d/51-thunder-coredump-no-pidfd.conf` to the kernel
+package whenever the kernel version is below 6.16 (generic, not tied to the device; it sorts after the
+systemd `50-coredump.conf` and overrides only `kernel.core_pattern`, with `%P %u %g %s %t %c %h %d`).
+`update-kernel.sh` installs only that package, so the file reaches the phone with the kernel. The script
+fails if the file is not in the package; the presence of the file in the package is an acceptance check.
+
+**Risks.**
+- **Protection poweroff goes through systemd.** With the static helper off, `orderly_poweroff(true)`
+  (`thermal_core.c`, the missing-battery check of `mtk_charger.c`) runs `/sbin/poweroff`, i.e.
+  `systemctl poweroff`. `run_cmd()` uses `UMH_WAIT_EXEC`, so the kernel forces the power off only when the
+  exec fails; before, the helper did not exist and it always did. Both paths keep a forced fallback 30 s after
+  the orderly request, so a hung systemd no longer keeps the phone on: thermal through
+  `THERMAL_EMERGENCY_POWEROFF_DELAY_MS=30000`, the battery check through `hw_protection_shutdown()`
+  (the two patches above). The forced power off does not sync: a shutdown that takes longer than 30 s
+  loses what was not written. No safe trigger exists to test either path.
+- **cgroup v1 `release_agent` (CVE-2022-0492).** The vendor tree lacks the fix, and with the static
+  helper off the `release_agent` runs again (as root, in the initial namespaces). A user who mounts an
+  existing v1 hierarchy inside `unshare -UrmC` could point it at a program of his. The image only mounts
+  cgroup2, but LXC, Waydroid or any `mount -t cgroup` by root create a v1 hierarchy. Closed by
+  `backport-cgroup-v1-release-agent-capable.patch` (stable 4.19.229), part of rB.
+- `modprobe_path` and `core_pattern` are again final steps of an arbitrary kernel write. Accepted: whoever has that
+  already owns the credentials.
+- Autoload is again reachable by unprivileged code where the kernel asks for no capability (about 14 modules plus
+  the `nft_*`, which pass the gate).
+- The sysctl at 0 reopens everything. Only real root writes it (`CAP_SYS_ADMIN`).
+- `struct net` changes (`netns/nftables.h` shrinks), so every module's CRC changes: all modules must come from
+  the same build as the boot image (they do through the kernel package).
+- The rest of the kernel stays at 4.19.191.
+- The gate was compiled but, as of this writing, never run on the device.
+
 ## Connectivity graft
 
 The Wi-Fi, Bluetooth and WMT drivers are not in the Xiaomi tree for this SoC in a usable
@@ -213,11 +381,10 @@ Bring-up of the userland side: [wifi-bringup.md](wifi-bringup.md),
 
 ## Kernel facts that shape the userland
 
-- **`CONFIG_STATIC_USERMODEHELPER` points at an Android binary**
-  (`/system_ext/bin/aee_core_forwarder`). Every usermode-helper call, including
-  `/sbin/modprobe` for module autoloading and `/sbin/mdev` as hotplug helper, is routed to
-  that path and does nothing useful. Modules are loaded explicitly, and device nodes are
-  not created by a hotplug helper.
+- **`CONFIG_STATIC_USERMODEHELPER` is off since rB** (it used to point at an Android binary and
+  neutralised every usermode helper). Module autoload, the `core_pattern` pipe and a clean
+  `orderly_poweroff` work again; the `core_pattern` needs the override that
+  `tools/package-kernel.sh` ships (no `%F`), and the poweroff caveat is in the rB section.
 - **The initramfs must be gzip.** `CONFIG_RD_GZIP` is the only initramfs decompressor
   (bzip2, lzma, xz, lzo and lz4 are off). The LK bootloader also accepts only a compressed
   kernel (Image.gz).
@@ -235,7 +402,9 @@ Bring-up of the userland side: [wifi-bringup.md](wifi-bringup.md),
   `faccessat()` with `AT_SYMLINK_NOFOLLOW` returns `EINVAL` (`faccessat2()` is 5.8), which
   makes glib report existing files as missing.
 - **No Landlock.** pacman must run with `DisableSandboxFilesystem`.
-- **`NF_TABLES` is off.** Firewalling uses iptables-legacy.
+- **nf_tables is on (rB), for the initial user namespace only:** configuring netfilter needs
+  `CAP_NET_ADMIN` in the initial userns (`net.netfilter.nf_userns_restrict=1`). No NAT in the `inet`
+  family (5.2), no firewalld (5.3); `iptables` uses the nft backend and `iptables-legacy` still works for root.
 - **No `AF_ALG` and no `KEY_DH`.** iwd cannot work, so Wi-Fi uses wpa_supplicant.
 - **The NCM USB gadget is broken on this MUSB controller.** Only RNDIS works, so the USB
   network is RNDIS.

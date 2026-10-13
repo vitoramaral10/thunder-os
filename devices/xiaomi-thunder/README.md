@@ -7,7 +7,7 @@
 | Kernel | Xiaomi vendor 4.19.191 with our patches ([docs/kernel.md](docs/kernel.md)) |
 | Boot | boot.img header v2, A/B, fastboot, AVB disabled |
 | Root partition | `userdata` (ext4 written directly, no nested GPT) |
-| Status | **boots**: OpenRC up in ~20 s, SSH over USB |
+| Status | **boots** (validated under OpenRC; the systemd boot is being tested), SSH over USB |
 | Maintainer | vitoramaral10 |
 
 There is no newer kernel for this SoC: mainline supports no phone Dimensity,
@@ -22,10 +22,10 @@ and MediaTek never published a newer BSP.
 | Touchscreen | works | wake service included | needs the Novatek firmware from your phone |
 | GPU (Mali-G57) | works | not wired | panfrost backported to 4.19, see [docs/gpu-bringup.md](docs/gpu-bringup.md) |
 | Wi-Fi | works | works | gen4m stack rebuilt for MT6833, 2.4 and 5 GHz; connects from the installer or `thunder-wifi`, see [docs/wifi-bringup.md](docs/wifi-bringup.md) |
-| Bluetooth | works | not wired | BR/EDR and LE, no audio yet, see [docs/bluetooth-bringup.md](docs/bluetooth-bringup.md) |
+| Bluetooth | works | works | BlueZ through the `btmtk_stp` HCI driver, factory address; BR/EDR and LE, no audio yet, see [docs/bluetooth-bringup.md](docs/bluetooth-bringup.md) |
 | Battery and charging | works | — | fuel gauge algorithm runs in the kernel |
 | Sensors | works | not wired | light, accelerometer, proximity as IIO, see [docs/sensors.md](docs/sensors.md) |
-| Speaker | works | not wired | |
+| Audio | works | works | speaker and internal mic through PipeWire (UCM); headphones without jack detection, no earpiece yet, see [docs/audio.md](docs/audio.md) |
 | Modem, cameras | not started | | |
 
 "Not wired" means the driver works, but the service that brings it up is not
@@ -46,8 +46,14 @@ built-in touch driver loads it before the root is mounted.
   active slot is `a` (the only one tested).
 - **The screen stays black.** There is no text console: the framebuffer
   console caused a bootloop on this kernel. Use the USB cable.
-- **Clock:** the RTC may be back in 2009 after the battery ran flat. From the
-  host: `ssh root@172.16.42.1 "date -s @$(date +%s) && hwclock --systohc"`.
+- **Clock:** the RTC may be back in 2009 after the battery ran flat. `systemd-timesyncd`
+  fixes the system clock as soon as Wi-Fi is up and `thunder-rtc-sync` writes it
+  to the RTC.
+- **Kernel updates go through fastboot.** The bootloader turns on the UFS
+  power-on write protection for the boot partition, so Linux cannot write it
+  (`DATA PROTECT`, sense key 0x7) until the next power cycle.
+  `tools/update-kernel.sh` handles it: the phone builds the boot.img, the PC
+  flashes it over fastboot, about 35 s without buttons (`BOOT_DEPLOY=fastboot`).
 - **Factory recovery:** run the factory fastboot package's `flash_all.sh`.
   **Never `flash_all_lock.sh`**: it relocks the bootloader. Afterwards run a
   full `tools/flash.sh --sim` again, since the factory flash re-enables
@@ -61,8 +67,7 @@ device.sh        identity, kernel source, boot.img layout, fastboot, services,
 kernel-config    kernel .config
 patches/         kernel patches, applied in patches/series order
 connectivity/    MediaTek Wi-Fi/BT driver source grafted over the kernel
-overlay/         files added to the rootfs: touchscreen-wake, wifi-thunder (radio
-                 bring-up) and its helpers in /usr/local/bin
-init.d/, bluetooth/   Bluetooth bring-up, not in the image yet
+overlay/         files added to the rootfs: touchscreen-wake rule, NetworkManager and
+                 sleep policy (Wi-Fi/BT bring-up is the thunder-mediatek-wmt package)
 docs/            kernel catalogue, firmware, hardware bring-up write-ups
 ```

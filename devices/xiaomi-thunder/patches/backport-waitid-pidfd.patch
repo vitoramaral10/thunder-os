@@ -1,0 +1,129 @@
+Backport de 3695eae5fee0 ("pidfd: add P_PIDFD to waitid()", Linux 5.4):
+waitid(P_PIDFD, pidfd, ...) espera o processo apontado por um pidfd.
+Traz junto o helper pidfd_pid() (fork.c), que no 5.4 vem nesse mesmo commit:
+o signal.c do 4.19 ja tem pidfd_to_pid() com a logica inline, que passa a
+usar pidfd_pid().
+
+O systemd 262 (sd-event, libudev, systemd-udevd) espera filhos por
+waitid(P_PIDFD, ...) e, sem o P_PIDFD, o waitid devolve EINVAL.
+
+Adaptado ao 4.19: nada alem de regenerar os hunks contra esta arvore;
+pidfd_open/pidfd_fops/CLONE_PIDFD ja existem aqui. O caminho compat
+(COMPAT_SYSCALL_DEFINE5(waitid)) passa por kernel_waitid(), como no
+upstream, entao fica coberto sem mudanca propria. P_PIDFD vale 3.
+
+--- a/include/linux/pid.h
++++ b/include/linux/pid.h
+@@ -71,6 +71,10 @@
+ 
+ extern const struct file_operations pidfd_fops;
+ 
++struct file;
++
++extern struct pid *pidfd_pid(const struct file *file);
++
+ static inline struct pid *get_pid(struct pid *pid)
+ {
+ 	if (pid)
+--- a/include/uapi/linux/wait.h
++++ b/include/uapi/linux/wait.h
+@@ -17,6 +17,7 @@
+ #define P_ALL		0
+ #define P_PID		1
+ #define P_PGID		2
++#define P_PIDFD		3
+ 
+ 
+ #endif /* _UAPI_LINUX_WAIT_H */
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -1539,6 +1539,23 @@
+ 	return retval;
+ }
+ 
++static struct pid *pidfd_get_pid(unsigned int fd)
++{
++	struct fd f;
++	struct pid *pid;
++
++	f = fdget(fd);
++	if (!f.file)
++		return ERR_PTR(-EBADF);
++
++	pid = pidfd_pid(f.file);
++	if (!IS_ERR(pid))
++		get_pid(pid);
++
++	fdput(f);
++	return pid;
++}
++
+ static long kernel_waitid(int which, pid_t upid, struct waitid_info *infop,
+ 			  int options, struct rusage *ru)
+ {
+@@ -1561,19 +1578,29 @@
+ 		type = PIDTYPE_PID;
+ 		if (upid <= 0)
+ 			return -EINVAL;
++
++		pid = find_get_pid(upid);
+ 		break;
+ 	case P_PGID:
+ 		type = PIDTYPE_PGID;
+ 		if (upid <= 0)
+ 			return -EINVAL;
++
++		pid = find_get_pid(upid);
++		break;
++	case P_PIDFD:
++		type = PIDTYPE_PID;
++		if (upid < 0)
++			return -EINVAL;
++
++		pid = pidfd_get_pid(upid);
++		if (IS_ERR(pid))
++			return PTR_ERR(pid);
+ 		break;
+ 	default:
+ 		return -EINVAL;
+ 	}
+ 
+-	if (type < PIDTYPE_MAX)
+-		pid = find_get_pid(upid);
+-
+ 	wo.wo_type	= type;
+ 	wo.wo_pid	= pid;
+ 	wo.wo_flags	= options;
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -1695,6 +1695,14 @@
+ 		free_task(tsk);
+ }
+ 
++struct pid *pidfd_pid(const struct file *file)
++{
++	if (file->f_op == &pidfd_fops)
++		return file->private_data;
++
++	return ERR_PTR(-EBADF);
++}
++
+ static int pidfd_release(struct inode *inode, struct file *file)
+ {
+ 	struct pid *pid = file->private_data;
+--- a/kernel/signal.c
++++ b/kernel/signal.c
+@@ -3420,8 +3420,11 @@
+ 
+ static struct pid *pidfd_to_pid(const struct file *file)
+ {
+-	if (file->f_op == &pidfd_fops)
+-		return file->private_data;
++	struct pid *pid;
++
++	pid = pidfd_pid(file);
++	if (!IS_ERR(pid))
++		return pid;
+ 
+ 	return tgid_pidfd_to_pid(file);
+ }

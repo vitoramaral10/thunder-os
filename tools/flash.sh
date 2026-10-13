@@ -16,6 +16,8 @@ require_device
 take_build_lock
 
 out=$OUT
+# BOOT_IMG grava outro boot.img (o update-kernel.sh usa o que o aparelho montou).
+boot_img=${BOOT_IMG:-$out/boot.img}
 sim=0
 so_boot=0
 for a in "$@"; do
@@ -26,10 +28,8 @@ for a in "$@"; do
 	esac
 done
 
-for f in boot.img userdata.img; do
-	[ "$so_boot" = 1 ] && [ "$f" = userdata.img ] && continue
-	[ -s "$out/$f" ] || { echo "falta $out/$f" >&2; exit 1; }
-done
+[ -s "$boot_img" ] || { echo "falta $boot_img" >&2; exit 1; }
+[ "$so_boot" = 1 ] || [ -s "$out/userdata.img" ] || { echo "falta $out/userdata.img" >&2; exit 1; }
 
 # Logo depois de o aparelho entrar no fastboot, o getvar as vezes fica preso em
 # "< waiting for any device >": timeout em cada chamada e espera ate o LK responder.
@@ -47,7 +47,7 @@ echo "Aparelho: $DEVICE_VENDOR $DEVICE_NAME ($DEVICE)"
 echo "Plano:"
 [ "$so_boot" = 1 ] || [ "$FASTBOOT_DISABLE_VBMETA" != 1 ] ||
 	echo "  vbmeta    <- vbmeta vazio com a verificacao desligada (flags 2)"
-echo "  boot      <- $out/boot.img ($(stat -c %s "$out/boot.img") B)"
+echo "  boot      <- $boot_img ($(stat -c %s "$boot_img") B)"
 [ "$so_boot" = 1 ] || echo "  $ROOT_PARTITION  <- $out/userdata.img ($(stat -c %s "$out/userdata.img") B)  APAGA A PARTICAO"
 [ "$sim" = 1 ] || { echo "Nada gravado. Rode com --sim para gravar."; exit 0; }
 
@@ -73,7 +73,7 @@ if [ "$so_boot" != 1 ] && [ "$FASTBOOT_DISABLE_VBMETA" = 1 ]; then
 	# fastboot 37 recusam esta imagem ("Failed to find AVB_MAGIC at offset: 0").
 	fastboot flash "vbmeta$suffix" "$out/vbmeta-disabled.img"
 fi
-fastboot flash "boot$suffix" "$out/boot.img"
+fastboot flash "boot$suffix" "$boot_img"
 [ "$so_boot" = 1 ] || fastboot flash "$ROOT_PARTITION" "$out/userdata.img"
 fastboot reboot
 echo "Gravado. Rede pelo cabo: 172.16.42.1 (ssh, ou telnet com login)."

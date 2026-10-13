@@ -26,7 +26,7 @@ CONFIG_SCHED_TUNE=y
 # CONFIG_RD_LZO is not set
 # CONFIG_RD_LZ4 is not set
 CONFIG_SYSCTL_SYSCALL=y
-# CONFIG_FHANDLE is not set
+CONFIG_FHANDLE=y
 CONFIG_KALLSYMS_ALL=y
 # CONFIG_KALLSYMS_BASE_RELATIVE is not set
 CONFIG_MTK_SCHED_EXTENSION=y
@@ -84,7 +84,7 @@ CONFIG_CFG80211=y
 CONFIG_NL80211_TESTMODE=y
 CONFIG_CFG80211_DEVELOPER_WARNINGS=y
 # CONFIG_CFG80211_DEFAULT_PS is not set
-CONFIG_UEVENT_HELPER=y
+# CONFIG_UEVENT_HELPER is not set
 CONFIG_EXTRA_FIRMWARE="valhall-1691526.wa"
 CONFIG_EXTRA_FIRMWARE_DIR="firmware"
 # CONFIG_FW_CACHE is not set
@@ -333,6 +333,9 @@ CONFIG_MTK_GAUGE_VERSION=30
 CONFIG_MTK_GAUGE_KERNEL_ALGO=y
 # CONFIG_HWMON is not set
 CONFIG_THERMAL=y
+# rB: sem STATIC_USERMODEHELPER o desligamento termico roda /sbin/poweroff (systemctl);
+# se ele travar, o kernel desliga a forca 30 s depois (thermal_core.c, orderly_poweroff).
+CONFIG_THERMAL_EMERGENCY_POWEROFF_DELAY_MS=30000
 /*L19 HQ-159006 Config thermal framework by gengyifei at 2021/11/15 start*/
 CONFIG_CPU_THERMAL=y
 /*L19 HQ-159006 Config thermal framework by gengyifei at 2021/11/15 end*/
@@ -483,8 +486,7 @@ CONFIG_NLS_CODEPAGE_950=y
 CONFIG_NLS_ASCII=y
 CONFIG_NLS_ISO8859_1=y
 CONFIG_NLS_UTF8=y
-CONFIG_STATIC_USERMODEHELPER=y
-CONFIG_STATIC_USERMODEHELPER_PATH="/system_ext/bin/aee_core_forwarder"
+# CONFIG_STATIC_USERMODEHELPER is not set
 CONFIG_SECURITY_SELINUX_DEVELOP=y
 CONFIG_CRYPTO_TWOFISH=y
 # CONFIG_CRYPTO_HW is not set
@@ -573,9 +575,8 @@ CONFIG_DRM_FBDEV_EMULATION=y
 # direto com /dev/stpbt. Aqui e o contrario -- o BlueZ do userland PRECISA
 # do subsistema no kernel. Sem estas linhas nem /sys/class/bluetooth existe.
 #
-# CONFIG_BT_HCIVHCI e o transporte: o driver do chip (bt_drv_6833.ko) so
-# entrega um chardev, nao um hci_dev, entao um daemon em espaco de usuario faz
-# a ponte /dev/stpbt <-> /dev/vhci. Ver devices/xiaomi-thunder/bluetooth/stpbt-vhci-bridge.py.
+# O transporte e o btmtk_stp.ko (patch add-btmtk-stp-hci-driver), um driver HCI sobre
+# o modo BlueZ do STP; nao ha mais ponte em espaco de usuario nem hci_vhci.
 #
 # As dependencias de crypto (CMAC, ECDH, SHA256, ECB) sao 'select' do
 # CONFIG_BT no Kconfig e o olddefconfig as resolve sozinho.
@@ -589,6 +590,78 @@ CONFIG_BT_BNEP=y
 CONFIG_BT_BNEP_MC_FILTER=y
 CONFIG_BT_BNEP_PROTO_FILTER=y
 CONFIG_BT_HIDP=y
-CONFIG_BT_HCIVHCI=y
 CONFIG_SOFTLOCKUP_DETECTOR=y
 CONFIG_DETECT_HUNG_TASK=y
+
+# thunder: systemd 262 como PID 1 (build/research/pid1/kernel-config-plan.md, revisao rA).
+# FHANDLE: name_to_handle_at (id de cgroup, identidade de inode). CGROUP_PIDS: TasksMax=.
+# AUTOFS_FS: units .automount. CHECKPOINT_RESTORE: kcmp (systemd same_fd, Mesa).
+# FQ_CODEL: net.core.default_qdisc do systemd. UEVENT_HELPER fica desligado acima: o udev
+# usa netlink, e um helper faria fork por uevent.
+CONFIG_CGROUP_PIDS=y
+CONFIG_AUTOFS_FS=y
+CONFIG_CHECKPOINT_RESTORE=y
+CONFIG_NET_SCH_FQ_CODEL=y
+
+# thunder: iwd (AF_ALG e DH do keyring; revisao rC). WPA2/WPA3-Personal; enterprise com TLS
+# precisa de KEYCTL_PKEY_* (4.20) e fica no wpa_supplicant.
+CONFIG_CRYPTO_USER_API_HASH=y
+CONFIG_CRYPTO_USER_API_SKCIPHER=y
+CONFIG_CRYPTO_USER_API_AEAD=y
+CONFIG_KEY_DH_OPERATIONS=y
+
+# thunder: nftables (revisao rB, build/research/nft/DESIGN.md). Netfilter em 4.19.325
+# (backport-netfilter-4.19.325.patch); configurar netfilter exige CAP_NET_ADMIN no userns
+# inicial (add-netfilter-userns-restrict.patch, sysctl net.netfilter.nf_userns_restrict=1).
+# Sem NAT na familia inet (5.2): NAT em tabelas ip/ip6; firewalld nao roda (exige 5.3).
+CONFIG_NF_TABLES=y
+CONFIG_NF_TABLES_SET=y
+CONFIG_NF_TABLES_INET=y
+CONFIG_NF_TABLES_IPV4=y
+CONFIG_NF_TABLES_IPV6=y
+CONFIG_NF_TABLES_ARP=y
+CONFIG_NF_TABLES_BRIDGE=y
+CONFIG_NFT_CT=y
+CONFIG_NFT_COUNTER=y
+CONFIG_NFT_LOG=y
+CONFIG_NFT_LIMIT=y
+CONFIG_NFT_NAT=y
+CONFIG_NFT_MASQ=y
+CONFIG_NFT_MASQ_IPV4=y
+CONFIG_NFT_MASQ_IPV6=y
+CONFIG_NFT_CHAIN_NAT_IPV4=y
+CONFIG_NFT_CHAIN_NAT_IPV6=y
+CONFIG_NFT_CHAIN_ROUTE_IPV4=y
+CONFIG_NFT_CHAIN_ROUTE_IPV6=y
+CONFIG_NFT_REJECT=y
+CONFIG_NFT_COMPAT=y
+CONFIG_NFT_FIB_IPV4=y
+CONFIG_NFT_FIB_IPV6=y
+CONFIG_NFT_FIB_INET=y
+CONFIG_NFT_REDIR=m
+CONFIG_NFT_REDIR_IPV4=m
+CONFIG_NFT_REDIR_IPV6=m
+CONFIG_NFT_HASH=m
+CONFIG_NFT_NUMGEN=m
+CONFIG_NFT_QUOTA=m
+CONFIG_NFT_OBJREF=m
+CONFIG_NFT_CONNLIMIT=m
+CONFIG_NFT_QUEUE=m
+CONFIG_NFT_BRIDGE_REJECT=m
+CONFIG_NETFILTER_XT_TARGET_LOG=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+CONFIG_IP6_NF_NAT=y
+CONFIG_IP6_NF_TARGET_MASQUERADE=y
+# thunder: fora do kernel os pontos de netfilter que o gate de userns nao cobre ou que tem
+# CVE sem fix no 4.19.y. Os tres tinham `select` no drivers/misc/mediatek/Kconfig.default,
+# tirados em fix-mtk-default-no-dccp-act-ipt.patch (um select vence o "is not set").
+# - conntrack de DCCP (CVE-2023-53333; NF_NAT_PROTO_DCCP sai junto);
+# - acao tc "xt" (act_ipt roda alvos xtables so com CAP_NET_ADMIN no netns, sem o gate);
+# - timeout de conntrack: mantem o objeto "ct timeout" do nft_ct sem compilar
+#   (CVE-2026-31665/74347).
+# CONFIG_NF_CT_PROTO_DCCP is not set
+# CONFIG_NET_ACT_IPT is not set
+# CONFIG_NF_CONNTRACK_TIMEOUT is not set
+# ematch "ipt" do tc: o mesmo desvio do act_ipt (match xt sem o gate); ninguem faz select,
+# fica explicito para nao voltar por engano.
+# CONFIG_NET_EMATCH_IPT is not set

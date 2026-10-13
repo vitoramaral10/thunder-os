@@ -1,0 +1,62 @@
+mt6359: o modo VOW nao fica preso depois de abrir e fechar o PCM do VOW.
+
+O hw_params do DAI do VOW poe vow_enable = 1 antes de o DAPM ligar o caminho, e so o
+desligamento do widget VOW_OUT o zera. Quando o caminho nunca liga (sem o SCP, ou um
+programa que so abre e fecha o hw:0,50, como o PipeWire sondando o cartao), a flag fica e
+toda captura seguinte roda o ADC no modo VOW: os microfones gravam silencio ate o
+reboot. O hw_free zera a flag quando o caminho VOW nao chegou a ligar; uma sessao VOW de
+verdade continua sendo encerrada pelo POST_PMD do VOW_OUT.
+
+--- a/sound/soc/codecs/mt6359.c
++++ b/sound/soc/codecs/mt6359.c
+@@ -292,6 +292,7 @@
+ 
+ 	/* vow control */
+ 	int vow_enable;
++	int vow_dapm_active;
+ 	int reg_afe_vow_vad_cfg0;
+ 	int reg_afe_vow_vad_cfg1;
+ 	int reg_afe_vow_vad_cfg2;
+@@ -3024,6 +3025,7 @@
+ 	switch (event) {
+ 	case SND_SOC_DAPM_WILL_PMU:
+ 		priv->vow_enable = 1;
++		priv->vow_dapm_active = 1;
+ 		break;
+ 	case SND_SOC_DAPM_PRE_PMU:
+ 		vow_gpio_set(priv);
+@@ -3031,6 +3033,7 @@
+ 	case SND_SOC_DAPM_POST_PMD:
+ 		vow_gpio_reset(priv);
+ 		priv->vow_enable = 0;
++		priv->vow_dapm_active = 0;
+ 		break;
+ 	default:
+ 		break;
+@@ -4511,8 +4514,26 @@
+ 	return 0;
+ }
+ 
++/*
++ * thunder: hw_params sets vow_enable before DAPM powers the VOW path, and only the
++ * VOW_OUT power-down clears it. When the path never powers up (no SCP, or a program
++ * that just opens and closes the PCM, like PipeWire probing the card), the flag stays
++ * set and every later capture runs the ADC in VOW mode: the mics record silence.
++ */
++static int mt6359_codec_dai_vow_hw_free(struct snd_pcm_substream *substream,
++					struct snd_soc_dai *dai)
++{
++	struct mt6359_priv *priv = snd_soc_component_get_drvdata(dai->component);
++
++	if (!priv->vow_dapm_active)
++		priv->vow_enable = 0;
++
++	return 0;
++}
++
+ static const struct snd_soc_dai_ops mt6359_codec_dai_vow_ops = {
+ 	.hw_params = mt6359_codec_dai_vow_hw_params,
++	.hw_free = mt6359_codec_dai_vow_hw_free,
+ };
+ 
+ #define MT6359_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S16_BE |\

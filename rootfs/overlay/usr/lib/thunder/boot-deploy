@@ -1,0 +1,79 @@
+#!/bin/bash
+# Prepara (e, onde da, grava) o boot.img do kernel instalado (pacote linux-<aparelho>).
+# Chamado pelo hook do pacman (90-thunder-boot.hook) depois de instalar ou atualizar o
+# kernel; da para rodar a mao.
+#
+#   1. depmod da versao do pacote
+#   2. monta initramfs + boot.img com /usr/lib/thunder/thunder-mkboot (a mesma receita do
+#      PC), com o firmware que ja esta neste aparelho: /var/lib/thunder/boot-new.img
+#   3. BOOT_DEPLOY=partition: guarda o boot atual em boot-previous.img, grava a particao
+#      boot do slot ativo e confere pelo sha256; se falhar, grava a copia de volta.
+#      BOOT_DEPLOY=fastboot: o bootloader protege a particao contra escrita; o boot.img
+#      fica pendente e o PC grava pelo fastboot (tools/update-kernel.sh).
+#
+# O resultado fica em /var/lib/thunder/boot-deploy.status (gravado, pendente ou falhou):
+# o pacman devolve sucesso mesmo quando um hook falha, entao quem chama confere ali.
+# Na montagem da imagem no PC (THUNDER_IMAGE_BUILD=1) so faz o depmod.
+set -euo pipefail
+
+kdir=/usr/lib/thunder/kernel
+state=/var/lib/thunder
+status=$state/boot-deploy.status
+log() { echo "boot-deploy: $*"; }
+mkdir -p "$state"
+result() { printf '%s %s\n' "$1" "${2:-}" > "$status"; }
+trap 'rc=$?; [ $rc = 0 ] || result falhou "codigo $rc"' EXIT
+
+[ -s "$kdir/boot.conf" ] || { log "sem $kdir/boot.conf: o pacote do kernel nao esta instalado"; exit 1; }
+DEVICE= KERNEL_VERSION= FASTBOOT_AB=1 BOOT_DEPLOY=partition
+. "$kdir/boot.conf"
+
+depmod "$KERNEL_VERSION" 2>/dev/null || depmod "$KERNEL_VERSION"
+
+if [ "${THUNDER_IMAGE_BUILD:-0}" = 1 ]; then
+	log "montagem da imagem: depmod feito, sem gravar particao"
+	exit 0
+fi
+
+# O pacote tem de ser deste aparelho.
+here=$(sed -n "s/^DEVICE='\(.*\)'$/\1/p" /etc/thunder/device 2>/dev/null)
+[ "$here" = "$DEVICE" ] || { log "pacote de $DEVICE, aparelho $here: nada gravado"; exit 1; }
+
+new=$state/boot-new.img
+/usr/lib/thunder/thunder-mkboot / "$kdir" "$new"
+sum=$(sha256sum < "$new" | cut -d' ' -f1)
+
+if [ "$BOOT_DEPLOY" = fastboot ]; then
+	result pendente "$sum"
+	log "boot.img pronto em $new; este aparelho so grava o boot pelo fastboot:"
+	log "no PC, tools/update-kernel.sh termina a atualizacao pelo cabo"
+	exit 0
+fi
+
+# Particao boot do slot ativo, pelo PARTNAME no sysfs (sem udev nao ha by-partlabel).
+part=boot
+if [ "$FASTBOOT_AB" = 1 ]; then
+	suffix=$(grep -o 'androidboot.slot_suffix=[^ ]*' /proc/cmdline | tail -n 1 | cut -d= -f2)
+	[ -n "$suffix" ] || { log "slot ativo desconhecido (sem androidboot.slot_suffix)"; exit 1; }
+	part=boot$suffix
+fi
+uevent=$(grep -lx "PARTNAME=$part" /sys/class/block/*/uevent | head -n 1)
+[ -n "$uevent" ] || { log "particao $part nao encontrada"; exit 1; }
+dev=/dev/$(sed -n 's/^DEVNAME=//p' "$uevent")
+size=$(( $(cat "$(dirname "$uevent")/size") * 512 ))
+nsize=$(stat -c %s "$new")
+[ "$nsize" -le "$size" ] || { log "boot.img de $nsize B nao cabe em $part ($size B)"; exit 1; }
+
+log "copia do boot atual em $state/boot-previous.img"
+dd if="$dev" of="$state/boot-previous.img" bs=1M status=none
+log "gravando $part ($dev)"
+if dd if="$new" of="$dev" bs=1M conv=fsync status=none &&
+	[ "$(head -c "$nsize" "$dev" | sha256sum | cut -d' ' -f1)" = "$sum" ]; then
+	result gravado "$sum"
+	log "pronto: kernel $KERNEL_VERSION gravado em $part. Vale no proximo boot."
+	exit 0
+fi
+log "a gravacao falhou ou nao confere; gravando o boot anterior de volta"
+dd if="$state/boot-previous.img" of="$dev" bs=1M conv=fsync status=none ||
+	log "ATENCAO: nao consegui regravar o boot anterior; nao reinicie sem conferir"
+exit 1

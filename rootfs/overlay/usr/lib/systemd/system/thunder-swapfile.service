@@ -1,0 +1,14 @@
+# Cria o /swapfile no 1o boot (SWAPFILE_SIZE do device.sh). Puxado pelo swapfile.swap
+# (drop-in em swapfile.swap.d): o fstab-generator ignora x-systemd.requires= em linha de
+# swap. Depois do growfs: na imagem recem-gravada o ext4 ainda tem o tamanho de fabrica.
+[Unit]
+Description=Create the swap file
+DefaultDependencies=no
+ConditionPathExists=!/swapfile
+After=systemd-remount-fs.service systemd-growfs-root.service
+Before=swapfile.swap shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/thunder/make-swapfile

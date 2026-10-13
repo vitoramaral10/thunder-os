@@ -26,7 +26,7 @@ methods (U-Boot, UEFI, SD card) are not supported yet.
 ## Steps
 
 1. `cp -r devices/xiaomi-thunder devices/<vendor>-<codename>`, delete what is
-   thunder-only (`connectivity/`, `wifi/`, `bluetooth/`, `init.d/`, the
+   thunder-only (`connectivity/`, `wifi/`, `bluetooth/`, the
    patches, the overlay, the docs) and rewrite `device.sh`.
 2. Put the kernel config in the folder and apply the
    [kernel requirements](#kernel-requirements) below.
@@ -77,6 +77,7 @@ and `$DEVICE_DIR` holds its absolute path. Defaults are in
 | `KERNEL_CONFIG` | required | The `.config`, run through `olddefconfig` |
 | `KERNEL_IMAGE` | `Image.gz` | File under `arch/arm64/boot/` that becomes the boot.img kernel (`Image`, `Image.gz`, `Image.gz-dtb`...) |
 | `KERNEL_DTB` | empty | DTB under the installed `dtbs/` passed to `mkbootimg --dtb`; empty for no `--dtb` (appended DTB or header v0/v1) |
+| `KERNEL_INPUTS` | `(patches)` | Paths in the device folder that feed the kernel build besides `KERNEL_CONFIG` (patches, source grafts). Only these, the `KERNEL_*` variables and `device_kernel_prepare` decide whether `install.sh`/`update-kernel.sh` reuse the last kernel build |
 | `KERNEL_STRIP_WERROR` | `0` | `1` removes `-Werror` from every Makefile/Kbuild; vendor trees often need it on modern gcc |
 | `patches/series` | — | Optional. Patch file names, one per line, `#` for comments, applied with `patch -p1` in order |
 | `device_kernel_prepare` | — | Optional bash function, called with the source directory after extraction and before the patches. For source grafts and other steps a patch cannot express |
@@ -102,6 +103,7 @@ because many bootloaders prepend their own arguments (including `root=`).
 | `FASTBOOT_AB` | `1` | `1` writes `boot_<slot>` and `vbmeta_<slot>`; `0` writes `boot` and `vbmeta` |
 | `FASTBOOT_SLOT` | empty | If set, `flash.sh` refuses unless that slot is active. Use it for the slot you tested |
 | `FASTBOOT_DISABLE_VBMETA` | `1` | Writes an empty vbmeta with verification disabled before `boot`. `0` for phones without AVB |
+| `BOOT_DEPLOY` | `partition` | How a kernel update reaches the boot partition. `partition`: the phone writes it. `fastboot`: the bootloader write-protects it (writes fail with `DATA PROTECT`, sense key 0x7), so `tools/update-kernel.sh` flashes it over fastboot. Test with a write of identical data before choosing `partition` |
 
 ### Root filesystem
 
@@ -109,8 +111,16 @@ because many bootloaders prepend their own arguments (including `root=`).
 |---|---|---|
 | `FIRMWARE_REQUIRED` | `()` | Files that must exist in `$FIRMWARE` before the rootfs build starts |
 | `DEVICE_PACKAGES` | `()` | Extra Arch packages installed in the image |
-| `DEVICE_SERVICES` | `()` | OpenRC services added to the `default` runlevel, from the overlay or from packages |
-| `WIFI_INTERFACE` | empty | Station interface (e.g. `wlan0`). Set it and the image gets `wpa_supplicant`, `dhcpcd`, the `wpa-supplicant` and `dhcpcd-wifi` services and `thunder-wifi`. If the driver needs a bring-up first, ship a service that does `provide wifi-hw` |
+| `DEVICE_SERVICES` | `()` | systemd units (with suffix, e.g. `thunder-wmt-wifi.service`) from the overlay (`overlay/usr/lib/systemd/system`) or from packages, enabled with `systemctl enable` |
+| `DEVICE_LOCAL_PACKAGES` | `()` | Our own packages (`rootfs/packages/<name>/PKGBUILD`) the device needs, built like `PROFILE_LOCAL_PACKAGES` and installed before them; updatable on the phone with `pacman -U` |
+| `WMT_CORE_MODULES`, `WMT_WIFI_MODULES` | `()` | MediaTek WMT (CONNAC 1.0 SoC): modules loaded before `DO_MODULE_INIT`, and the Wi-Fi modules loaded after CONNSYS is up. Non-empty `WMT_CORE_MODULES` writes `/etc/thunder/wmt.conf` for `thunder-wmt` |
+| `WMT_ROM_PATCHES` | `()` | ROM patch file names in the firmware directory; type and EMI offset are read from each header. List them in `FIRMWARE_REQUIRED` too, together with `WMT_SOC.cfg` and the Wi-Fi RAM code |
+| `WMT_HIF` | `0x23` | `SET_STP_MODE` argument: HIF type in bits 0-3 (`0x03` = BTIF full), FM mode in bits 4-7 |
+| `WMT_WIFI_NVRAM` | empty | `<partlabel>:<path in its ext4>` of the Wi-Fi NVRAM, pushed before the first power-on; empty = no NVRAM |
+| `WIFI_INTERFACE` | empty | Station interface (e.g. `wlan0`). Set it and the image gets NetworkManager (wpa_supplicant backend) managing only this interface, and `thunder-wifi`. If the driver needs a bring-up, ship a unit that creates the interface (MediaTek WMT: the `thunder-mediatek-wmt` package and the `WMT_*` variables); nothing has to order after it (NetworkManager follows hotplug). Extra driver interfaces are left unmanaged automatically |
+| `ZRAM_SIZE` | `min(ram / 2, 4096)` | Compressed swap in RAM via `zram-generator`, in its `zram-size =` syntax (MiB), priority 100; empty = no zram |
+| `ZRAM_ALGORITHM` | empty | zram compressor (e.g. `lz4`); it must be built into the kernel (`cat /sys/block/zram0/comp_algorithm`). Empty = the kernel default |
+| `SWAPFILE_SIZE` | empty | Disk swap behind zram (e.g. `4G`): `thunder-swapfile.service` creates `/swapfile` on the first boot, after the root filesystem grows, and it is used at priority 10, only once zram is full. Empty = no disk swap, which spares the flash |
 | `DEVICE_PROFILES` | all | Interface profiles (`rootfs/profiles/`) the device offers; empty means all |
 | `overlay/` | — | Optional. Copied over `/` after the core and profile overlays, so a device file can replace either |
 
@@ -142,11 +152,35 @@ The core needs these from the kernel config:
 | `CONFIG_EXT4_FS` (built in) | the root filesystem, mounted before any module can load |
 | `CONFIG_USB_CONFIGFS`, `CONFIG_USB_CONFIGFS_RNDIS` (built in) | the USB network gadget in the initramfs |
 | `CONFIG_UNIX`, `CONFIG_INET`, `CONFIG_UNIX98_PTYS` | SSH and telnet |
-| `CONFIG_PSTORE` + `CONFIG_PSTORE_CONSOLE` (recommended) | the previous boot's console after a panic, saved in `/var/log/thunder/` |
+| `CONFIG_PSTORE` + `CONFIG_PSTORE_CONSOLE` (recommended) | the previous boot's console after a panic, archived in `/var/lib/systemd/pstore` |
+| `CONFIG_CGROUPS` + cgroup2 | systemd tracks services in cgroups; the initramfs mounts cgroup2 on `/sys/fs/cgroup` with `nsdelegate` |
+| `CONFIG_FHANDLE`, `CONFIG_CGROUP_PIDS`, `CONFIG_AUTOFS_FS` (recommended) | cgroup ids (`NFTSet=`, oomd, coredump), `TasksMax=`, and `x-systemd.automount`/`.automount` units. systemd 262 starts without them, with fewer features |
+| `CONFIG_VT` | the console profile runs its session on tty1 |
+| Syscalls: `faccessat2` (5.8), `statx` with mount id (5.8), `waitid(P_PIDFD)` (5.4), `close_range` (5.9), `utimensat` with `AT_EMPTY_PATH` (5.8) | Arch's systemd calls them with no fallback. Older kernels need the backports in `devices/xiaomi-thunder/patches/` |
 
 Kernels before 5.15 cannot mount an ext4 with `orphan_file`;
 `tools/make-userdata.sh` already leaves it out. On kernels older than 5.10,
 glib-based software may need the patches in `rootfs/packages/glib/`.
+
+## Unit conventions
+
+- The cable units (`thunder-usb-network`, `thunder-telnet-usb`,
+  `thunder-sshd-rescue`) stay `DefaultDependencies=no`, so the cable works in
+  emergency and rescue mode.
+- Device units never order `Before=` the cable units.
+- Device policy (`sleep.conf.d`, generator masks) goes in the device overlay,
+  with the reason in a comment.
+- The core `zz-thunder-*` drop-ins (credentials, `MemoryPressureWatch=`,
+  `ProtectProc=`) are installed by `configure.sh` only when `KERNEL_VERSION` is old
+  enough to need them: into `/usr/lib/systemd/system/service.d/`, and the first two also
+  into `/usr/lib/systemd/user/service.d/`, because the user manager fails the same way.
+- To opt one unit out of a drop-in:
+  `ln -s /dev/null /etc/systemd/system/<unit>.d/<same name>.conf`
+  (`/etc/systemd/user/<unit>.d/` for a user unit).
+- A graphical session started by a system unit with `PAMName=` inherits
+  `CAP_WAKE_ALARM` in the ambient set from `pam_systemd`, and `bwrap` (glycin's
+  image loaders, Flatpak) refuses to run with it. Start the session under
+  `capsh --noamb`, as Phosh's `phosh.service` does.
 
 Two lessons from the first port that are likely to repeat on other vendor
 kernels:

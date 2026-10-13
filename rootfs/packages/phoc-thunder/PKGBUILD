@@ -1,0 +1,71 @@
+# phoc como o do Arch, mas com o wlroots embutido, que e como o upstream o compila.
+#
+# O Arch compila o phoc com -D embed-wlroots=disabled, contra o wlroots0.20 do sistema. O
+# phoc traz no wrap do wlroots um patch que o upstream mantem desde 2021 ("Revert this
+# until phosh has a fixed release"): o wlroots recusa layer surface de altura 0 sem as
+# ancoras de cima e de baixo, e o Phosh (0.57 e 0.58) cria a superficie "phosh home"
+# exatamente assim. Contra o wlroots do sistema o phoc derruba o phosh com "height 0
+# requested without setting top and bottom anchors", o gnome-session encerra a sessao e
+# ela reinicia em laco. Nao e do kernel: acontece em qualquer aparelho.
+#
+# Aqui: o wlroots 0.20.2 do wrap do phoc, com o patch do proprio phoc, estatico dentro do
+# phoc (so os arquivos do phoc sao instalados; o wlroots0.20 do sistema fica intacto).
+# Nome proprio com provides/conflicts: satisfaz o phosh, e um pacman -Syu nao o troca de
+# volta pelo do Arch.
+#
+# Fontes: as tags v0.57.0 do phoc (assinada por Guido Gunther, chave primaria
+# 0DB3932762F78E592F6522AFBB5A2C77584122D3, a mesma que o Arch aceita) e 0.20.2 do wlroots
+# (assinada por Simon Ser, 34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48), conferidas no PC em
+# 2026-10-11 e fixadas aqui pelo commit, para o build nao precisar de chaves GPG. O gvdb
+# no commit que o wrap do phoc fixa.
+pkgname=phoc-thunder
+_name=phoc
+pkgver=0.57.0
+_commit=d02c0e523979df316ef41c7f5210f1d13e8cb2f8
+_wlr_commit=d783533489e1f75d6886c2ab5c5960090ef268f8
+_gvdb_commit=4758f6fb7f889e074e13df3f914328f3eecb1fd3
+pkgrel=1
+pkgdesc='Display compositor designed for phones (Thunder OS: wlroots embutido, como o upstream)'
+url='https://gitlab.gnome.org/World/Phosh/phoc'
+arch=(aarch64)
+license=(GPL-3.0-or-later MIT)
+depends=(
+	cairo dconf libgcc glib2 glibc gnome-desktop gsettings-desktop-schemas hicolor-icon-theme
+	libgmobile libinput libxcb libxkbcommon mutter pango pixman systemd-libs wayland
+	xorg-xwayland
+	# do wlroots embutido (os mesmos do wlroots0.20 do Arch)
+	lcms2 libdisplay-info libdrm libglvnd libliftoff seatd vulkan-icd-loader
+	xcb-util-errors xcb-util-renderutil xcb-util-wm
+)
+makedepends=(git glib2-devel glslang meson ninja python-docutils systemd vulkan-headers
+	wayland-protocols)
+provides=("phoc=$pkgver")
+conflicts=(phoc)
+source=(
+	"$_name::git+$url.git#commit=$_commit"
+	"wlroots::git+https://gitlab.freedesktop.org/wlroots/wlroots.git#commit=$_wlr_commit"
+	"gvdb::git+https://gitlab.gnome.org/GNOME/gvdb.git#commit=$_gvdb_commit"
+)
+b2sums=('SKIP' 'SKIP' 'SKIP')
+
+prepare() {
+	# O patch do wrap so e aplicado quando o meson baixa o subprojeto; aqui o wlroots vem
+	# do makepkg, entao o patch entra a mao, igual.
+	git -C wlroots apply \
+		"$srcdir/$_name/subprojects/packagefiles/wlroots/0001-Revert-layer-shell-error-on-0-dimension-without-anch.patch"
+	ln -sfn "$srcdir/wlroots" "$_name/subprojects/wlroots-0.20.x"
+	ln -sfn "$srcdir/gvdb" "$_name/subprojects/gvdb"
+}
+
+build() {
+	arch-meson $_name build \
+		-D embed-wlroots=enabled \
+		-D wlroots:default_library=static \
+		-D man=true
+	meson compile -C build
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir" --skip-subprojects
+	install -Dm644 wlroots/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE.wlroots"
+}

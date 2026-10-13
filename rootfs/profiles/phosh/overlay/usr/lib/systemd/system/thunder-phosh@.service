@@ -1,0 +1,57 @@
+# Sessao Phosh do usuario %i no tty1: o phosh.service do Phosh (data/phosh.service, a
+# "Development service" que o pacote do Arch nao instala) como template de usuario.
+# phosh-session (pacote phosh) sobe o phoc, que roda "gnome-session --session=phosh"; o
+# gnome-session 51 entrega a shell, o gnome-settings-daemon e o teclado (squeekboard) ao
+# systemd --user. A sessao do logind vem do PAM "login" (pam_systemd: seat0, tty1, o
+# systemd --user e o D-Bus de sessao); o phoc recebe DRM e entrada pelo libseat (logind).
+#
+# Sem greeter: sem GDMSESSION=phosh o Phosh sobe com a tela bloqueada (src/main.c), e o
+# desbloqueio pede a senha do usuario pelo PAM "phosh" do pacote. "Sair" reabre a sessao,
+# bloqueada (Restart=always).
+#
+# Diferencas do upstream (build/research/phosh/DESIGN.md, secao 1): User=%i em vez de
+# 1000; tty1 em vez de tty7 + chvt 7 (o tty1 ja e o VT da frente; o getty@tty1 sai pelo
+# configure.sh do perfil); sem LANG=C.UTF-8 (o PID 1 ja passa o /etc/locale.conf); sem
+# After=session-c1.scope (o numero da sessao nao e fixo) e sem OnFailure=getty@tty1 (sem
+# teclado o getty nao serve; o resgate e o SSH do cabo); limite de partidas.
+#
+# Ajuste local (ex.: WLR_RENDERER=pixman para isolar problema de GPU):
+#   systemctl edit thunder-phosh@USUARIO  ->  [Service] Environment=WLR_RENDERER=pixman
+[Unit]
+Description=Phosh session for %i on tty1
+Documentation=https://gitlab.gnome.org/World/Phosh/phosh
+After=systemd-user-sessions.service systemd-logind.service dbus.socket getty@tty1.service
+Wants=dbus.socket
+Conflicts=getty@tty1.service
+Before=graphical.target
+ConditionPathExists=/dev/tty0
+# Crash em laco (5 partidas em 5 min): a unit fica failed e o SSH do cabo segue intacto.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=%i
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
+StandardInput=tty-fail
+StandardOutput=journal
+StandardError=journal
+UtmpIdentifier=tty1
+UtmpMode=user
+WorkingDirectory=~
+Environment=XDG_CURRENT_DESKTOP=Phosh:GNOME XDG_SESSION_DESKTOP=phosh XDG_SESSION_TYPE=wayland
+# O libseat tentaria o seatd antes; a sessao e do logind.
+Environment=LIBSEAT_BACKEND=logind
+# Sessao local: o pam_systemd poe CAP_WAKE_ALARM no conjunto ambiente (systemd 254+), e o
+# bwrap sem setuid recusa rodar com capacidade (glycin, portais). Igual ao upstream.
+ExecStart=capsh --noamb -- -c "exec /usr/bin/phosh-session"
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15
+
+[Install]
+WantedBy=graphical.target

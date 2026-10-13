@@ -1,0 +1,207 @@
+Backport de 278a5fbaed89 ("open: add close_range()", Linux 5.9), reduzido a
+flags == 0: pick_file() separado de __close_fd() e __close_range() fechando
+[fd, max_fd] na tabela de fds atual. Sem CLOSE_RANGE_UNSHARE nem
+CLOSE_RANGE_CLOEXEC: qualquer flag diferente de 0 devolve -EINVAL.
+
+Por que: o systemd 262 (libudev, systemd-udevd) fecha os fds herdados com
+close_range() (fd-util.c) e antes do exec do RUN{program} do udevd; sem o
+syscall isso falha com ENOSYS (errno=38). O OpenRC chama close_range(CLOEXEC),
+recebe EINVAL e cai no fallback (misc.c), entao o comportamento dele nao muda.
+
+Adaptado para o 4.19: o vendor nao tem close_range; o numero 436 do upstream e
+registrado em include/uapi/asm-generic/unistd.h (__NR_syscalls 435 -> 437; o
+435, clone3, continua buraco) e na tabela compat AArch32 (unistd32.h,
+__NR_compat_syscalls 435 -> 437). O fs/file.c e o fdtable.h do 5.9 nao
+aplicam no vendor (hunk 3 e contexto) e foram refeitos a mao; o corpo de
+pick_file()/__close_range() segue o upstream, com a mesma trava
+(files->file_lock em pick_file, rcu_read_lock so para ler max_fds).
+
+diff -ruN a/arch/arm64/include/asm/unistd32.h b/arch/arm64/include/asm/unistd32.h
+--- a/arch/arm64/include/asm/unistd32.h
++++ b/arch/arm64/include/asm/unistd32.h
+@@ -823,6 +823,8 @@
+ __SYSCALL(__NR_pidfd_send_signal, sys_pidfd_send_signal)
+ #define __NR_pidfd_open 434
+ __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
++#define __NR_close_range 436
++__SYSCALL(__NR_close_range, sys_close_range)
+ 
+ /*
+  * Please add new compat syscalls above this comment and update
+diff -ruN a/arch/arm64/include/asm/unistd.h b/arch/arm64/include/asm/unistd.h
+--- a/arch/arm64/include/asm/unistd.h
++++ b/arch/arm64/include/asm/unistd.h
+@@ -49,7 +49,7 @@
+ #define __ARM_NR_compat_set_tls		(__ARM_NR_COMPAT_BASE + 5)
+ #define __ARM_NR_COMPAT_END		(__ARM_NR_COMPAT_BASE + 0x800)
+ 
+-#define __NR_compat_syscalls		435
++#define __NR_compat_syscalls		437
+ #endif
+ 
+ #define __ARCH_WANT_SYS_CLONE
+diff -ruN a/fs/file.c b/fs/file.c
+--- a/fs/file.c
++++ b/fs/file.c
+@@ -10,6 +10,7 @@
+ #include <linux/syscalls.h>
+ #include <linux/export.h>
+ #include <linux/fs.h>
++#include <linux/kernel.h>
+ #include <linux/mm.h>
+ #include <linux/sched/signal.h>
+ #include <linux/slab.h>
+@@ -615,12 +616,9 @@
+ 
+ EXPORT_SYMBOL(fd_install);
+ 
+-/*
+- * The same warnings as for __alloc_fd()/__fd_install() apply here...
+- */
+-int __close_fd(struct files_struct *files, unsigned fd)
++static struct file *pick_file(struct files_struct *files, unsigned fd)
+ {
+-	struct file *file;
++	struct file *file = NULL;
+ 	struct fdtable *fdt;
+ 
+ 	spin_lock(&files->file_lock);
+@@ -632,15 +630,65 @@
+ 		goto out_unlock;
+ 	rcu_assign_pointer(fdt->fd[fd], NULL);
+ 	__put_unused_fd(files, fd);
+-	spin_unlock(&files->file_lock);
+-	return filp_close(file, files);
+ 
+ out_unlock:
+ 	spin_unlock(&files->file_lock);
+-	return -EBADF;
++	return file;
++}
++
++/*
++ * The same warnings as for __alloc_fd()/__fd_install() apply here...
++ */
++int __close_fd(struct files_struct *files, unsigned fd)
++{
++	struct file *file;
++
++	file = pick_file(files, fd);
++	if (!file)
++		return -EBADF;
++
++	return filp_close(file, files);
+ }
+ EXPORT_SYMBOL(__close_fd); /* for ksys_close() */
+ 
++/**
++ * __close_range() - Close all file descriptors in a given range.
++ *
++ * @fd:     starting file descriptor to close
++ * @max_fd: last file descriptor to close
++ *
++ * This closes a range of file descriptors. All file descriptors
++ * from @fd up to and including @max_fd are closed.
++ */
++int __close_range(struct files_struct *files, unsigned fd, unsigned max_fd)
++{
++	unsigned int cur_max;
++
++	if (fd > max_fd)
++		return -EINVAL;
++
++	rcu_read_lock();
++	cur_max = files_fdtable(files)->max_fds;
++	rcu_read_unlock();
++
++	/* cap to last valid index into fdtable */
++	cur_max--;
++
++	max_fd = min(max_fd, cur_max);
++	while (fd <= max_fd) {
++		struct file *file;
++
++		file = pick_file(files, fd++);
++		if (!file)
++			continue;
++
++		filp_close(file, files);
++		cond_resched();
++	}
++
++	return 0;
++}
++
+ void do_close_on_exec(struct files_struct *files)
+ {
+ 	unsigned i;
+diff -ruN a/fs/open.c b/fs/open.c
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -1202,6 +1202,26 @@
+ 	return retval;
+ }
+ 
++/**
++ * close_range() - Close all file descriptors in a given range.
++ *
++ * @fd:     starting file descriptor to close
++ * @max_fd: last file descriptor to close
++ * @flags:  reserved for future extensions, must be 0
++ *
++ * This closes a range of file descriptors. All file descriptors
++ * from @fd up to and including @max_fd are closed.
++ * Currently, errors to close a given file descriptor are ignored.
++ */
++SYSCALL_DEFINE3(close_range, unsigned int, fd, unsigned int, max_fd,
++		unsigned int, flags)
++{
++	if (flags)
++		return -EINVAL;
++
++	return __close_range(current->files, fd, max_fd);
++}
++
+ /*
+  * This routine simulates a hangup on the tty, to arrange that users
+  * are given clean terminals at login time.
+diff -ruN a/include/linux/fdtable.h b/include/linux/fdtable.h
+--- a/include/linux/fdtable.h
++++ b/include/linux/fdtable.h
+@@ -121,6 +121,8 @@
+ 		      unsigned int fd, struct file *file);
+ extern int __close_fd(struct files_struct *files,
+ 		      unsigned int fd);
++extern int __close_range(struct files_struct *files, unsigned int fd,
++			 unsigned int max_fd);
+ 
+ extern struct kmem_cache *files_cachep;
+ 
+diff -ruN a/include/linux/syscalls.h b/include/linux/syscalls.h
+--- a/include/linux/syscalls.h
++++ b/include/linux/syscalls.h
+@@ -422,6 +422,8 @@
+ asmlinkage long sys_openat(int dfd, const char __user *filename, int flags,
+ 			   umode_t mode);
+ asmlinkage long sys_close(unsigned int fd);
++asmlinkage long sys_close_range(unsigned int fd, unsigned int max_fd,
++				unsigned int flags);
+ asmlinkage long sys_vhangup(void);
+ 
+ /* fs/pipe.c */
+diff -ruN a/include/uapi/asm-generic/unistd.h b/include/uapi/asm-generic/unistd.h
+--- a/include/uapi/asm-generic/unistd.h
++++ b/include/uapi/asm-generic/unistd.h
+@@ -740,9 +740,11 @@
+ __SYSCALL(__NR_pidfd_send_signal, sys_pidfd_send_signal)
+ #define __NR_pidfd_open 434
+ __SYSCALL(__NR_pidfd_open, sys_pidfd_open)
++#define __NR_close_range 436
++__SYSCALL(__NR_close_range, sys_close_range)
+ 
+ #undef __NR_syscalls
+-#define __NR_syscalls 435
++#define __NR_syscalls 437
+ 
+ /*
+  * 32 bit systems traditionally used different

@@ -10,8 +10,9 @@
 #
 # Identidade do aparelho (fabricante, nome) em /etc/thunder/device.
 #
-# Uso: usb-gadget up      cria/ativa o gadget e configura a interface
-#      usb-gadget ifname  imprime o nome da interface de rede
+# Uso: usb-gadget up         cria/ativa o gadget e configura a interface
+#      usb-gadget ifname     imprime o nome da interface de rede
+#      usb-gadget dhcp-conf  gera /run/udhcpd-usb.conf (interface certa) e o arquivo de leases
 set -u
 
 CONFIGFS=/sys/kernel/config
@@ -75,8 +76,16 @@ up() {
 	log "$dev em $ADDR (mtu $MTU)"
 }
 
+dhcp_conf() {
+	dev=$(ifname)
+	[ -n "$dev" ] || { log "o $FUNC nao tem interface"; return 1; }
+	sed "s/^interface .*/interface $dev/" /etc/udhcpd-usb.conf > /run/udhcpd-usb.conf || return 1
+	touch /run/udhcpd-usb.leases
+}
+
 case ${1:-up} in
 up) up ;;
 ifname) ifname ;;
-*) echo "uso: $0 up|ifname" >&2; exit 2 ;;
+dhcp-conf) dhcp_conf ;;
+*) echo "uso: $0 up|ifname|dhcp-conf" >&2; exit 2 ;;
 esac

@@ -6,6 +6,7 @@ use-system-cpio.patch
 fix-gcc-modern-compat.patch
 fix-sia81xx-vla.patch
 build-mt6833-dtb.patch
+add-thunder-dt-compatible-chassis.patch
 fix-u-serial-null-close.patch
 fix-mtk-gem-ion-null.patch
 fix-mtk-gem-prime-import-fallback.patch
@@ -16,6 +17,7 @@ fix-mtk-gauge-charge-full-uisoc.patch
 fix-mtk-backlight-follow-panel-blank.patch
 fix-nvt-touch-follow-panel-blank.patch
 fix-panel-mode-clock-refresh.patch
+fix-panel-pwm-gpio-optional.patch
 backport-procfs-fdinfo-ptrace-read.patch
 backport-drm-prime-ioctls-no-auth.patch
 add-drm-panfrost-mt6833.patch
@@ -25,3 +27,26 @@ add-mtk-hf-sensors-iio.patch
 fix-ktd3137-brightness-fade.patch
 fix-mt6360-transmit-buffer-overflow.patch
 fix-u-ether-linearize-tx.patch
+backport-statx-mount-id.patch
+backport-waitid-pidfd.patch
+backport-close-range.patch
+backport-utimensat-empty-path.patch
+backport-faccessat2.patch
+fix-vendor-kthreads-idle-sleep.patch
+# thunder rB: netfilter em 4.19.325, gate de userns, fixes sem 4.19.y (build/research/nft/DESIGN.md)
+backport-netfilter-4.19.325.patch
+add-netfilter-userns-restrict.patch
+backport-nf-reject-ipv6-ll-max-header.patch
+backport-nf-ct-tcp-rst-direction.patch
+backport-nf-ct-reasm-mac-header.patch
+fix-mtk-default-no-dccp-act-ipt.patch
+backport-cgroup-v1-release-agent-capable.patch
+backport-reboot-hw-protection-shutdown.patch
+fix-mtk-charger-battery-missing-poweroff.patch
+# thunder audio: amplificador no DAPM, VOW preso, S32 falso, jack do fone (docs/audio.md)
+fix-sia81xx-speaker-amp-dapm.patch
+fix-mt6359-vow-enable-stuck.patch
+fix-mt6833-afe-no-s32.patch
+add-accdet-alsa-jack.patch
+# thunder Bluetooth: driver HCI sobre o STP (docs/bluetooth-bringup.md)
+add-btmtk-stp-hci-driver.patch

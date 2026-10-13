@@ -1,0 +1,22 @@
+# Saida de emergencia: telnet COM login (/usr/bin/login, PAM "login"), preso ao endereco
+# do cabo USB (172.16.42.1); nunca escuta no Wi-Fi. Existe porque o SSH pelo RNDIS ja
+# falhou neste tipo de enlace. Mesmas garantias do thunder-usb-network.service (ver la).
+# Wants=, nao Requires=: se a rede USB cair, o telnetd tenta o bind de novo a cada 3 s.
+# Antes do systemd-user-sessions.service so o root entra (pam_nologin).
+[Unit]
+Description=Rescue telnet with login on the USB cable (172.16.42.1:23)
+DefaultDependencies=no
+Wants=thunder-usb-network.service
+After=systemd-journald.socket thunder-usb-network.service
+IgnoreOnIsolate=yes
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/busybox telnetd -F -b 172.16.42.1:23 -l /usr/bin/login
+Restart=always
+RestartSec=3
+OOMScoreAdjust=-900
+
+[Install]
+WantedBy=sysinit.target emergency.target rescue.target

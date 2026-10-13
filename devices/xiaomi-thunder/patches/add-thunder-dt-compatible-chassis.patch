@@ -1,0 +1,14 @@
+--- a/arch/arm64/boot/dts/mediatek/mt6833.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6833.dts
+@@ -22,7 +22,10 @@
+ 
+ / {
+ 	model = "MT6833";
+-	compatible = "mediatek,MT6833";
++	/* thunder: board compatible first, so userspace (gmobile) can tell the phone apart;
++	 * mediatek,MT6833 stays for the clk drivers that check it. */
++	compatible = "xiaomi,thunder", "mediatek,MT6833";
++	chassis-type = "handset";
+ 	interrupt-parent = <&gic>;
+ 	#address-cells = <2>;
+ 	#size-cells = <2>;

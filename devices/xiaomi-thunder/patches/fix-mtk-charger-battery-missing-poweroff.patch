@@ -1,0 +1,37 @@
+Desligamento por bateria ausente com fallback forcado.
+
+check_battery_exist() pede orderly_poweroff(true) quando o PMIC diz que nao ha
+bateria (fora dos modos META/ATE). Com STATIC_USERMODEHELPER o helper do Android
+(/system_ext/bin/aee_core_forwarder) nao existia, o exec falhava e o kernel desligava
+na hora. Sem ele (revisao rB) o kernel roda /sbin/poweroff (systemctl) e nao forca
+mais nada: se o systemd travar, o aparelho fica ligado. Passa a usar
+hw_protection_shutdown() (backport-reboot-hw-protection-shutdown.patch), que desliga a
+forca 30 s depois, o mesmo prazo do caminho termico
+(CONFIG_THERMAL_EMERGENCY_POWEROFF_DELAY_MS).
+
+--- a/drivers/power/supply/mediatek/charger/mtk_charger.c
++++ b/drivers/power/supply/mediatek/charger/mtk_charger.c
+@@ -1679,6 +1679,13 @@
+ 	}
+ }
+ 
++/*
++ * thunder: without STATIC_USERMODEHELPER, orderly_poweroff(true) runs
++ * /sbin/poweroff and forces nothing once that starts. Force the power-off
++ * if the orderly one has not finished after this delay.
++ */
++#define BATTERY_MISSING_POWEROFF_DELAY_MS	30000
++
+ static void check_battery_exist(struct charger_manager *info)
+ {
+ 	struct device *dev = NULL;
+@@ -1722,7 +1729,8 @@
+ 				boot_mode);
+ 		else {
+ 			chr_err("battery doesn't exist, shutdown\n");
+-			orderly_poweroff(true);
++			hw_protection_shutdown("Battery missing",
++					       BATTERY_MISSING_POWEROFF_DELAY_MS);
+ 		}
+ 	}
+ }

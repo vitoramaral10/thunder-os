@@ -5,10 +5,12 @@ MT6833 connectivity, so everything here is downstream: MediaTek's `wmt_drv` /
 `wlan_drv_gen4m` stack on a 4.19 vendor kernel, plus a replacement for the
 Android userspace daemon that normally drives it.
 
-**Status under Arch Linux ARM.** The results below were measured on this
-kernel with the previous userland. The Arch image boots, but the Wi-Fi
-service is not wired into it yet (see
-[Bringing it up at boot](#bringing-it-up-at-boot)).
+**Status under Arch Linux ARM.** The bring-up runs at boot as two systemd units
+from the `thunder-mediatek-wmt` package (see
+[Bringing it up at boot](#bringing-it-up-at-boot)). The package is written and
+verified on the PC only; the phone tests are listed in
+[Phone validation plan](#phone-validation-plan). The results below were
+measured with the previous userland.
 
 Four separate problems had to be solved, and three of them produced the *same*
 symptom. That is the useful lesson: the failure the log reports is often three
@@ -30,8 +32,10 @@ It does not run from flash. At every power-on the AP must:
 
 Steps 2 and 3 are the ones that bite. On Android, step 2 is driven from
 userspace by a launcher daemon that answers ioctls on `/dev/stpwmt`. There is
-no such daemon here, so this project ships
-[`devices/xiaomi-thunder/overlay/usr/local/bin/wmt-daemon.py`](../overlay/usr/local/bin/wmt-daemon.py).
+no Android here, so this project ships `thunder-wmt`
+([`rootfs/packages/thunder-mediatek-wmt/`](../../../rootfs/packages/thunder-mediatek-wmt/)),
+which does the jobs of Android's `wmt_loader`, `wmt_launcher` and
+`wlan_assistant`.
 
 ## Symptom 1 — `hw_check fail:-14`, and the red herring
 
@@ -259,134 +263,247 @@ download completes intact — which also shows that the
 
 ## Still open
 
-- **The factory MAC and RF calibration are available but not enabled by
-  default.** See [the section below](#the-factory-mac-solved-mechanism-unusable-in-practice).
+- **Whether the factory NVRAM takes on the first probe.** It is now pushed by
+  default, before a single power-on, and the service logs whether it took. The
+  phone test (T3) decides whether the default stays on. See
+  [the section below](#the-factory-nvram-mac-and-rf-calibration).
+- **Whether a Wi-Fi restart (stop/start of the radio) still associates.** The
+  old userland left the supplicant unable to associate after a power cycle.
+  Restart of the radio is unverified for association; see
+  [Phone validation plan](#phone-validation-plan).
 - `opfunc_wlan_probe: not implemented yet hifType: 0x2` — harmless so far.
 
-## The factory MAC: solved mechanism, unusable in practice
+## The factory NVRAM (MAC and RF calibration)
 
-The driver never gets the factory MAC, so `wlan0` comes up with a fallback or
-locally-administered address and the factory RF calibration is never applied.
-
-### How the driver actually wants it
-
-`platform.c` defines
-
-```c
-#define WIFI_NVRAM_FILE_NAME   "/data/nvram/APCFG/APRDEB/WIFI"
-```
-
-which is an Android path that does not exist here. But that file read is dead
-code — it sits under `#if 0` in `kalCfgDataRead()`. In practice the driver's
-`g_aucNvram` buffer is filled **from userspace**, by writing to `/dev/wmtWifi`:
-
-```
-WR-BUF:NVRAM<2050 raw bytes>
-```
-
-a 12-byte prefix followed by the raw NVRAM (`wmt_cdev_wifi.c`). It must be a
-**single `write()`** — the driver slices the same user buffer into prefix and
-payload. The handler is registered in `initWlan()`, so the module only needs to
-be loaded, not powered on.
-
-This is the same shape of problem as the ROM patches: another piece of the
-Android launcher that is missing here.
-[`devices/xiaomi-thunder/overlay/usr/local/bin/wifi-nvram-push.py`](../overlay/usr/local/bin/wifi-nvram-push.py)
-implements it.
+The driver does not read a file: `nvram_read()` is under `#if 0`. Its
+`g_aucNvram` buffer is filled **from userspace**, by one `write()` to
+`/dev/wmtWifi` of `WR-BUF:NVRAM` followed by the raw NVRAM
+(`wmt_cdev_wifi.c`). On Android that is `wlan_assistant`, started by
+`init.wlan_drv.rc` right after the two `insmod`s and before Wi-Fi is switched
+on. The handler is registered when `wlan_drv_gen4m` loads (`initWlan()`), the
+buffer survives power cycles, and the next probe's `glLoadNvram()` takes the
+MAC (offset 4), the country code and the band flags from it, while
+`wlanLoadManufactureData()` sends the whole blob, TX power tables included, to
+the firmware.
 
 The source is the `nvdata` partition (ext4), file `/APCFG/APRDEB/WIFI`, 2050
-bytes, with the MAC at offset 4. **Mount it read-only** — it holds the factory
-RF calibration.
+bytes. `thunder-wmt` finds the partition by `PARTNAME=nvdata` in
+`/sys/class/block/*/uevent` (no wait for the udev `by-partlabel` link) and reads
+the file with `debugfs -R "cat ..."`, which opens the filesystem read-only and
+never mounts it: no journal replay, no copy of the calibration left on disk.
+`debugfs` is never run with `-w`.
 
-### It works, and then it does not
+### What the service does
 
-Pushed before power-on, the MAC comes out correct and survives a reboot:
-`wlan0` gets the factory address and `wlan1` a driver-derived variant.
+`thunder-wmt-wifi.service` follows Android's order: load `wmt_chrdev_wifi`
+and `wlan_drv_gen4m`, push the NVRAM, power the radio on **once**. Then it
+compares the interface's permanent address (`ETHTOOL_GPERMADDR`) with the MAC
+inside the NVRAM and logs exactly one line starting with `NVRAM verdict:`:
 
-Two problems stack up:
+- `applied` — factory MAC and RF calibration are in use;
+- `not applied (pushed, but ...)` — the driver generated its fallback
+  `00:08:22:…` address; Wi-Fi works, without the factory calibration;
+- `not applied (not pushed: ...)` or `not applied (disabled: ...)` — the
+  partition or the file could not be read, or `WMT_WIFI_NVRAM` is empty;
+- `unknown (...)` — the permanent address could not be read.
 
-1. **The MAC only takes on the second probe.** Reproduced three times from a
-   freshly loaded module: push the NVRAM and power the radio on once and you
-   get the fallback MAC; power on, power off, push, power on again and you get
-   the factory one. The cause is not isolated — the handler is registered from
-   `initWlan()`, the write returns success, and `glLoadNvram()` only requires
-   `g_NvramFsm == NVRAM_STATE_READY`, which the push just set. This build of
-   gen4m emits no `DBGLOG` at all, even with `/proc/net/wlan/dbgLevel` set to
-   `0x00:0xff`, so the path could not be instrumented.
+Addresses are never printed. The gen4m driver registers `wlan0` on the first
+probe and keeps it across power cycles: `echo 0` leaves the same interface
+(same ifindex) in `dormant`, it does not remove it (measured 2026-10-11). So
+"the interface exists" does not mean "the radio is on", and the service does
+not use it as such: it pushes the NVRAM every time (the driver keeps it for
+the next probe) and always logs the verdict, which reads the interface's
+current permanent address. `wifi-off` returns when the driver has powered the
+radio down; it does not wait for the interface to go.
 
-2. **That extra power cycle breaks association.** The scan still sees the AP at
-   100% signal on both bands, but the supplicant stays in `scanning` and
-   `nmcli` reports `The Wi-Fi network could not be found`. Confirmed by
-   elimination: with the NVRAM push disabled but the double power-cycle still
-   in the script, association kept failing; restoring a single power-on brought
-   the connection straight back.
+The device default lives in `WMT_WIFI_NVRAM` in `device.sh` and is **enabled for
+now**. Test T3 decides: if the first probe does not apply the NVRAM, the
+default goes back to empty (the status quo), not to "keep". To turn it off on a
+running phone, empty `WMT_WIFI_NVRAM` in `/etc/thunder/wmt.conf`.
 
-So the feature is **opt-in and off by default**:
+### History: the double power-on
 
-```sh
-touch /etc/thunder-wifi-nvram     # factory MAC + calibration, but will not associate
-rm    /etc/thunder-wifi-nvram     # default: working connection
-```
+This section describes the previous userland, not the current behaviour. There
+the push was measured to take only on the **second** probe (power on, off,
+push, on), and that extra power cycle broke association: the scan still saw
+the AP, but the supplicant stayed in `scanning` and `nmcli` reported `The
+Wi-Fi network could not be found`. Elimination showed the power cycle, not the
+push, caused it. The double power-on is gone; the first-probe question is
+answered by the verdict line on every boot. The source shows no reason for a
+second probe to be needed (`glLoadNvram()` only requires
+`g_NvramFsm == NVRAM_STATE_READY`, which the push sets), so if the warning
+shows up the next step is a kprobe on `wlanNvramBufHandler` and `glLoadNvram`
+(`KPROBE_EVENTS=y`; mount tracefs).
 
-### Worth knowing before you chase this
+Consequence for the units: a power cycle of the radio left the supplicant unable
+to associate in that setup, so **restart of the radio is unverified for
+association**. Nothing propagates a restart from `thunder-wmt-connsys` to
+`thunder-wmt-wifi`, and a restart is not advertised as a recovery path until
+the phone test shows `wpa_state=COMPLETED` and an IP after it.
+
+### Worth knowing
 
 - **A fixed MAC is not the reason to do this.** NetworkManager's
   `cloned-mac-address` defaults to `stable` mode here, which derives a
   deterministic address — so the MAC is already fixed across reboots, and the
-  DHCP lease is already stable. It is simply not the hardware address. The real
-  gain from the NVRAM is the **RF calibration**, which rides in the same 2050
-  bytes.
+  DHCP lease is already stable. The real gain from the NVRAM is the **RF
+  calibration**, which rides in the same 2050 bytes.
 - **The regulatory domain is a red herring.** `/proc/net/wlan/country` reads
   `12336`, which is ASCII `"00"` — the world domain — **with or without** the
-  NVRAM push. It is not caused by the NVRAM and is not related to the
-  association failure. Writing to that proc file is accepted but does not
-  change the value.
-- **Do not set `wifi.cloned-mac-address=permanent`.** This driver exposes no
-  permanent address through ethtool, and activation then fails with
-  `The base network connection was interrupted`.
-
-### The open question
-
-Why is a second probe needed? If the NVRAM could be made to take on the first
-one, the extra power cycle disappears and so does the association failure.
-Instrumenting `glLoadNvram()` with a plain `printk` is the obvious next step,
-since the driver's own logging is unavailable.
+  NVRAM push: `glLoadNvram()` forces `eRegChannelListMap = 0`.
+- **Do not set `wifi.cloned-mac-address=permanent`.** Activation then fails
+  with `The base network connection was interrupted`.
 
 ## Bringing it up at boot
 
-The bring-up is not something the kernel does on its own — the CONNSYS
-subsystem has no firmware of its own and the whole sequence in this document
-has to run on every boot. In the Thunder OS image (since 2026-10-10):
+CONNSYS has no firmware of its own, so this whole sequence runs on every boot.
+The `thunder-mediatek-wmt` package ships one program, `thunder-wmt`, and two
+units; what is device-specific (modules, ROM patch names, HIF, where the NVRAM
+lives) comes from the `WMT_*` variables in `device.sh`, written to
+`/etc/thunder/wmt.conf` at image build. The firmware the sequence needs
+(`WMT_SOC.cfg`, the three `*_1_1_hdr.bin` ROM patches and
+`WIFI_RAM_CODE_soc2_2_1_1.bin`) is in the device's `FIRMWARE_REQUIRED`, so an
+image without it does not build. The driver loads `WMT_SOC.cfg` by its fixed
+name on SoC chips (`wmt_conf.c:605-610`); nothing has to pass it.
 
-- `devices/xiaomi-thunder/overlay/etc/init.d/wifi-thunder` runs
-  `/usr/local/bin/sobe-wifi.sh` (log in `/run/sobe-wifi.log`) and declares
-  `provide wifi-hw`. It starts **after** `sshd` and the USB network, so the
-  ~30 s of bring-up never delay access over the cable.
-- The core services take over from there: `wpa-supplicant` waits for `wlan0`,
-  then `dhcpcd-wifi` gets an address on `wlan0` only (the USB link is left
-  alone). NetworkManager is not used: without udev it does not manage the
-  interface.
-- Measured: SSH back about 26 s after power-on, Wi-Fi associated with an IP at
-  about 30 s, on 5 GHz.
-- **The MAC is random on every boot** (the NVRAM push is off, see above). The
-  `wpa-supplicant` service replaces it with a stable, locally administered
-  address derived from `/etc/machine-id`, so the router hands out the same IP
-  across reboots. `wpa_mac="keep"` in `/etc/conf.d/wpa-supplicant` disables it.
+| unit | type | what "active" means | stop |
+|---|---|---|---|
+| `thunder-wmt-connsys.service` | `notify`, resident | driver initialised, ROM patches registered, HIF queued | closes `/dev/stpwmt` |
+| `thunder-wmt-wifi.service` | `oneshot`, `RemainAfterExit` | radio on, `wlan0` exists | `write("0")` to `/dev/wmtWifi` |
 
-Success of `wifi-thunder` is judged by **`/sys/class/net/wlan0` existing**,
-not by the script's exit code: `sobe-wifi.sh` has expected failures along the
-way (the second `SET_PATCH_NUM` ioctl legitimately returns EPERM, for instance).
+`thunder-wmt-connsys` is Android's `wmt_loader` (`/dev/wmtdetect` ioctls up to
+`DO_MODULE_INIT`) plus `wmt_launcher` (`SET_ROM_PATCH_INFO` for the three
+patches, then `SET_STP_MODE`). `SET_STP_MODE` is not synchronous: the driver
+queues the HIF operation and returns (`wmt_dev.c:903`, `timeoutValue = 0`), so
+`READY=1` means the ioctls returned success, not that the HIF was applied;
+ordering against later power-ons is guaranteed by the driver's FIFO operation
+queue. The unit stays resident with `/dev/stpwmt` open:
+when the last descriptor closes the driver sets `gWmtClose`, after which a
+lost answer from the chip leaves the `mtk_wmtd` thread waiting forever and
+firmware asserts are suppressed — the driver stops recovering from chip
+faults. It answers any text request (`srh_rom_patch` → re-register, `ok`;
+anything else → `fail`), though with the patches registered none arrive.
+Bluetooth depends on this unit, not on Wi-Fi.
+
+`thunder-wmt-wifi` loads the Wi-Fi modules, pushes the NVRAM (previous
+section), writes `1` to `/dev/wmtWifi` — the write blocks until power-on and
+the `gen4m` probe finish — and checks that `wlan0` exists. If the write fails
+with `EIO` (a whole-chip reset in progress makes the driver refuse operations,
+`wmt_lib.c:1623-1627`), it retries once after 3 s: the driver exposes no state
+to poll, so the delay is the documented fallback. A second failure exits 74
+and the unit retries (`Restart=on-failure`, `RestartSec=3`, at most 3 starts
+in 5 minutes); exit codes 72 (missing firmware) and 78 (configuration) are
+not retried. `wifi-off` (the `ExecStop`) does not read the configuration, so
+it works even when `/etc/thunder/wmt.conf` is broken.
+
+There are no fixed sleeps in the happy path: every step waits on a signal the
+driver gives (the return of `modprobe`, the return of `DO_MODULE_INIT`, `open()`
+of `/dev/stpwmt` blocking until init is done, the blocking `write()`), with a
+bound and an error message. Logs go to the journal
+(`journalctl -u thunder-wmt-connsys -u thunder-wmt-wifi`); exit codes follow
+`sysexits.h` (`78/CONFIG`, `72/OSFILE`, `74/IOERR`...).
+
+Ordering: both units have default dependencies, so they start after
+`sysinit.target`, which the cable units (`thunder-usb-network`,
+`thunder-telnet-usb`) are part of; the Wi-Fi unit also orders after the cable
+units and `sshd`, so the cable is never delayed. Nothing orders itself after
+the radio, and the Wi-Fi unit is not ordered before NetworkManager: Arch's
+`sshd.service` comes after `network.target`, which comes after
+NetworkManager, so `Before=NetworkManager.service` together with
+`After=sshd.service` would be an ordering cycle, and systemd would drop a job
+at every boot (sometimes the radio). NetworkManager picks up `wlan0` on
+hotplug and manages only `wlan0`
+(`51-thunder-wifi.conf`, generated from `WIFI_INTERFACE`, plus the udev rule
+that sets `NM_UNMANAGED` on `rndis*`, `usb*` and `ccmni*`). The Wi-Fi unit
+`Wants=` the connsys unit rather than `Requires=` it, and uses no `PartOf=`:
+a stop or restart of connsys must not take the radio down with it (restart of
+the radio is unverified for association). `thunder-wmt-connsys` uses
+`RestartMode=direct`. Never `rmmod wmt_drv` on stop: it wedges in `Unloading`.
+
+- **The MAC.** With the factory NVRAM applied, `wlan0` has the factory
+  address; otherwise the driver's generated one. Either way NetworkManager
+  connects with a stable, locally administered address per network
+  (`wifi.cloned-mac-address=stable-ssid`), so the router hands out the same IP
+  across reboots.
+- Scan MAC randomization is off (`wifi.scan-rand-mac-address=no` in
+  `60-xiaomi-thunder.conf`).
+- Time from unit start to `wlan0`: **TBD from the phone test** (the previous
+  script took 13.6 s, about 13 s of it fixed sleeps).
 
 gen4m creates `wlan0`, `wlan1`, `ap0` and `p2p0`; only `wlan0` is a real
-station, which is why `WIFI_INTERFACE=wlan0`. If NetworkManager is used one
-day, it must leave the other three alone
-([`docs/networkmanager-unmanaged.conf`](networkmanager-unmanaged.conf)):
+station, which is why `WIFI_INTERFACE=wlan0`. NetworkManager must leave the
+other three alone (`unmanaged-devices=except:interface-name:wlan0`):
 otherwise `nmcli dev wifi connect` can bind the profile to `ap0` and fail with
 `The Wi-Fi network could not be found`.
 
 Networks are saved with `thunder-wifi connect <name>` on the phone, from the
 installer (the device screen shows the phone's Wi-Fi when Thunder OS is on the
 cable), or preset at install time. Only the derived PSK is stored.
+
+## Phone validation plan
+
+Nothing below has run on the phone yet. Steps marked **(needs the user's saved
+network)** require a saved Wi-Fi profile; do not echo SSIDs or MACs in the
+output (counts and the `thunder-wmt` log lines only, which print no address).
+Writing to the phone, rebooting it and installing the package need the user's
+go-ahead.
+
+- **T0, baseline (read-only).** Timestamps of the previous Wi-Fi unit (history, removed from the image) and
+  the kernel log lines of the sequence. Expected today: start 6.47 s, active
+  20.04 s.
+- **T1, PC.** `python3 -B -m unittest discover -s rootfs/packages/thunder-mediatek-wmt -v`
+  (`-B`: no `__pycache__` in the recipe directory),
+  then `makepkg -f` in a temporary copy of the package directory.
+- **T2, install over the running system (no reboot).** `pacman -U` the package,
+  write `/etc/thunder/wmt.conf` as `rootfs/configure.sh` generates it, run
+  `thunder-wmt nvram-check` (read-only; expect `NVRAM ok: 2050 bytes`), then
+  `systemctl start thunder-wmt-connsys` (expect `skipping the loader`, one
+  descriptor open on `/dev/stpwmt`). On `226/NAMESPACE`, remove the four
+  hardening lines from both units.
+- **T3, reboot and measure.**
+  - Criteria: `thunder-wmt-connsys` and `thunder-wmt-wifi` active; time from the
+    start of connsys to the active state of the Wi-Fi unit (target under 5 s);
+    three `Rom Patch]Name=...EmiOffset=0x0/0x2a0000/0x170000` lines per
+    power-on; zero `srh_`, `ul_cmd fail`, `cmd buf is occupied` or
+    `WMT_close: last call`.
+  - **(needs the user's saved network)** `wlan0` present, scan finds networks,
+    `wpa_state=COMPLETED` and an IP.
+  - NVRAM verdict line: **applied and associates** keeps the default enabled.
+    **Not applied** or **unknown** (whatever the association result) or **applied but does
+    not associate** sends the default back to empty (the status quo), not to
+    "keep": set `WMT_WIFI_NVRAM=` empty in `/etc/thunder/wmt.conf`, reboot and
+    confirm it associates, then change the `device.sh` default to empty and
+    document why. If it is not applied, the next step is the kprobe on
+    `glLoadNvram`.
+  - Note whether a `whole chip reset start` happened and whether Wi-Fi came up.
+- **T4, stop/start and restart semantics.** Restart of the radio is
+  unverified for association, so this test must show it before any doc calls
+  it a recovery path. **(needs the user's saved network)**
+  The Wi-Fi unit allows 5 starts per minute, manual ones included; if a start
+  is refused with `start-limit-hit`, run `systemctl reset-failed
+  thunder-wmt-wifi` before the next step instead of reading it as a radio
+  failure.
+  1. `systemctl stop thunder-wmt-wifi` then `systemctl start thunder-wmt-wifi`:
+     `wlan0` stays (dormant while off), the power-on takes about 1.5 s, and
+     then `wpa_state=COMPLETED` and an IP (not just `wlan0` existing).
+     Measured 2026-10-11: associated again 8-18 s after the start.
+  2. `systemctl restart thunder-wmt-connsys`: the Wi-Fi unit must stay active
+     (nothing propagates), the log must show `skipping the loader`, and the
+     link must still be `COMPLETED` with an IP. If the radio drops, record it
+     and re-check association afterwards.
+  3. `kill -9` of the connsys main PID: it returns in about 2 s (`NRestarts`
+     1); record whether Wi-Fi dropped.
+  If association fails in any of these, the restart paths stay documented as
+  unverified (or unsupported) and the radio is only recovered by reboot.
+- **T5, Bluetooth depends on CONNSYS, not on Wi-Fi.** With the Wi-Fi unit stopped,
+  `thunder-wmt-bt` still brings up `hci0`, and
+  `systemctl list-dependencies thunder-wmt-bt` shows only `thunder-wmt-connsys`.
+- **T6, shutdown.** After a reboot, the previous boot's journal shows
+  `Wi-Fi off` before `launcher stopping`, and SSH returns in the usual time.
+- **T7, rollback.** `disable --now` the two units, re-enable the old unit
+  (kept on the phone until T3-T6 pass), `pacman -R thunder-mediatek-wmt`,
+  remove `/etc/thunder/wmt.conf`. Deleting the old files from the phone is data
+  removal: ask first.
 
 ## Measured performance
 
@@ -422,7 +539,9 @@ Bluetooth is on the **same chip**, and its ROM patch
 `0x170000` as part of this sequence — so the expensive half was already paid
 for here.
 
-It now works. See [bluetooth-bringup.md](bluetooth-bringup.md).
+It now works. See [bluetooth-bringup.md](bluetooth-bringup.md). The patch is
+registered by `thunder-wmt-connsys`, which is all Bluetooth needs; Wi-Fi may be
+off.
 
 ## Debugging notes worth keeping
 
@@ -435,8 +554,20 @@ It now works. See [bluetooth-bringup.md](bluetooth-bringup.md).
   function names, not prefixes.
 - `echo 9 > /sys/bus/platform/drivers/mtk_btif/flag` (BTIF open+write test)
   **reboots the device**. `echo "8 5"` (log level only) is safe.
-- `rmmod wmt_drv` wedges the module in `Unloading` and blocks OpenRC shutdown;
+- `rmmod wmt_drv` wedges the module in `Unloading` and blocks shutdown;
   `sync; echo b > /proc/sysrq-trigger` is then the only way out.
+- **Keep `/dev/stpwmt` open.** The driver's only view of the launcher is the
+  device's open count. `dmesg | grep 'WMT_close: last call'` while the system
+  is up means the launcher died and fault recovery is off until it is back.
+- **CONNSYS can power on without Wi-Fi.** A screen unblank powers it on through
+  a loopback function once the HIF is set (`wmt_fb_notifier_callback`,
+  `g_late_pwr_on_for_blank`), and a chip reset recovery powers it on too. This
+  is why the launcher registers the ROM patches *before* `SET_STP_MODE`: that
+  ioctl can start a power-on that downloads them.
+- **A chip reset at boot can come from audio.** On one boot `wireplumber`
+  probing the sound card read a CONNSYS register (`0x18050144`) with CONNSYS
+  powered off; DEVAPC flagged it and WMT ran a whole-chip reset. It recovers
+  on its own when the launcher is up; the audio side is not fixed.
 - Iterating on a module-only change does **not** need a flash: the `.ko` can be
   taken from `build/xiaomi-thunder/kernel/lib/modules/4.19.191-perf` and copied onto the
   device, as long as vermagic matches. See [building.md](../../../docs/building.md).

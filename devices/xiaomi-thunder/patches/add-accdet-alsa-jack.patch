@@ -1,0 +1,130 @@
+Plugue do fone tambem como jack ALSA (Headphone Jack, Headset Mic Jack).
+
+O accdet so reportava o plugue no proprio input device (SW_HEADPHONE_INSERT,
+SW_MICROPHONE_INSERT). PipeWire e PulseAudio trocam de porta so por controle de jack
+ALSA (JackControl no UCM), entao o audio nao ia para o fone ao plugar. O driver da
+maquina cria os dois jacks no late_probe e os entrega ao accdet (accdet_set_jack); o
+accdet guarda o estado (3 polos: fone; 4 polos: fone e mic; line-out) e reporta nos
+jacks a cada mudanca e na entrega, para um fone ja plugado no boot. O input device do
+accdet continua igual (botoes do fone).
+
+Depende de fix-sia81xx-speaker-amp-dapm (o late_probe).
+
+--- a/drivers/misc/mediatek/accdet/mt6359/accdet.c
++++ b/drivers/misc/mediatek/accdet/mt6359/accdet.c
+@@ -15,6 +15,8 @@
+ #include <linux/timer.h>
+ #include <linux/irq.h>
+ #include <linux/switch.h>
++#include <sound/jack.h>
++#include <sound/soc.h>
+ #include "reg_accdet.h"
+ #if defined CONFIG_MTK_PMIC_NEW_ARCH
+ #include <upmu_common.h>
+@@ -1063,8 +1065,57 @@
+ 	}
+ }
+ 
++/*
++ * thunder: also report the plug state through ALSA jacks. accdet only fed its own
++ * input device, and PipeWire and PulseAudio switch ports only on ALSA jack controls
++ * (UCM JackControl). The sound card's machine driver creates the jacks and hands
++ * them over with accdet_set_jack().
++ */
++static DEFINE_MUTEX(accdet_jack_lock);
++static struct snd_soc_jack *accdet_hp_jack, *accdet_mic_jack;
++static int accdet_jack_state;
++
++static void accdet_jack_report_locked(void)
++{
++	if (accdet_hp_jack)
++		snd_soc_jack_report(accdet_hp_jack, accdet_jack_state &
++				    (SND_JACK_HEADPHONE | SND_JACK_LINEOUT),
++				    SND_JACK_HEADPHONE | SND_JACK_LINEOUT);
++	if (accdet_mic_jack)
++		snd_soc_jack_report(accdet_mic_jack,
++				    accdet_jack_state & SND_JACK_MICROPHONE,
++				    SND_JACK_MICROPHONE);
++}
++
++void accdet_set_jack(struct snd_soc_jack *hp, struct snd_soc_jack *mic)
++{
++	mutex_lock(&accdet_jack_lock);
++	accdet_hp_jack = hp;
++	accdet_mic_jack = mic;
++	accdet_jack_report_locked();
++	mutex_unlock(&accdet_jack_lock);
++}
++EXPORT_SYMBOL_GPL(accdet_set_jack);
++
++static void accdet_jack_update(u32 cable_type, u32 status)
++{
++	mutex_lock(&accdet_jack_lock);
++	if (!status)
++		accdet_jack_state = 0;
++	else if (cable_type == HEADSET_NO_MIC)
++		accdet_jack_state = SND_JACK_HEADPHONE;
++	else if (cable_type == HEADSET_MIC)
++		accdet_jack_state = SND_JACK_HEADPHONE | SND_JACK_MICROPHONE;
++	else if (cable_type == LINE_OUT_DEVICE)
++		accdet_jack_state = SND_JACK_LINEOUT;
++	accdet_jack_report_locked();
++	mutex_unlock(&accdet_jack_lock);
++}
++
+ static void send_accdet_status_event(u32 cable_type, u32 status)
+ {
++	accdet_jack_update(cable_type, status);
++
+ 	switch (cable_type) {
+ 	case HEADSET_NO_MIC:
+ 		input_report_switch(accdet_input_dev, SW_HEADPHONE_INSERT,
+--- a/sound/soc/mediatek/mt6833/mt6833-mt6359.c
++++ b/sound/soc/mediatek/mt6833/mt6833-mt6359.c
+@@ -19,6 +19,13 @@
+ #include "../common/mtk-sp-spk-amp.h"
+ 
+ #include "../../codecs/sia81xx/sia81xx_aux_dev_if.h"
++#include <sound/jack.h>
++
++#ifdef CONFIG_MTK_ACCDET
++/* thunder: drivers/misc/mediatek/accdet reports the plug state on these */
++void accdet_set_jack(struct snd_soc_jack *hp, struct snd_soc_jack *mic);
++static struct snd_soc_jack mt6833_mt6359_hp_jack, mt6833_mt6359_mic_jack;
++#endif
+ 
+ #ifdef CONFIG_SND_SOC_AW87339
+ #include "aw87339.h"
+@@ -1039,6 +1046,32 @@
+ 			dev_warn(card->dev, "%s(), no route to %s: %d\n",
+ 				 __func__, sink, ret);
+ 	}
++
++#ifdef CONFIG_MTK_ACCDET
++	/* thunder: ALSA jack controls for UCM JackControl, fed by accdet */
++	ret = snd_soc_card_jack_new(card, "Headphone Jack",
++				    SND_JACK_HEADPHONE | SND_JACK_LINEOUT,
++				    &mt6833_mt6359_hp_jack, NULL, 0);
++	if (!ret)
++		ret = snd_soc_card_jack_new(card, "Headset Mic Jack",
++					    SND_JACK_MICROPHONE,
++					    &mt6833_mt6359_mic_jack, NULL, 0);
++	/* without pins snd_soc_card_jack_new() adds no control: add them here */
++	if (!ret)
++		ret = snd_jack_add_new_kctl(mt6833_mt6359_hp_jack.jack,
++					    "Headphone Jack",
++					    SND_JACK_HEADPHONE |
++					    SND_JACK_LINEOUT);
++	if (!ret)
++		ret = snd_jack_add_new_kctl(mt6833_mt6359_mic_jack.jack,
++					    "Headset Mic Jack",
++					    SND_JACK_MICROPHONE);
++	if (ret)
++		dev_warn(card->dev, "%s(), jack: %d\n", __func__, ret);
++	else
++		accdet_set_jack(&mt6833_mt6359_hp_jack,
++				&mt6833_mt6359_mic_jack);
++#endif
+ 	return 0;
+ }
+ 
