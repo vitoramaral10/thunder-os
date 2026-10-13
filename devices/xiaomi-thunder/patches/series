@@ -52,3 +52,5 @@ add-accdet-alsa-jack.patch
 add-btmtk-stp-hci-driver.patch
 # thunder Wi-Fi: WPA3/SAE no CONNECT (docs/wifi-bringup.md)
 backport-nl80211-wpa-version-3.patch
+# thunder modem ausente: MDDP sem ruido no log
+fix-mddp-quiet-without-modem.patch

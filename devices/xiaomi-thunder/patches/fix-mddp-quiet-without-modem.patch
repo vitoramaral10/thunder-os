@@ -1,0 +1,44 @@
+thunder: MDDP quieto sem modem.
+
+O modem nao sobe neste port, e o MDDP (caminho de dados do modem) enchia o log:
+- mddpw_drv_get_mddp_feature, chamado pelo driver de Wi-Fi a cada pacote, imprimia
+  "before MD ready!" ~3 vezes por segundo. Agora imprime uma vez; o flag de anomalia
+  que ja existia marca o resto, e e zerado quando o modem fica pronto.
+- a thread mddp_rx relia a porta CCCI a cada 1 s, e cada leitura imprimia "read data
+  fail when md_state = 0". Com -ENODEV (modem nao pronto) ela espera 30 s.
+
+Depende de fix-vendor-kthreads-idle-sleep (o msleep_idle).
+
+--- a/drivers/misc/mediatek/mddp/ctrl/mddpwh_sm.c	2026-10-13 14:02:37.247583687 -0300
++++ b/drivers/misc/mediatek/mddp/ctrl/mddpwh_sm.c	2026-10-13 14:02:37.268924723 -0300
+@@ -756,7 +756,14 @@
+ 
+ 	feature = atomic_read(&app->feature);
+ 	if (!app->reset_cnt) {
+-		MDDP_S_LOG(MDDP_LL_ERR, "%s before MD ready!\n", __func__);
++		/* thunder: the Wi-Fi driver asks on every packet; with no modem this
++		 * printed ~3 times a second. Log once until the MD comes up (the flag
++		 * is cleared then, in mddp_sm.c).
++		 */
++		if (!(app->abnormal_flags &
++		      MDDP_ABNORMAL_WIFI_DRV_GET_FEATURE_BEFORE_MD_READY))
++			MDDP_S_LOG(MDDP_LL_ERR, "%s before MD ready!\n",
++				   __func__);
+ 		app->abnormal_flags |= MDDP_ABNORMAL_WIFI_DRV_GET_FEATURE_BEFORE_MD_READY;
+ 	}
+ 	return feature;
+--- a/drivers/misc/mediatek/mddp/ctrl/mddp_ipc.c	2026-10-13 14:02:37.250943767 -0300
++++ b/drivers/misc/mediatek/mddp/ctrl/mddp_ipc.c	2026-10-13 14:02:37.269049496 -0300
+@@ -160,7 +160,11 @@
+ 					"%s: Failed to read TTY (%d), count(%d)!\n",
+ 					__func__,
+ 					mddp_ipc_tty_port_s, rx_count);
+-			msleep_idle(1000);
++			/* thunder: -ENODEV is "MD not ready", which without a modem
++			 * is forever; polling every second made the CCCI print a
++			 * read failure each time.
++			 */
++			msleep_idle(rx_count == -ENODEV ? 30000 : 1000);
+ 			continue;
+ 		}
+ 	}
