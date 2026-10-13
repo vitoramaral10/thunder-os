@@ -69,11 +69,12 @@ come from the ROM's `/vendor/etc/audio_device.xml` and gains from
 
 ## Not done
 
-- **Headphone jack detection.** `ACCDET` is an input device (`SW_HEADPHONE_INSERT`,
-  `SW_MICROPHONE_INSERT`), not an ALSA jack control, so PipeWire does not switch
-  ports by itself. Headphones and the headset mic are selected by hand. The fix is
-  an `snd_soc_jack` in the machine driver fed by accdet. The headset mic is not
-  tested yet.
+- **Automatic switch to headphones, confirmed by ear.** Jack detection is in:
+  `add-accdet-alsa-jack` hands the machine driver's `Headphone Jack` and
+  `Headset Mic Jack` to accdet, and the UCM ties Headphones and Headset to them
+  (`JackControl`, priority 200, above the speaker). The jack control goes on and off
+  on plug; PipeWire moving the stream on its own still needs a retest with a set
+  plugged in. The headset mic is not tested yet.
 - **Earpiece and calls.** `RCV Mux`/`Handset_PGA_GAIN` are mapped in
   `audio_device.xml`. callaudiod skips the card ("lacks speaker and/or earpiece
   port") until the UCM has an `Earpiece` device and a `VoiceCall` verb. Calls need
