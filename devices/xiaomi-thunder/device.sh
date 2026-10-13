@@ -82,8 +82,9 @@ DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt)
 # alsa-restore.service -> /dev/null: sem asound.state gravado no desligamento, o restore
 # do boot cai no init do UCM em vez de devolver um estado antigo (ganho alto, amplificador
 # ligado).
-# bluez: o bluetoothd do driver HCI btmtk_stp (thunder-wmt-bt).
-DEVICE_PACKAGES=(alsa-utils bluez)
+# bluez: o bluetoothd do driver HCI btmtk_stp (thunder-wmt-bt). bluez-utils: bluetoothctl,
+# unico jeito de parear no perfil console (sem tela de configuracoes), e btmon.
+DEVICE_PACKAGES=(alsa-utils bluez bluez-utils)
 DEVICE_SERVICES=(thunder-wmt-connsys.service thunder-wmt-wifi.service
 	thunder-wmt-bt.service bluetooth.service)
 # Modulos do nucleo WMT, antes do DO_MODULE_INIT.
