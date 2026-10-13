@@ -1,7 +1,8 @@
 # Licensing
 
 This repository mixes material under different licenses. Each file keeps the
-license it came with.
+license it came with. `LICENSE` holds the GPL-3.0 text, the license of the code
+written for this project.
 
 ## Core
 
