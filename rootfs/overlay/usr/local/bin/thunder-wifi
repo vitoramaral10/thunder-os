@@ -12,8 +12,10 @@
 # por rede com o sinal em dBm; o status imprime wpa_state=, ssid=, freq= e ip_address=;
 # a senha vem pela entrada padrao.
 #
-# A senha nunca e gravada nem vai para a linha de comando: o perfil do NetworkManager
-# (modo 600) guarda so a chave derivada (PSK de 64 hex, wpa_passphrase). O nome da rede
+# A senha nunca vai para a linha de comando. O perfil do NetworkManager (modo 600) guarda a
+# senha, como num Linux de PC: o WPA3 (SAE) precisa dela, a chave derivada nao serve. Perfil
+# com senha leva PMF opcional (WPA3 e protecao contra deauth forjado); perfis antigos, so
+# com a PSK de 64 hex, ficam no padrao do aparelho (60-<aparelho>.conf). O nome da rede
 # vai no perfil como lista de bytes, para aspas, ';' ou acentos nao quebrarem o arquivo.
 # O "save" e o caminho da rede pre-configurada da imagem (rootfs/configure.sh, no chroot,
 # sem o NetworkManager rodando).
@@ -54,8 +56,8 @@ saved_uuids() {
 	done < <(nmcli -t -f UUID,TYPE connection show)
 }
 
-# Le a senha da entrada e imprime a PSK (vazio = rede aberta). $1 = rede.
-read_psk() {
+# Le a senha da entrada, confere e a imprime (vazio = rede aberta). $1 = rede.
+read_pass() {
 	local pass psk
 	if [ -t 0 ]; then
 		IFS= read -r -s -p "Senha de \"$1\" (vazio para rede aberta): " pass || pass=
@@ -70,13 +72,21 @@ read_psk() {
 		echo "senha WPA tem de 8 a 63 caracteres" >&2
 		return 1
 	fi
-	# Senha pela entrada padrao: como argumento ela apareceria no ps.
+	# O wpa_passphrase confere o que o wpa_supplicant vai aceitar. Senha pela entrada
+	# padrao: como argumento ela apareceria no ps.
 	psk=$(printf '%s\n' "$pass" | wpa_passphrase "$1" 2>/dev/null | sed -n 's/^[[:space:]]*psk=//p')
 	[[ $psk =~ ^[0-9a-f]{64}$ ]] || { echo "wpa_passphrase recusou a senha" >&2; return 1; }
-	echo "$psk"
+	printf '%s\n' "$pass"
 }
 
-# Grava o perfil (modo 600) e imprime a UUID. $1 = rede, $2 = PSK ou vazio,
+# Valor de string no formato keyfile (GKeyFile): barra invertida dobrada, espaco como \s
+# (espaco no comeco ou no fim do valor se perderia).
+keyfile_escape() {
+	local v=${1//\\/\\\\}
+	printf '%s' "${v// /\\s}"
+}
+
+# Grava o perfil (modo 600) e imprime a UUID. $1 = rede, $2 = senha ou vazio,
 # $3 = autoconnect (true/false).
 write_profile() {
 	local uuid bytes id
@@ -92,7 +102,8 @@ write_profile() {
 			printf '[connection]\nid=%s\nuuid=%s\ntype=wifi\ninterface-name=%s\nautoconnect=%s\n\n' \
 				"$id" "$uuid" "$IFACE" "$3"
 			printf '[wifi]\nmode=infrastructure\nssid=%s\n\n' "$bytes"
-			[ -z "$2" ] || printf '[wifi-security]\nkey-mgmt=wpa-psk\npsk=%s\n\n' "$2"
+			[ -z "$2" ] || printf '[wifi-security]\nkey-mgmt=wpa-psk\npmf=2\npsk=%s\n\n' \
+				"$(keyfile_escape "$2")"
 			printf '[ipv4]\nmethod=auto\n\n[ipv6]\naddr-gen-mode=default\nmethod=auto\n'
 		} > "$CONN_DIR/thunder-$uuid.nmconnection"
 	)
@@ -124,12 +135,12 @@ scan)
 connect)
 	need_daemon
 	ssid=${2:?uso: thunder-wifi connect <rede>}
-	psk=$(read_psk "$ssid")
+	pass=$(read_pass "$ssid")
 	# O perfil novo nasce sem autoconnect; os salvos com o mesmo nome so saem depois que
 	# o novo conectar: senha errada numa reconexao nao apaga o que funcionava.
 	old=$(saved_uuids "$ssid")
-	uuid=$(write_profile "$ssid" "$psk" false)
-	unset psk
+	uuid=$(write_profile "$ssid" "$pass" false)
+	unset pass
 	file=$CONN_DIR/thunder-$uuid.nmconnection
 	nmcli connection load "$file"
 	echo "conectando a \"$ssid\"..."
@@ -152,9 +163,9 @@ connect)
 	;;
 save)
 	ssid=${2:?uso: thunder-wifi save <rede>}
-	psk=$(read_psk "$ssid")
-	uuid=$(write_profile "$ssid" "$psk" true)
-	unset psk
+	pass=$(read_pass "$ssid")
+	uuid=$(write_profile "$ssid" "$pass" true)
+	unset pass
 	if nm_running; then nmcli connection load "$CONN_DIR/thunder-$uuid.nmconnection"; fi
 	echo "salva"
 	;;

@@ -163,7 +163,7 @@ Environment variables (or `local.conf`):
 | `THUNDER_ROOT_PASSWORD` | `THUNDER_PASSWORD` | Password of root |
 | `THUNDER_PROFILE` | `none` | Interface profile from `rootfs/profiles/`. Profiles marked `planned` are refused (set `THUNDER_ALLOW_PLANNED=1` to build one anyway while porting) |
 | `THUNDER_EXTRA_PACKAGES` | empty | Extra Arch packages, separated by spaces |
-| `THUNDER_WIFI_SSID`, `THUNDER_WIFI_PASSWORD` | empty | Wi-Fi network saved in the image, for devices with `WIFI_INTERFACE`. Stored as a NetworkManager profile that holds only the derived PSK (64 hex characters, never the password); empty password means an open network |
+| `THUNDER_WIFI_SSID`, `THUNDER_WIFI_PASSWORD` | empty | Wi-Fi network saved in the image, for devices with `WIFI_INTERFACE`. Stored as a NetworkManager profile (mode 600) that holds the password, which WPA3 (SAE) needs, with PMF optional; empty password means an open network |
 | `THUNDER_LOCALE` | `en_US.UTF-8` | `LANG` of the image; `en_US.UTF-8` is always generated too |
 | `THUNDER_TIMEZONE` | `UTC` | Zone under `/usr/share/zoneinfo`, e.g. `America/Sao_Paulo` |
 | `THUNDER_HOSTNAME` | the device codename | Hostname |

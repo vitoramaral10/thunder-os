@@ -435,7 +435,8 @@ otherwise `nmcli dev wifi connect` can bind the profile to `ap0` and fail with
 
 Networks are saved with `thunder-wifi connect <name>` on the phone, from the
 installer (the device screen shows the phone's Wi-Fi when Thunder OS is on the
-cable), or preset at install time. Only the derived PSK is stored.
+cable), or preset at install time. The profile (mode 600) holds the password, which
+WPA3 needs, and asks for PMF as optional.
 
 ## Phone validation plan
 
@@ -467,9 +468,11 @@ called). `backport-nl80211-wpa-version-3.patch` accepts it; gen4m then does SAE
 through external auth. Measured 2026-10-13 with a profile holding the passphrase
 and PMF optional: `key_mgmt=SAE`, `pmf=1`, group 19, associated in 3.4 s.
 
-PMF stays off by default (`60-xiaomi-thunder.conf`) because `thunder-wifi` stores
-only the derived PSK, and SAE needs the passphrase: with PMF optional such a
-profile fails with `SAE: No password available` and never associates.
+Profiles saved by `thunder-wifi` hold the password and set `pmf=2` (optional), so
+they get WPA3 on a transition network. The device default in
+`60-xiaomi-thunder.conf` keeps PMF off for profiles that do not set it, which
+covers older profiles saved with only the derived PSK: with PMF optional they
+would pick SAE and fail with `SAE: No password available`.
 
 ### The plan
 
