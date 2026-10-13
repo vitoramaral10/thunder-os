@@ -118,6 +118,9 @@ because many bootloaders prepend their own arguments (including `root=`).
 | `WMT_HIF` | `0x23` | `SET_STP_MODE` argument: HIF type in bits 0-3 (`0x03` = BTIF full), FM mode in bits 4-7 |
 | `WMT_WIFI_NVRAM` | empty | `<partlabel>:<path in its ext4>` of the Wi-Fi NVRAM, pushed before the first power-on; empty = no NVRAM |
 | `WIFI_INTERFACE` | empty | Station interface (e.g. `wlan0`). Set it and the image gets NetworkManager (wpa_supplicant backend) managing only this interface, and `thunder-wifi`. If the driver needs a bring-up, ship a unit that creates the interface (MediaTek WMT: the `thunder-mediatek-wmt` package and the `WMT_*` variables); nothing has to order after it (NetworkManager follows hotplug). Extra driver interfaces are left unmanaged automatically |
+| `ZRAM_SIZE` | `min(ram / 2, 4096)` | Compressed swap in RAM via `zram-generator`, in its `zram-size =` syntax (MiB), priority 100; empty = no zram |
+| `ZRAM_ALGORITHM` | empty | zram compressor (e.g. `lz4`); it must be built into the kernel (`cat /sys/block/zram0/comp_algorithm`). Empty = the kernel default |
+| `SWAPFILE_SIZE` | empty | Disk swap behind zram (e.g. `4G`): `thunder-swapfile.service` creates `/swapfile` on the first boot, after the root filesystem grows, and it is used at priority 10, only once zram is full. Empty = no disk swap, which spares the flash |
 | `DEVICE_PROFILES` | all | Interface profiles (`rootfs/profiles/`) the device offers; empty means all |
 | `overlay/` | — | Optional. Copied over `/` after the core and profile overlays, so a device file can replace either |
 

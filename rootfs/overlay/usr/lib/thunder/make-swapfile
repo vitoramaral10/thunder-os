@@ -1,0 +1,14 @@
+#!/bin/sh
+# Cria o /swapfile do tamanho em SWAPFILE_SIZE (/etc/thunder/device). Roda uma vez, no 1o
+# boot, pelo thunder-swapfile.service, antes do swapfile.swap do fstab. fallocate e nao
+# um arquivo esparso: o swapon recusa arquivo com buracos. Monta num nome temporario para
+# que um boot interrompido no meio nao deixe um /swapfile pela metade.
+set -eu
+. /etc/thunder/device
+[ -n "${SWAPFILE_SIZE-}" ] || exit 0
+tmp=/swapfile.new
+rm -f "$tmp"
+fallocate -l "$SWAPFILE_SIZE" "$tmp"
+chmod 600 "$tmp"
+mkswap "$tmp"
+mv "$tmp" /swapfile

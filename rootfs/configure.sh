@@ -50,6 +50,28 @@ mkdir -p /etc/thunder
 grep -E '^(DEVICE(|_NAME|_VENDOR|_CODENAME)|WIFI_INTERFACE)=' "$S/config" > /etc/thunder/device
 grep -E '^THUNDER_PROFILE=' "$S/config" >> /etc/thunder/device
 
+# Swap: zram na frente (prioridade 100) e o /swapfile atras (10), criado no 1o boot pelo
+# thunder-swapfile.service, depois do growfs. O config pode vir de um build-rootfs.sh
+# antigo, sem as variaveis.
+zramconf=/usr/lib/systemd/zram-generator.conf
+if [ -n "${ZRAM_SIZE-}" ]; then
+	pac -S zram-generator
+	{
+		echo "# Gerado pelo rootfs/configure.sh (ZRAM_* do device.sh)."
+		echo "[zram0]"
+		echo "zram-size = $ZRAM_SIZE"
+		[ -z "${ZRAM_ALGORITHM-}" ] || echo "compression-algorithm = $ZRAM_ALGORITHM"
+		echo "swap-priority = 100"
+	} > "$zramconf"
+else
+	rm -f "$zramconf"
+fi
+sed -i '\|^/swapfile[[:space:]]|d' /etc/fstab
+if [ -n "${SWAPFILE_SIZE-}" ]; then
+	echo "SWAPFILE_SIZE='$SWAPFILE_SIZE'" >> /etc/thunder/device
+	printf '/swapfile\tnone\tswap\tdefaults,pri=10,nofail\t0\t0\n' >> /etc/fstab
+fi
+
 # Conectividade MediaTek WMT (pacote thunder-mediatek-wmt): o que o device.sh diz do chip
 # vira /etc/thunder/wmt.conf, lido pelo thunder-wmt. Aparelho sem WMT fica sem o arquivo
 # e as units do pacote ficam inertes (ConditionPathExists=). O config pode vir de um

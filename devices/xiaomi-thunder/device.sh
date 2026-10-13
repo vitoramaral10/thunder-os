@@ -111,6 +111,10 @@ WMT_WIFI_NVRAM=nvdata:/APCFG/APRDEB/WIFI
 # Interface de estacao: o gen4m cria wlan0, wlan1, ap0 e p2p0, mas so a wlan0 e
 # estacao de verdade.
 WIFI_INTERFACE=wlan0
+# 3,5 GiB de RAM: zram (o padrao, metade da RAM) em lz4, que o kernel tem (zstd nao), e
+# 4 GiB de swap em disco atras dele, como a "extensao de memoria" do MIUI.
+ZRAM_ALGORITHM=lz4
+SWAPFILE_SIZE=4G
 # overlay/etc/systemd/system-generators/systemd-gpt-auto-generator -> /dev/null: o disco da raiz e o UFS do Android, com ~60 particoes de vendor; a descoberta automatica nunca monta nem faz swapon delas.
 
 # Enxerto da conectividade MediaTek (wmt_drv, wmt_chrdev_wifi, wlan_drv_gen4m, connfem,

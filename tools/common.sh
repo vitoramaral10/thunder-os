@@ -69,6 +69,13 @@ require_device() {
 	WIFI_INTERFACE=
 	# Units do systemd do aparelho a habilitar, com sufixo (ex.: thunder-wmt-wifi.service).
 	DEVICE_SERVICES=()
+	# Swap (rootfs/configure.sh). zram pelo zram-generator: tamanho na sintaxe do
+	# zram-size= dele e algoritmo (vazio = o padrao do kernel); ZRAM_SIZE vazio = sem zram.
+	# SWAPFILE_SIZE (ex.: 4G) cria o /swapfile no 1o boot, com prioridade abaixo do zram:
+	# so entra quando o zram enche. Vazio = sem swap em disco (poupa a flash).
+	ZRAM_SIZE="min(ram / 2, 4096)"
+	ZRAM_ALGORITHM=
+	SWAPFILE_SIZE=
 	# Perfis de interface que o aparelho aceita (rootfs/profiles/); vazio = todos.
 	DEVICE_PROFILES=()
 	# Conectividade MediaTek WMT (pacote thunder-mediatek-wmt); vazio = aparelho sem WMT.
