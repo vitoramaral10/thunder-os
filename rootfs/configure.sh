@@ -191,8 +191,8 @@ systemctl enable "${units[@]}"
 
 # Wi-Fi: o NetworkManager so gerencia a interface de estacao do aparelho (o resto, como
 # o cabo USB e as interfaces extras do driver, fica de fora) e, se o instalador mandou,
-# a rede ja vem salva pelo thunder-wifi save: no perfil vai so a PSK (64 hex); a senha
-# nao fica na imagem e nao passa pela linha de comando.
+# a rede ja vem salva pelo thunder-wifi save: o perfil (modo 600) guarda a senha, que o
+# WPA3 precisa, e leva PMF opcional; a senha nao passa pela linha de comando.
 nmwifi=/usr/lib/NetworkManager/conf.d/51-thunder-wifi.conf
 if [ -n "$WIFI_INTERFACE" ]; then
 	printf '%s\n' "# Gerado pelo rootfs/configure.sh (WIFI_INTERFACE do device.sh)." \
