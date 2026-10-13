@@ -1,0 +1,31 @@
+thunder: aceita NL80211_WPA_VERSION_3 (WPA3/SAE) no CONNECT.
+
+O 4.19 so conhece as versoes 1 e 2 do WPA: o nl80211_valid_wpa_versions recusa
+qualquer outro bit, e o nl80211_connect devolve -EINVAL antes de chamar o driver. O
+wpa_supplicant atual manda NL80211_WPA_VERSION_3 sempre que escolhe SAE, o que acontece
+num roteador WPA2/WPA3 (modo de transicao) quando o PMF nao esta desligado. O gen4m ja
+trata a versao 3 (e faz o SAE por external auth, que o 4.19 tem); so o cfg80211 barrava.
+Mesmo valor e mesma validacao que o upstream adotou ao criar o NL80211_WPA_VERSION_3.
+
+--- a/include/uapi/linux/nl80211.h	2026-10-13 14:00:59.405405884 -0300
++++ b/include/uapi/linux/nl80211.h	2026-10-13 14:00:59.419334095 -0300
+@@ -4387,6 +4387,7 @@
+ enum nl80211_wpa_versions {
+ 	NL80211_WPA_VERSION_1 = 1 << 0,
+ 	NL80211_WPA_VERSION_2 = 1 << 1,
++	NL80211_WPA_VERSION_3 = 1 << 2,
+ };
+ 
+ /**
+--- a/net/wireless/nl80211.c	2026-10-13 14:00:59.408109336 -0300
++++ b/net/wireless/nl80211.c	2026-10-13 14:00:59.419844779 -0300
+@@ -8524,7 +8524,8 @@
+ static bool nl80211_valid_wpa_versions(u32 wpa_versions)
+ {
+ 	return !(wpa_versions & ~(NL80211_WPA_VERSION_1 |
+-				  NL80211_WPA_VERSION_2));
++				  NL80211_WPA_VERSION_2 |
++				  NL80211_WPA_VERSION_3));
+ }
+ 
+ static int nl80211_authenticate(struct sk_buff *skb, struct genl_info *info)

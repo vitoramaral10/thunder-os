@@ -457,6 +457,20 @@ longer exists, and were skipped.
 The restart paths (T4) are therefore verified recovery paths, not just
 "the interface comes back".
 
+### WPA3 and PMF
+
+With PMF optional, a WPA2/WPA3 transition network makes wpa_supplicant pick SAE
+and send `NL80211_WPA_VERSION_3`. The 4.19 nl80211 did not know that version and
+failed the CONNECT with `-EINVAL` before calling the driver (kretprobes:
+`nl80211_crypto_settings` returns `-EINVAL`, `mtk_cfg80211_connect` is never
+called). `backport-nl80211-wpa-version-3.patch` accepts it; gen4m then does SAE
+through external auth. Measured 2026-10-13 with a profile holding the passphrase
+and PMF optional: `key_mgmt=SAE`, `pmf=1`, group 19, associated in 3.4 s.
+
+PMF stays off by default (`60-xiaomi-thunder.conf`) because `thunder-wifi` stores
+only the derived PSK, and SAE needs the passphrase: with PMF optional such a
+profile fails with `SAE: No password available` and never associates.
+
 ### The plan
 
 Steps marked **(needs the user's saved
