@@ -207,6 +207,15 @@ else
 	rm -f "$nmwifi"
 fi
 
+# Audio por Bluetooth: e o WirePlumber que registra os codecs A2DP no BlueZ, mas o
+# PipeWire do Arch so sobe por socket, quando algum programa toca. No perfil console
+# nada toca no login, e um fone que conecta sozinho ficaria sem audio. Com bluez e
+# WirePlumber na imagem, a sessao do usuario sobe o WirePlumber (que puxa o PipeWire).
+# O perfil none nao tem servidor de audio, e o add-wants falha sem a unit.
+if pacman -Q bluez >/dev/null 2>&1 && [ -e /usr/lib/systemd/user/wireplumber.service ]; then
+	systemctl --global add-wants default.target wireplumber.service
+fi
+
 # Schemas do GLib: overrides de overlay (ex.: 90-thunder-console.gschema.override) so valem
 # depois de compilar.
 if [ -d /usr/share/glib-2.0/schemas ]; then

@@ -267,10 +267,6 @@ download completes intact — which also shows that the
   default, before a single power-on, and the service logs whether it took. The
   phone test (T3) decides whether the default stays on. See
   [the section below](#the-factory-nvram-mac-and-rf-calibration).
-- **Whether a Wi-Fi restart (stop/start of the radio) still associates.** The
-  old userland left the supplicant unable to associate after a power cycle.
-  Restart of the radio is unverified for association; see
-  [Phone validation plan](#phone-validation-plan).
 - `opfunc_wlan_probe: not implemented yet hifType: 0x2` — harmless so far.
 
 ## The factory NVRAM (MAC and RF calibration)
@@ -336,10 +332,11 @@ shows up the next step is a kprobe on `wlanNvramBufHandler` and `glLoadNvram`
 (`KPROBE_EVENTS=y`; mount tracefs).
 
 Consequence for the units: a power cycle of the radio left the supplicant unable
-to associate in that setup, so **restart of the radio is unverified for
-association**. Nothing propagates a restart from `thunder-wmt-connsys` to
-`thunder-wmt-wifi`, and a restart is not advertised as a recovery path until
-the phone test shows `wpa_state=COMPLETED` and an IP after it.
+to associate in that setup. With NetworkManager it does: a stop/start of the
+radio associates again with an address in about 15 s (T4, 2026-10-13, in the
+[Phone validation plan](#phone-validation-plan)). Nothing propagates a restart
+from `thunder-wmt-connsys` to `thunder-wmt-wifi`, and none is needed: restarting
+or killing connsys leaves the link up.
 
 ### Worth knowing
 
@@ -416,8 +413,8 @@ hotplug and manages only `wlan0`
 (`51-thunder-wifi.conf`, generated from `WIFI_INTERFACE`, plus the udev rule
 that sets `NM_UNMANAGED` on `rndis*`, `usb*` and `ccmni*`). The Wi-Fi unit
 `Wants=` the connsys unit rather than `Requires=` it, and uses no `PartOf=`:
-a stop or restart of connsys must not take the radio down with it (restart of
-the radio is unverified for association). `thunder-wmt-connsys` uses
+a stop or restart of connsys must not take the radio down with it (it does not
+need to: the link survives a connsys restart, T4). `thunder-wmt-connsys` uses
 `RestartMode=direct`. Never `rmmod wmt_drv` on stop: it wedges in `Unloading`.
 
 - **The MAC.** With the factory NVRAM applied, `wlan0` has the factory
@@ -442,7 +439,41 @@ cable), or preset at install time. Only the derived PSK is stored.
 
 ## Phone validation plan
 
-Nothing below has run on the phone yet. Steps marked **(needs the user's saved
+### Results, 2026-10-13
+
+Run on an image built from `main` (systemd 262, the package in the image, a
+saved network). T2 and T7 were about migrating from the old unit, which no
+longer exists, and were skipped.
+
+| test | result |
+|---|---|
+| T3, boot | connsys start to Wi-Fi active in 2.4 s; three ROM patch lines; zero `srh_`, `ul_cmd fail`, `cmd buf is occupied`, `WMT_close: last call`; no chip reset; `NVRAM verdict: applied`; associated by 11.7 s of uptime, with the DHCP address a few seconds later |
+| T4.1, stop/start the Wi-Fi unit | start returns in 478 ms; associated with an address 15.3 s later. While the radio is off, `wlan0` keeps its stale IPv4 address |
+| T4.2, restart connsys | the Wi-Fi unit stays active, `skipping the loader`, the link stays `COMPLETED` |
+| T4.3, `kill -9` of connsys | back in 2.3 s (`NRestarts` 0 to 1); Wi-Fi does not drop, ping keeps working |
+| T5, Bluetooth without Wi-Fi | with the Wi-Fi unit stopped, `thunder-wmt-bt` brings up `hci0`, powered; its only WMT dependency is connsys |
+| T6, shutdown | SSH back at 9.7 s of uptime. Order holds by construction (both radio units are `After=thunder-wmt-connsys`, reversed on stop), but the journal is cut at `Stopping MediaTek Wi-Fi radio`: the last shutdown lines never reach the disk, so `Wi-Fi off` before `launcher stopping` is not confirmed from the log |
+
+The restart paths (T4) are therefore verified recovery paths, not just
+"the interface comes back".
+
+### WPA3 and PMF
+
+With PMF optional, a WPA2/WPA3 transition network makes wpa_supplicant pick SAE
+and send `NL80211_WPA_VERSION_3`. The 4.19 nl80211 did not know that version and
+failed the CONNECT with `-EINVAL` before calling the driver (kretprobes:
+`nl80211_crypto_settings` returns `-EINVAL`, `mtk_cfg80211_connect` is never
+called). `backport-nl80211-wpa-version-3.patch` accepts it; gen4m then does SAE
+through external auth. Measured 2026-10-13 with a profile holding the passphrase
+and PMF optional: `key_mgmt=SAE`, `pmf=1`, group 19, associated in 3.4 s.
+
+PMF stays off by default (`60-xiaomi-thunder.conf`) because `thunder-wifi` stores
+only the derived PSK, and SAE needs the passphrase: with PMF optional such a
+profile fails with `SAE: No password available` and never associates.
+
+### The plan
+
+Steps marked **(needs the user's saved
 network)** require a saved Wi-Fi profile; do not echo SSIDs or MACs in the
 output (counts and the `thunder-wmt` log lines only, which print no address).
 Writing to the phone, rebooting it and installing the package need the user's

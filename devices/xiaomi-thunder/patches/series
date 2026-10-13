@@ -50,3 +50,7 @@ fix-mt6833-afe-no-s32.patch
 add-accdet-alsa-jack.patch
 # thunder Bluetooth: driver HCI sobre o STP (docs/bluetooth-bringup.md)
 add-btmtk-stp-hci-driver.patch
+# thunder Wi-Fi: WPA3/SAE no CONNECT (docs/wifi-bringup.md)
+backport-nl80211-wpa-version-3.patch
+# thunder modem ausente: MDDP sem ruido no log
+fix-mddp-quiet-without-modem.patch
