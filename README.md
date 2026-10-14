@@ -104,10 +104,11 @@ tools/flash.sh                      # dry run; --sim writes
   filesystem, or `thunder.debug=1` is on the command line, it opens a root
   telnet shell on the USB link (`172.16.42.1`). It never listens on Wi-Fi, and
   it stops when the system boots.
-- **The image ships a provisional password** (`THUNDER_PASSWORD`, default
-  `147147`) for root and the user (the installer asks for a separate root
-  password). Change it with `passwd` on first login. Three wrong passwords lock
-  the account for a while, root included (1 minute; 10 minutes for the user).
+- **SSH accepts passwords on every network**, Wi-Fi included, as on any Arch
+  install with sshd on. There is no default password: the build stops without
+  `THUNDER_PASSWORD`, and the installer asks for one (and a separate root
+  password). Three wrong passwords lock the account for a while, root
+  included (1 minute; 10 minutes for the user).
 
 ## Licensing
 

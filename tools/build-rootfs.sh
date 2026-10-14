@@ -22,9 +22,12 @@ if [ -z "${AUTHORIZED_KEYS+x}" ]; then
 	[ -s "$AUTHORIZED_KEYS" ] || AUTHORIZED_KEYS=
 fi
 THUNDER_USER=${THUNDER_USER:-$(id -un)}
-# Senha provisoria do usuario (e de root, se THUNDER_ROOT_PASSWORD nao vier): troque no
-# aparelho.
-THUNDER_PASSWORD=${THUNDER_PASSWORD:-147147}
+# Senha do usuario (e de root, se THUNDER_ROOT_PASSWORD nao vier). Sem padrao: o sshd sobe
+# ligado e aceita senha em qualquer rede, e uma senha conhecida de todos abriria o aparelho.
+if [ -z "${THUNDER_PASSWORD:-}" ]; then
+	echo "defina THUNDER_PASSWORD (no ambiente ou no local.conf): a senha do usuario na imagem" >&2
+	exit 1
+fi
 THUNDER_ROOT_PASSWORD=${THUNDER_ROOT_PASSWORD:-$THUNDER_PASSWORD}
 THUNDER_PROFILE=${THUNDER_PROFILE:-none}
 # Rede Wi-Fi ja configurada na imagem (opcional). A senha vira PSK no chroot.

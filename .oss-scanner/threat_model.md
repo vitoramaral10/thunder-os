@@ -90,7 +90,7 @@ On the PC:
 - **The USB cable is trusted as physical access.** The initramfs rescue shell on telnet
   172.16.42.1:23 has no password by design (it only runs when booting fails or with
   `thunder.debug=1`), and the diagnostic beacon sends pstore and dmesg to 172.16.42.2:9999.
-- **The provisional password** (`THUNDER_PASSWORD`, default `147147`, the same for root
+- **The password** (`THUNDER_PASSWORD`, required by the build, no default; the same for root
   and the user) is documented and meant to be changed with `passwd`.
 - **PMF is off by default on wlan0** (`60-xiaomi-thunder.conf`); the reason is documented
   there.
