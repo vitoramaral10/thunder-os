@@ -351,6 +351,25 @@ list and the sha256 of the body; the CVE map is in `build/research/bt/REPORT.md`
 - **ABI:** `struct hci_dev` changes (`name` becomes `const char *`), so `btmtk_stp.ko` must come
   from the same build (the kernel package does that). No config change.
 
+### gen4m: bounds on frames from the air
+
+Two fixes in the Wi-Fi driver, found by a review of what a stranger in radio range reaches
+without joining a network (2026-10-14; second opinion from another model family).
+
+- **fix-gen4m-rnr-parse-bounds.** The Reduced Neighbor Report walk in a scan kept its offset
+  in a u8. A beacon with one field of 4 TBTT entries of 63 bytes made the step 256, the
+  offset wrapped to 0 and the loop never ended: a remote hang without association. The
+  offset is now a u16 and the walk stops at the end of the element.
+- **fix-gen4m-he-cap-bounds.** The HE Capabilities element from the AP (association
+  response) was checked only for its fixed part; the MCS maps and PPE thresholds were read
+  past a short element. It is now ignored when shorter than what its PHY bits announce.
+- **Left as is:** an extension element (ID 255) of length 0 makes about 26 call sites read
+  the extension ID one byte past the element, still inside the RX buffer; the byte is only
+  compared, and the HE Capabilities path checks the length again.
+- MediaTek's 2024 bulletins list remote out-of-bounds writes in the WLAN driver and firmware
+  (CVE-2024-20101, CVE-2024-20103) without naming functions; this BSP predates them and no
+  newer one exists for MT6833.
+
 ## Connectivity graft
 
 The Wi-Fi, Bluetooth and WMT drivers are not in the Xiaomi tree for this SoC in a usable

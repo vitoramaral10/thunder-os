@@ -54,5 +54,8 @@ backport-bluetooth-4.19.325.patch
 add-btmtk-stp-hci-driver.patch
 # thunder Wi-Fi: WPA3/SAE no CONNECT (docs/wifi-bringup.md)
 backport-nl80211-wpa-version-3.patch
+# thunder Wi-Fi: limites no parse de quadros do ar (gen4m; docs/kernel.md)
+fix-gen4m-rnr-parse-bounds.patch
+fix-gen4m-he-cap-bounds.patch
 # thunder modem ausente: MDDP sem ruido no log
 fix-mddp-quiet-without-modem.patch

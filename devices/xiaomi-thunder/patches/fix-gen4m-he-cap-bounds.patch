@@ -1,0 +1,75 @@
+From: thunder
+Subject: [PATCH] gen4m: check the HE Capabilities length before the MCS maps
+
+heRlmRecHeCapInfo() only checked the fixed part of the HE Capabilities
+element (MAC and PHY capabilities). heRlmRecHeMcsMap() then reads 4 to 12
+bytes of MCS maps, depending on the channel width bits, and
+heRlmRecHePPEThresholds() up to 13 more bytes of PPE thresholds, all past
+the end of a short element. The element comes from the AP in the
+association response, so a rogue AP the phone tries to join reads kernel
+memory past the frame (and may fault at the end of the buffer).
+
+The element is now ignored when it is too short for the MCS maps its PHY
+capabilities announce, and the PPE thresholds are only parsed when the
+bits heRlmRecHePPEThresholds() reads fit in the element.
+
+---
+--- a/drivers/misc/mediatek/connectivity/wlan_drv_gen4m/mgmt/he_rlm.c
++++ b/drivers/misc/mediatek/connectivity/wlan_drv_gen4m/mgmt/he_rlm.c
+@@ -1049,7 +1049,7 @@
+ 	struct STA_RECORD *prStaRec,
+ 	uint8_t *pucIE)
+ {
+-	uint32_t u4Offset;
++	uint32_t u4Offset, u4Need;
+ 	struct WIFI_VAR *prWifiVar = &prAdapter->rWifiVar;
+ 	struct _IE_HE_CAP_T *prHeCap = (struct _IE_HE_CAP_T *) pucIE;
+ 
+@@ -1061,6 +1061,22 @@
+ 		return;
+ 	}
+ 
++	/* The MCS maps that follow depend on the channel widths in the PHY
++	 * capabilities: 4 bytes for 80 MHz, 4 more for 160 and for 80+80.
++	 * Only the fixed part was checked, and heRlmRecHeMcsMap() read past
++	 * the end of a short element from the AP.
++	 */
++	u4Need = sizeof(struct _IE_HE_CAP_T) + 4;
++	if (HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW160_5G(prHeCap->ucHePhyCap))
++		u4Need += 4;
++	if (HE_IS_PHY_CAP_CHAN_WIDTH_SET_BW80P80_5G(prHeCap->ucHePhyCap))
++		u4Need += 4;
++	if (IE_SIZE(prHeCap) < u4Need) {
++		DBGLOG(RLM, WARN, "HE_CAP IE_LEN %d short for MCS maps\n",
++			IE_LEN(prHeCap));
++		return;
++	}
++
+ 	memcpy(prStaRec->ucHeMacCapInfo, prHeCap->ucHeMacCap,
+ 		HE_MAC_CAP_BYTE_NUM);
+ 	memcpy(prStaRec->ucHePhyCapInfo, prHeCap->ucHePhyCap,
+@@ -1108,9 +1124,21 @@
+ 	/* Set HE Rx Mcs Map upon peer's capability and our capability */
+ 	u4Offset = heRlmRecHeMcsMap(prAdapter, prStaRec, prHeCap);
+ 
+-	/* Set HE PPE Thresholds if it exists */
+-	if (HE_IS_PHY_CAP_PPE_THRESHOLD(prStaRec->ucHePhyCapInfo))
+-		heRlmRecHePPEThresholds(prAdapter, prStaRec, prHeCap, u4Offset);
++	/* Set HE PPE Thresholds if it exists, and only if the header byte and
++	 * the 3-bit fields heRlmRecHePPEThresholds() reads are inside the IE.
++	 */
++	if (HE_IS_PHY_CAP_PPE_THRESHOLD(prStaRec->ucHePhyCapInfo) &&
++	    u4Offset < IE_SIZE(prHeCap)) {
++		uint8_t ucPpeHdr = *((uint8_t *)prHeCap + u4Offset);
++		uint32_t u4PpeBits = HE_CAP_PPE_PPET16_NSS1_RU0_SHFT + 3 *
++			((ucPpeHdr & HE_CAP_PPE_NSS) + 1) *
++			hweight8((ucPpeHdr & HE_CAP_PPE_RU_IDX_BMP) >>
++				HE_CAP_PPE_RU_IDX_BMP_SHFT);
++
++		if (u4Offset + (u4PpeBits + 7) / 8 <= IE_SIZE(prHeCap))
++			heRlmRecHePPEThresholds(prAdapter, prStaRec, prHeCap,
++				u4Offset);
++	}
+ }
+ 
+ void heRlmRecHeOperation(
