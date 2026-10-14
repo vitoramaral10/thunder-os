@@ -332,6 +332,25 @@ fails if the file is not in the package; the presence of the file in the package
 - The rest of the kernel stays at 4.19.191.
 - The gate was compiled but, as of this writing, never run on the device.
 
+### Bluetooth core at 4.19.325
+
+**backport-bluetooth-4.19.325**, right before `add-btmtk-stp-hci-driver`. Same recipe as
+the netfilter slice: `net/bluetooth` and `include/net/bluetooth` become those of `v4.19.325`,
+104 stable commits, 23 files, +886/-400. The vendor tree is identical to `v4.19.191` on those
+paths, so tree + patch equals `v4.19.325` there. `drivers/bluetooth` is left out: none of its
+drivers is built (the transport is `btmtk_stp`). The patch header has the recipe, the commit
+list and the sha256 of the body; the CVE map is in `build/research/bt/REPORT.md`.
+
+- **Closes**, among others, the over-the-air L2CAP bugs CVE-2022-42896 (LE connect with an
+  invalid SPSM, use after free), CVE-2022-42895 (uninitialized EFS, kernel memory leak),
+  CVE-2022-45934 (CONF_REQ overflow), CVE-2022-3640 (A2MP, built because `BT_HS=y`) and
+  CVE-2021-47620 (advertising report out of bounds while scanning).
+- **Still open:** dozens of Bluetooth CVEs never fixed in 4.19.y (L2CAP, RFCOMM, SMP, HIDP).
+  With the radio not discoverable, not connectable and not pairable (the BlueZ default), a
+  stranger cannot open a connection; the exposure is while pairing or connected.
+- **ABI:** `struct hci_dev` changes (`name` becomes `const char *`), so `btmtk_stp.ko` must come
+  from the same build (the kernel package does that). No config change.
+
 ## Connectivity graft
 
 The Wi-Fi, Bluetooth and WMT drivers are not in the Xiaomi tree for this SoC in a usable

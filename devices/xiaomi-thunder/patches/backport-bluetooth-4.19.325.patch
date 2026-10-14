@@ -1,0 +1,2951 @@
+Bluetooth (net/bluetooth e include/net/bluetooth) inteiro em v4.19.325 (stable
+linux-4.19.y), no molde do backport-netfilter-4.19.325.patch
+(build/research/bt/REPORT.md). O uname continua dizendo 4.19.191.
+
+O que: o estado do nucleo Bluetooth da arvore passa a ser o de v4.19.325, com
+104 commits do stable entre v4.19.191 e v4.19.325 (23 arquivos, +886/-400).
+Entre eles os fixes de CVE-2022-42896 (l2cap_le_connect_req sem checar o SPSM),
+CVE-2022-42895 (efs nao inicializado em l2cap_parse_conf_req), CVE-2022-45934
+(u8 overflow no CONF_REQ), CVE-2022-3640/3564/20566, CVE-2020-26555/26558,
+CVE-2021-3564/3573/3640/3752, CVE-2023-2002/28464/40283 e 23 do CNA do kernel
+(lista e alcance em REPORT.md). Nenhum desses commits toca arquivo fora dos dois
+caminhos. drivers/bluetooth fica de fora: nenhum driver de la e compilado (o
+transporte e o btmtk_stp, add-btmtk-stp-hci-driver.patch).
+
+Invariante: a arvore do vendor e identica a v4.19.191 nesses caminhos (nem a
+Xiaomi/MTK nem os nossos patches mexem neles), entao base + este patch,
+comparada com v4.19.325 nos mesmos caminhos, nao difere em nada.
+
+ABI: struct hci_dev muda (name vira const char *; HCI_CONN_REAUTH_PEND sai do
+enum). Com MODVERSIONS o CRC dos simbolos que recebem hci_dev muda: o
+btmtk_stp.ko precisa vir da mesma build (o pacote do kernel ja garante).
+
+Receita (repo stable com tags v4.19.191 e v4.19.325; so leitura, nada a gravar):
+
+  P="net/bluetooth include/net/bluetooth"
+  git --git-dir=. diff --src-prefix=a/ --dst-prefix=b/ v4.19.191 v4.19.325 -- $P   # corpo
+  git --git-dir=. log --format='%h %s' --no-merges v4.19.191..v4.19.325 -- $P      # lista
+
+sha256 do corpo (a partir da primeira linha "diff --git"): 5d8057d62b7be5382481c24dfe6a5f14358d61e966e2219a155e6226bb59e247
+
+Commits do stable incluidos (sha curto do stable e assunto; 78b03389d e o
+revert 608ba4af6 se anulam):
+
+  38c54efd1 Bluetooth: Fix type of len in rfcomm_sock_getsockopt{,_old}()
+  e23272824 Bluetooth: bnep: fix wild-memory-access in proto_unregister
+  9010d2cac Bluetooth: Remove debugfs directory on module init failure
+  b77b3fb12 Bluetooth: RFCOMM: FIX possible deadlock in rfcomm_sk_state_change
+  11b4b0e63 Bluetooth: MGMT: Add error handling to pair_device()
+  08829a8ff Bluetooth: hci_core: Fix LE quote calculation
+  edb7dbcf8 Bluetooth: hci_core: Fix not handling link timeouts propertly
+  67cddb2a1 Bluetooth: Make use of __check_timeout on hci_sched_le
+  01ed379cb Bluetooth: bnep: Fix out-of-bound access
+  64f493836 Bluetooth: l2cap: always unlock channel in l2cap_conless_channel()
+  485428819 Bluetooth: hci_core: cancel all works upon hci_unregister_dev()
+  b162f19e6 Bluetooth: Fix incorrect pointer arithmatic in ext_adv_report_evt
+  a1f9c8328 Bluetooth: L2CAP: Fix rejecting L2CAP_CONN_PARAM_UPDATE_REQ
+  e137e2ba9 Bluetooth: l2cap: fix null-ptr-deref in l2cap_chan_timeout
+  1b33d55fb Bluetooth: Fix use-after-free bugs caused by sco_sock_timeout
+  92d26492b Bluetooth: Fix type of len in {l2cap,sco}_sock_getsockopt_old()
+  89a32741f Bluetooth: Fix memory leak in hci_req_sync_complete()
+  466488b14 Bluetooth: Fix TOCTOU in HCI debugfs implementation
+  96caf943a Bluetooth: hci_event: set the conn encrypted before conn establishes
+  6d5a9d4a7 Bluetooth: hci_core: Fix possible buffer overflow
+  6e9603907 Bluetooth: Remove superfluous call to hci_conn_check_pending()
+  369f419c0 Bluetooth: rfcomm: Fix null-ptr-deref in rfcomm_check_security
+  4debb1e93 Bluetooth: Enforce validation on max value of connection interval
+  afec8f772 Bluetooth: hci_event: Fix handling of HCI_EV_IO_CAPA_REQUEST
+  e0b278650 Bluetooth: Avoid potential use-after-free in hci_error_reset
+  f7f627ac7 Bluetooth: Fix bogus check for re-auth no supported with non-ssp
+  e5f7ce90a Bluetooth: hci_event: Fix not checking if HCI_OP_INQUIRY has been sent
+  5c53afc76 Bluetooth: Fix double free in hci_conn_cleanup
+  942cab53c Bluetooth: hci_sock: Correctly bounds check and pad HCI_MON_NEW_INDEX name
+  8f5abc380 Bluetooth: hci_sock: fix slab oob read in create_monitor_event
+  91f48261e Bluetooth: hci_event: Fix using memcmp when comparing keys
+  194ab82c1 Bluetooth: hci_core: Fix build warnings
+  8afe901e0 Bluetooth: Avoid redundant authentication
+  5afc7720e Bluetooth: avoid memcmp() out of bounds warning
+  4f0f93e15 Bluetooth: hci_event: Fix coding style
+  ccb8618c9 Bluetooth: Fix a refcnt underflow problem for hci_conn
+  9fc267762 Bluetooth: Reject connection with the device which has same BD_ADDR
+  2f83067d8 Bluetooth: hci_event: Ignore NULL link key
+  1a40c56e8 Bluetooth: L2CAP: Fix use-after-free
+  82cdb2ccb Bluetooth: L2CAP: Fix use-after-free in l2cap_sock_ready_cb
+  c900deb18 Bluetooth: Fix use-after-free in hci_remove_ltk/hci_remove_irk
+  8a2000677 Bluetooth: L2CAP: Add missing checks for invalid DCID
+  5822e209b Bluetooth: Fix l2cap_disconnect_req deadlock
+  549510215 bluetooth: Add cmd validity checks at the start of hci_sock_ioctl()
+  6a2776234 Bluetooth: L2CAP: fix "bad unlock balance" in l2cap_disconnect_rsp
+  8d59548ba bluetooth: Perform careful capability checks in hci_sock_ioctl()
+  5f3d214d1 Bluetooth: Fix race condition in hidp_session_thread
+  1351551aa Bluetooth: L2CAP: Fix use-after-free in l2cap_disconnect_{req,rsp}
+  215c0bacc Bluetooth: hci_sock: purge socket queues in the destruct() callback
+  a6a7d1541 Bluetooth: L2CAP: Fix potential user-after-free
+  14b7058f0 Bluetooth: hci_sync: cancel cmd_timer if hci_open failed
+  edfce2c29 Bluetooth: RFCOMM: don't call kfree_skb() under spin_lock_irqsave()
+  1d675a317 Bluetooth: hci_core: don't call kfree_skb() under spin_lock_irqsave()
+  ad528fde0 Bluetooth: L2CAP: Fix u8 overflow
+  8a66c3a94 Bluetooth: Fix not cleanup led when bt_init fails
+  bcb286ac9 Bluetooth: 6LoWPAN: add missing hci_dev_put() in get_l2cap_conn()
+  a2045d57e Bluetooth: L2CAP: Fix accepting connection request for invalid SPSM
+  fbe7cb840 Bluetooth: L2CAP: Fix l2cap_global_chan_by_psm
+  36919a82f Bluetooth: L2CAP: Fix attempting to access uninitialized memory
+  7f7bfdd9a Bluetooth: L2CAP: fix use-after-free in l2cap_conn_del()
+  6c7407bfb Bluetooth: L2CAP: Fix use-after-free caused by l2cap_reassemble_sdu
+  d91fc2836 Bluetooth: L2CAP: Fix user-after-free
+  671fee73e Bluetooth: hci_sysfs: Fix attempting to call device_add multiple times
+  d407ba466 Bluetooth: L2CAP: initialize delayed works at l2cap_chan_create()
+  61d968f0e Bluetooth: L2CAP: Fix build errors in some archs
+  a55ac4419 Bluetooth: L2CAP: Fix l2cap_global_chan_by_psm regression
+  bbd1fdb0e Bluetooth: L2CAP: Fix use-after-free caused by l2cap_chan_put
+  fbfeb8c8a Bluetooth: Fix bt_skb_sendmmsg not allocating partial chunks
+  2eb5a851e Bluetooth: SCO: Fix sco_send_frame returning skb->len
+  e0d3a3e99 Bluetooth: Fix passing NULL to PTR_ERR
+  75fa594be Bluetooth: RFCOMM: Replace use of memcpy_from_msg with bt_skb_sendmmsg
+  c5f6a8542 Bluetooth: SCO: Replace use of memcpy_from_msg with bt_skb_sendmsg
+  c8ca1084e Bluetooth: Add bt_skb_sendmmsg helper
+  720d06a3f Bluetooth: Add bt_skb_sendmsg helper
+  390d82733 Bluetooth: fix dangling sco_conn and use-after-free in sco_sock_timeout
+  0779b2efb Bluetooth: Fix the creation of hdev->name
+  684e50540 Bluetooth: Fix use after free in hci_send_acl
+  8819f93cd Bluetooth: refactor malicious adv data check
+  ce9c5af63 Bluetooth: Fix debugfs entry leak in hci_register_dev()
+  4a1491432 Bluetooth: stop proccessing malicious adv data
+  ef73cee6b Bluetooth: cmtp: fix possible panic when cmtp_init_sockets() fails
+  728ff4b21 Bluetooth: fix init and cleanup of sco_conn.timeout_work
+  72bb30165 Bluetooth: fix use-after-free error in lock_sock_nested()
+  c1c913f79 Bluetooth: sco: Fix lock_sock() blockage by memcpy_from_msg()
+  3dde8baef Bluetooth: Fix handling of LE Enhanced Connection Complete
+  3f7b869c1 Bluetooth: avoid circular locks in sco_sock_connect
+  48669c81a Bluetooth: schedule SCO timeouts with delayed_work
+  a2f1874e0 Bluetooth: skip invalid hci_sync_conn_complete_evt
+  c52204af3 Bluetooth: add timeout sanity check to hci_inquiry
+  60cf1b5fb Bluetooth: Move shutdown callback before flushing tx and rx queue
+  bc4b08383 Bluetooth: fix repeated calls to sco_sock_kill
+  518d8c3c3 Bluetooth: increase BTNAMSIZ to 21 chars to fix potential buffer overflow
+  ba0a4e09a Bluetooth: sco: prevent information leak in sco_conn_defer_accept()
+  5e2d55bce Bluetooth: hidp: use correct wait queue when removing ctrl_wait
+  3719acc16 Bluetooth: defer cleanup of resources in hci_unregister_dev()
+  608ba4af6 Revert "Bluetooth: Shutdown controller after workqueues are flushed or cancelled"
+  78b03389d Bluetooth: Shutdown controller after workqueues are flushed or cancelled
+  06de654dd Bluetooth: Fix the HCI to MGMT status conversion table
+  4a808634e Bluetooth: Fix handling of HCI_LE_Advertising_Set_Terminated event
+  40a7196f3 Bluetooth: mgmt: Fix slab-out-of-bounds in tlv_data_is_valid
+  2b9e9c2ed Bluetooth: use correct lock to prevent UAF of hdev object
+  64700748e Bluetooth: fix the erroneous flush_work() order
+  f8be26b99 Bluetooth: cmtp: fix file refcount when cmtp_attach_device fails
+  30126d4ba Bluetooth: SMP: Fail if remote and local public keys are identical
+
+diff --git a/include/net/bluetooth/bluetooth.h b/include/net/bluetooth/bluetooth.h
+index fabee6db0..421d41ef4 100644
+--- a/include/net/bluetooth/bluetooth.h
++++ b/include/net/bluetooth/bluetooth.h
+@@ -370,6 +370,71 @@ out:
+ 	return NULL;
+ }
+ 
++/* Shall not be called with lock_sock held */
++static inline struct sk_buff *bt_skb_sendmsg(struct sock *sk,
++					     struct msghdr *msg,
++					     size_t len, size_t mtu,
++					     size_t headroom, size_t tailroom)
++{
++	struct sk_buff *skb;
++	size_t size = min_t(size_t, len, mtu);
++	int err;
++
++	skb = bt_skb_send_alloc(sk, size + headroom + tailroom,
++				msg->msg_flags & MSG_DONTWAIT, &err);
++	if (!skb)
++		return ERR_PTR(err);
++
++	skb_reserve(skb, headroom);
++	skb_tailroom_reserve(skb, mtu, tailroom);
++
++	if (!copy_from_iter_full(skb_put(skb, size), size, &msg->msg_iter)) {
++		kfree_skb(skb);
++		return ERR_PTR(-EFAULT);
++	}
++
++	skb->priority = sk->sk_priority;
++
++	return skb;
++}
++
++/* Similar to bt_skb_sendmsg but can split the msg into multiple fragments
++ * accourding to the MTU.
++ */
++static inline struct sk_buff *bt_skb_sendmmsg(struct sock *sk,
++					      struct msghdr *msg,
++					      size_t len, size_t mtu,
++					      size_t headroom, size_t tailroom)
++{
++	struct sk_buff *skb, **frag;
++
++	skb = bt_skb_sendmsg(sk, msg, len, mtu, headroom, tailroom);
++	if (IS_ERR_OR_NULL(skb))
++		return skb;
++
++	len -= skb->len;
++	if (!len)
++		return skb;
++
++	/* Add remaining data over MTU as continuation fragments */
++	frag = &skb_shinfo(skb)->frag_list;
++	while (len) {
++		struct sk_buff *tmp;
++
++		tmp = bt_skb_sendmsg(sk, msg, len, mtu, headroom, tailroom);
++		if (IS_ERR(tmp)) {
++			return skb;
++		}
++
++		len -= tmp->len;
++
++		*frag = tmp;
++		frag = &(*frag)->next;
++	}
++
++	return skb;
++}
++
+ int bt_to_errno(u16 code);
+ 
+ void hci_sock_set_flag(struct sock *sk, int nr);
+diff --git a/include/net/bluetooth/hci_core.h b/include/net/bluetooth/hci_core.h
+index 6a61faf0c..7aa8e8e61 100644
+--- a/include/net/bluetooth/hci_core.h
++++ b/include/net/bluetooth/hci_core.h
+@@ -34,6 +34,9 @@
+ /* HCI priority */
+ #define HCI_PRIO_MAX	7
+ 
++/* HCI maximum id value */
++#define HCI_MAX_ID 10000
++
+ /* HCI Core structures */
+ struct inquiry_data {
+ 	bdaddr_t	bdaddr;
+@@ -206,7 +209,7 @@ struct hci_dev {
+ 	struct list_head list;
+ 	struct mutex	lock;
+ 
+-	char		name[8];
++	const char	*name;
+ 	unsigned long	flags;
+ 	__u16		id;
+ 	__u8		bus;
+@@ -656,7 +659,6 @@ void hci_inquiry_cache_flush(struct hci_dev *hdev);
+ /* ----- HCI Connections ----- */
+ enum {
+ 	HCI_CONN_AUTH_PEND,
+-	HCI_CONN_REAUTH_PEND,
+ 	HCI_CONN_ENCRYPT_PEND,
+ 	HCI_CONN_RSWITCH_PEND,
+ 	HCI_CONN_MODE_CHANGE_PEND,
+@@ -1042,6 +1044,7 @@ struct hci_dev *hci_alloc_dev(void);
+ void hci_free_dev(struct hci_dev *hdev);
+ int hci_register_dev(struct hci_dev *hdev);
+ void hci_unregister_dev(struct hci_dev *hdev);
++void hci_cleanup_dev(struct hci_dev *hdev);
+ int hci_suspend_dev(struct hci_dev *hdev);
+ int hci_resume_dev(struct hci_dev *hdev);
+ int hci_reset_dev(struct hci_dev *hdev);
+@@ -1427,18 +1430,46 @@ static inline int hci_check_conn_params(u16 min, u16 max, u16 latency,
+ {
+ 	u16 max_latency;
+ 
+-	if (min > max || min < 6 || max > 3200)
++	if (min > max) {
++		BT_WARN("min %d > max %d", min, max);
+ 		return -EINVAL;
++	}
+ 
+-	if (to_multiplier < 10 || to_multiplier > 3200)
++	if (min < 6) {
++		BT_WARN("min %d < 6", min);
+ 		return -EINVAL;
++	}
+ 
+-	if (max >= to_multiplier * 8)
++	if (max > 3200) {
++		BT_WARN("max %d > 3200", max);
+ 		return -EINVAL;
++	}
++
++	if (to_multiplier < 10) {
++		BT_WARN("to_multiplier %d < 10", to_multiplier);
++		return -EINVAL;
++	}
++
++	if (to_multiplier > 3200) {
++		BT_WARN("to_multiplier %d > 3200", to_multiplier);
++		return -EINVAL;
++	}
++
++	if (max >= to_multiplier * 8) {
++		BT_WARN("max %d >= to_multiplier %d * 8", max, to_multiplier);
++		return -EINVAL;
++	}
+ 
+ 	max_latency = (to_multiplier * 4 / max) - 1;
+-	if (latency > 499 || latency > max_latency)
++	if (latency > 499) {
++		BT_WARN("latency %d > 499", latency);
+ 		return -EINVAL;
++	}
++
++	if (latency > max_latency) {
++		BT_WARN("latency %d > max_latency %d", latency, max_latency);
++		return -EINVAL;
++	}
+ 
+ 	return 0;
+ }
+diff --git a/include/net/bluetooth/l2cap.h b/include/net/bluetooth/l2cap.h
+index 21dbd38f7..da0ef935c 100644
+--- a/include/net/bluetooth/l2cap.h
++++ b/include/net/bluetooth/l2cap.h
+@@ -798,6 +798,7 @@ enum {
+ };
+ 
+ void l2cap_chan_hold(struct l2cap_chan *c);
++struct l2cap_chan *l2cap_chan_hold_unless_zero(struct l2cap_chan *c);
+ void l2cap_chan_put(struct l2cap_chan *c);
+ 
+ static inline void l2cap_chan_lock(struct l2cap_chan *chan)
+diff --git a/net/bluetooth/6lowpan.c b/net/bluetooth/6lowpan.c
+index 9a75f9b00..4530ffb24 100644
+--- a/net/bluetooth/6lowpan.c
++++ b/net/bluetooth/6lowpan.c
+@@ -1014,6 +1014,7 @@ static int get_l2cap_conn(char *buf, bdaddr_t *addr, u8 *addr_type,
+ 	hci_dev_lock(hdev);
+ 	hcon = hci_conn_hash_lookup_le(hdev, addr, *addr_type);
+ 	hci_dev_unlock(hdev);
++	hci_dev_put(hdev);
+ 
+ 	if (!hcon)
+ 		return -ENOENT;
+diff --git a/net/bluetooth/af_bluetooth.c b/net/bluetooth/af_bluetooth.c
+index ee60c30f3..ecda73711 100644
+--- a/net/bluetooth/af_bluetooth.c
++++ b/net/bluetooth/af_bluetooth.c
+@@ -743,7 +743,7 @@ static int __init bt_init(void)
+ 
+ 	err = bt_sysfs_init();
+ 	if (err < 0)
+-		return err;
++		goto cleanup_led;
+ 
+ 	err = sock_register(&bt_sock_family_ops);
+ 	if (err)
+@@ -779,6 +779,9 @@ unregister_socket:
+ 	sock_unregister(PF_BLUETOOTH);
+ cleanup_sysfs:
+ 	bt_sysfs_cleanup();
++cleanup_led:
++	bt_leds_cleanup();
++	debugfs_remove_recursive(bt_debugfs);
+ 	return err;
+ }
+ 
+diff --git a/net/bluetooth/bnep/core.c b/net/bluetooth/bnep/core.c
+index 7b3965861..e1cfd110d 100644
+--- a/net/bluetooth/bnep/core.c
++++ b/net/bluetooth/bnep/core.c
+@@ -385,7 +385,8 @@ static int bnep_rx_frame(struct bnep_session *s, struct sk_buff *skb)
+ 
+ 	case BNEP_COMPRESSED_DST_ONLY:
+ 		__skb_put_data(nskb, skb_mac_header(skb), ETH_ALEN);
+-		__skb_put_data(nskb, s->eh.h_source, ETH_ALEN + 2);
++		__skb_put_data(nskb, s->eh.h_source, ETH_ALEN);
++		put_unaligned(s->eh.h_proto, (__be16 *)__skb_put(nskb, 2));
+ 		break;
+ 
+ 	case BNEP_GENERAL:
+@@ -743,8 +744,7 @@ static int __init bnep_init(void)
+ 	if (flt[0])
+ 		BT_INFO("BNEP filters: %s", flt);
+ 
+-	bnep_sock_init();
+-	return 0;
++	return bnep_sock_init();
+ }
+ 
+ static void __exit bnep_exit(void)
+diff --git a/net/bluetooth/cmtp/cmtp.h b/net/bluetooth/cmtp/cmtp.h
+index c32638ddd..f6b9dc4e4 100644
+--- a/net/bluetooth/cmtp/cmtp.h
++++ b/net/bluetooth/cmtp/cmtp.h
+@@ -26,7 +26,7 @@
+ #include <linux/types.h>
+ #include <net/bluetooth/bluetooth.h>
+ 
+-#define BTNAMSIZ 18
++#define BTNAMSIZ 21
+ 
+ /* CMTP ioctl defines */
+ #define CMTPCONNADD	_IOW('C', 200, int)
+diff --git a/net/bluetooth/cmtp/core.c b/net/bluetooth/cmtp/core.c
+index 7f26a5a19..4764ed73f 100644
+--- a/net/bluetooth/cmtp/core.c
++++ b/net/bluetooth/cmtp/core.c
+@@ -391,6 +391,11 @@ int cmtp_add_connection(struct cmtp_connadd_req *req, struct socket *sock)
+ 	if (!(session->flags & BIT(CMTP_LOOPBACK))) {
+ 		err = cmtp_attach_device(session);
+ 		if (err < 0) {
++			/* Caller will call fput in case of failure, and so
++			 * will cmtp_session kthread.
++			 */
++			get_file(session->sock->file);
++
+ 			atomic_inc(&session->terminate);
+ 			wake_up_interruptible(sk_sleep(session->sock->sk));
+ 			up_write(&cmtp_session_sem);
+@@ -494,9 +499,7 @@ static int __init cmtp_init(void)
+ {
+ 	BT_INFO("CMTP (CAPI Emulation) ver %s", VERSION);
+ 
+-	cmtp_init_sockets();
+-
+-	return 0;
++	return cmtp_init_sockets();
+ }
+ 
+ static void __exit cmtp_exit(void)
+diff --git a/net/bluetooth/hci_conn.c b/net/bluetooth/hci_conn.c
+index 1b50e4ef2..b8730c5f1 100644
+--- a/net/bluetooth/hci_conn.c
++++ b/net/bluetooth/hci_conn.c
+@@ -125,13 +125,11 @@ static void hci_conn_cleanup(struct hci_conn *conn)
+ 	if (hdev->notify)
+ 		hdev->notify(hdev, HCI_NOTIFY_CONN_DEL);
+ 
+-	hci_conn_del_sysfs(conn);
+-
+ 	debugfs_remove_recursive(conn->debugfs);
+ 
+-	hci_dev_put(hdev);
++	hci_conn_del_sysfs(conn);
+ 
+-	hci_conn_put(conn);
++	hci_dev_put(hdev);
+ }
+ 
+ static void le_scan_cleanup(struct work_struct *work)
+@@ -1204,6 +1202,15 @@ struct hci_conn *hci_connect_acl(struct hci_dev *hdev, bdaddr_t *dst,
+ 		return ERR_PTR(-EOPNOTSUPP);
+ 	}
+ 
++	/* Reject outgoing connection to device with same BD ADDR against
++	 * CVE-2020-26555
++	 */
++	if (!bacmp(&hdev->bdaddr, dst)) {
++		bt_dev_dbg(hdev, "Reject connection with same BD_ADDR %pMR\n",
++			   dst);
++		return ERR_PTR(-ECONNREFUSED);
++	}
++
+ 	acl = hci_conn_hash_lookup_ba(hdev, ACL_LINK, dst);
+ 	if (!acl) {
+ 		acl = hci_conn_add(hdev, ACL_LINK, dst, HCI_ROLE_MASTER);
+@@ -1331,12 +1338,10 @@ static int hci_conn_auth(struct hci_conn *conn, __u8 sec_level, __u8 auth_type)
+ 		hci_send_cmd(conn->hdev, HCI_OP_AUTH_REQUESTED,
+ 			     sizeof(cp), &cp);
+ 
+-		/* If we're already encrypted set the REAUTH_PEND flag,
+-		 * otherwise set the ENCRYPT_PEND.
++		/* Set the ENCRYPT_PEND to trigger encryption after
++		 * authentication.
+ 		 */
+-		if (test_bit(HCI_CONN_ENCRYPT, &conn->flags))
+-			set_bit(HCI_CONN_REAUTH_PEND, &conn->flags);
+-		else
++		if (!test_bit(HCI_CONN_ENCRYPT, &conn->flags))
+ 			set_bit(HCI_CONN_ENCRYPT_PEND, &conn->flags);
+ 	}
+ 
+@@ -1379,34 +1384,41 @@ int hci_conn_security(struct hci_conn *conn, __u8 sec_level, __u8 auth_type,
+ 	if (!test_bit(HCI_CONN_AUTH, &conn->flags))
+ 		goto auth;
+ 
+-	/* An authenticated FIPS approved combination key has sufficient
+-	 * security for security level 4. */
+-	if (conn->key_type == HCI_LK_AUTH_COMBINATION_P256 &&
+-	    sec_level == BT_SECURITY_FIPS)
+-		goto encrypt;
+-
+-	/* An authenticated combination key has sufficient security for
+-	   security level 3. */
+-	if ((conn->key_type == HCI_LK_AUTH_COMBINATION_P192 ||
+-	     conn->key_type == HCI_LK_AUTH_COMBINATION_P256) &&
+-	    sec_level == BT_SECURITY_HIGH)
+-		goto encrypt;
+-
+-	/* An unauthenticated combination key has sufficient security for
+-	   security level 1 and 2. */
+-	if ((conn->key_type == HCI_LK_UNAUTH_COMBINATION_P192 ||
+-	     conn->key_type == HCI_LK_UNAUTH_COMBINATION_P256) &&
+-	    (sec_level == BT_SECURITY_MEDIUM || sec_level == BT_SECURITY_LOW))
+-		goto encrypt;
+-
+-	/* A combination key has always sufficient security for the security
+-	   levels 1 or 2. High security level requires the combination key
+-	   is generated using maximum PIN code length (16).
+-	   For pre 2.1 units. */
+-	if (conn->key_type == HCI_LK_COMBINATION &&
+-	    (sec_level == BT_SECURITY_MEDIUM || sec_level == BT_SECURITY_LOW ||
+-	     conn->pin_length == 16))
+-		goto encrypt;
++	switch (conn->key_type) {
++	case HCI_LK_AUTH_COMBINATION_P256:
++		/* An authenticated FIPS approved combination key has
++		 * sufficient security for security level 4 or lower.
++		 */
++		if (sec_level <= BT_SECURITY_FIPS)
++			goto encrypt;
++		break;
++	case HCI_LK_AUTH_COMBINATION_P192:
++		/* An authenticated combination key has sufficient security for
++		 * security level 3 or lower.
++		 */
++		if (sec_level <= BT_SECURITY_HIGH)
++			goto encrypt;
++		break;
++	case HCI_LK_UNAUTH_COMBINATION_P192:
++	case HCI_LK_UNAUTH_COMBINATION_P256:
++		/* An unauthenticated combination key has sufficient security
++		 * for security level 2 or lower.
++		 */
++		if (sec_level <= BT_SECURITY_MEDIUM)
++			goto encrypt;
++		break;
++	case HCI_LK_COMBINATION:
++		/* A combination key has always sufficient security for the
++		 * security levels 2 or lower. High security level requires the
++		 * combination key is generated using maximum PIN code length
++		 * (16). For pre 2.1 units.
++		 */
++		if (sec_level <= BT_SECURITY_MEDIUM || conn->pin_length == 16)
++			goto encrypt;
++		break;
++	default:
++		break;
++	}
+ 
+ auth:
+ 	if (test_bit(HCI_CONN_ENCRYPT_PEND, &conn->flags))
+diff --git a/net/bluetooth/hci_core.c b/net/bluetooth/hci_core.c
+index 04d6f5079..bb89ca37d 100644
+--- a/net/bluetooth/hci_core.c
++++ b/net/bluetooth/hci_core.c
+@@ -1296,6 +1296,12 @@ int hci_inquiry(void __user *arg)
+ 		goto done;
+ 	}
+ 
++	/* Restrict maximum inquiry length to 60 seconds */
++	if (ir.length > 60) {
++		err = -EINVAL;
++		goto done;
++	}
++
+ 	hci_dev_lock(hdev);
+ 	if (inquiry_cache_age(hdev) > INQUIRY_CACHE_AGE_MAX ||
+ 	    inquiry_cache_empty(hdev) || ir.flags & IREQ_CACHE_FLUSH) {
+@@ -1498,8 +1504,13 @@ static int hci_dev_do_open(struct hci_dev *hdev)
+ 	} else {
+ 		/* Init failed, cleanup */
+ 		flush_work(&hdev->tx_work);
+-		flush_work(&hdev->cmd_work);
++
++		/* Since hci_rx_work() is possible to awake new cmd_work
++		 * it should be flushed first to avoid unexpected call of
++		 * hci_cmd_work()
++		 */
+ 		flush_work(&hdev->rx_work);
++		flush_work(&hdev->cmd_work);
+ 
+ 		skb_queue_purge(&hdev->cmd_q);
+ 		skb_queue_purge(&hdev->rx_q);
+@@ -1508,6 +1519,7 @@ static int hci_dev_do_open(struct hci_dev *hdev)
+ 			hdev->flush(hdev);
+ 
+ 		if (hdev->sent_cmd) {
++			cancel_delayed_work_sync(&hdev->cmd_timer);
+ 			kfree_skb(hdev->sent_cmd);
+ 			hdev->sent_cmd = NULL;
+ 		}
+@@ -1617,6 +1629,14 @@ int hci_dev_do_close(struct hci_dev *hdev)
+ 	hci_request_cancel_all(hdev);
+ 	hci_req_sync_lock(hdev);
+ 
++	if (!hci_dev_test_flag(hdev, HCI_UNREGISTER) &&
++	    !hci_dev_test_flag(hdev, HCI_USER_CHANNEL) &&
++	    test_bit(HCI_UP, &hdev->flags)) {
++		/* Execute vendor specific shutdown routine */
++		if (hdev->shutdown)
++			hdev->shutdown(hdev);
++	}
++
+ 	if (!test_and_clear_bit(HCI_UP, &hdev->flags)) {
+ 		cancel_delayed_work_sync(&hdev->cmd_timer);
+ 		hci_req_sync_unlock(hdev);
+@@ -2054,7 +2074,7 @@ int hci_get_dev_info(void __user *arg)
+ 	else
+ 		flags = hdev->flags;
+ 
+-	strcpy(di.name, hdev->name);
++	strscpy(di.name, hdev->name, sizeof(di.name));
+ 	di.bdaddr   = hdev->bdaddr;
+ 	di.type     = (hdev->bus & 0x0f) | ((hdev->dev_type & 0x03) << 4);
+ 	di.flags    = flags;
+@@ -2197,6 +2217,7 @@ static void hci_error_reset(struct work_struct *work)
+ {
+ 	struct hci_dev *hdev = container_of(work, struct hci_dev, error_reset);
+ 
++	hci_dev_hold(hdev);
+ 	BT_DBG("%s", hdev->name);
+ 
+ 	if (hdev->hw_error)
+@@ -2204,10 +2225,10 @@ static void hci_error_reset(struct work_struct *work)
+ 	else
+ 		bt_dev_err(hdev, "hardware error 0x%2.2x", hdev->hw_error_code);
+ 
+-	if (hci_dev_do_close(hdev))
+-		return;
++	if (!hci_dev_do_close(hdev))
++		hci_dev_do_open(hdev);
+ 
+-	hci_dev_do_open(hdev);
++	hci_dev_put(hdev);
+ }
+ 
+ void hci_uuids_clear(struct hci_dev *hdev)
+@@ -2497,10 +2518,10 @@ int hci_remove_link_key(struct hci_dev *hdev, bdaddr_t *bdaddr)
+ 
+ int hci_remove_ltk(struct hci_dev *hdev, bdaddr_t *bdaddr, u8 bdaddr_type)
+ {
+-	struct smp_ltk *k;
++	struct smp_ltk *k, *tmp;
+ 	int removed = 0;
+ 
+-	list_for_each_entry_rcu(k, &hdev->long_term_keys, list) {
++	list_for_each_entry_safe(k, tmp, &hdev->long_term_keys, list) {
+ 		if (bacmp(bdaddr, &k->bdaddr) || k->bdaddr_type != bdaddr_type)
+ 			continue;
+ 
+@@ -2516,9 +2537,9 @@ int hci_remove_ltk(struct hci_dev *hdev, bdaddr_t *bdaddr, u8 bdaddr_type)
+ 
+ void hci_remove_irk(struct hci_dev *hdev, bdaddr_t *bdaddr, u8 addr_type)
+ {
+-	struct smp_irk *k;
++	struct smp_irk *k, *tmp;
+ 
+-	list_for_each_entry_rcu(k, &hdev->identity_resolving_keys, list) {
++	list_for_each_entry_safe(k, tmp, &hdev->identity_resolving_keys, list) {
+ 		if (bacmp(bdaddr, &k->bdaddr) || k->addr_type != addr_type)
+ 			continue;
+ 
+@@ -3161,10 +3182,10 @@ int hci_register_dev(struct hci_dev *hdev)
+ 	 */
+ 	switch (hdev->dev_type) {
+ 	case HCI_PRIMARY:
+-		id = ida_simple_get(&hci_index_ida, 0, 0, GFP_KERNEL);
++		id = ida_simple_get(&hci_index_ida, 0, HCI_MAX_ID, GFP_KERNEL);
+ 		break;
+ 	case HCI_AMP:
+-		id = ida_simple_get(&hci_index_ida, 1, 0, GFP_KERNEL);
++		id = ida_simple_get(&hci_index_ida, 1, HCI_MAX_ID, GFP_KERNEL);
+ 		break;
+ 	default:
+ 		return -EINVAL;
+@@ -3173,7 +3194,11 @@ int hci_register_dev(struct hci_dev *hdev)
+ 	if (id < 0)
+ 		return id;
+ 
+-	sprintf(hdev->name, "hci%d", id);
++	error = dev_set_name(&hdev->dev, "hci%u", id);
++	if (error)
++		return error;
++
++	hdev->name = dev_name(&hdev->dev);
+ 	hdev->id = id;
+ 
+ 	BT_DBG("%p name %s bus %d", hdev, hdev->name, hdev->bus);
+@@ -3195,8 +3220,6 @@ int hci_register_dev(struct hci_dev *hdev)
+ 	if (!IS_ERR_OR_NULL(bt_debugfs))
+ 		hdev->debugfs = debugfs_create_dir(hdev->name, bt_debugfs);
+ 
+-	dev_set_name(&hdev->dev, "%s", hdev->name);
+-
+ 	error = device_add(&hdev->dev);
+ 	if (error < 0)
+ 		goto err_wqueue;
+@@ -3244,6 +3267,7 @@ int hci_register_dev(struct hci_dev *hdev)
+ 	return id;
+ 
+ err_wqueue:
++	debugfs_remove_recursive(hdev->debugfs);
+ 	destroy_workqueue(hdev->workqueue);
+ 	destroy_workqueue(hdev->req_workqueue);
+ err:
+@@ -3256,19 +3280,19 @@ EXPORT_SYMBOL(hci_register_dev);
+ /* Unregister HCI device */
+ void hci_unregister_dev(struct hci_dev *hdev)
+ {
+-	int id;
+-
+ 	BT_DBG("%p name %s bus %d", hdev, hdev->name, hdev->bus);
+ 
+ 	hci_dev_set_flag(hdev, HCI_UNREGISTER);
+ 
+-	id = hdev->id;
+-
+ 	write_lock(&hci_dev_list_lock);
+ 	list_del(&hdev->list);
+ 	write_unlock(&hci_dev_list_lock);
+ 
++	cancel_work_sync(&hdev->rx_work);
++	cancel_work_sync(&hdev->cmd_work);
++	cancel_work_sync(&hdev->tx_work);
+ 	cancel_work_sync(&hdev->power_on);
++	cancel_work_sync(&hdev->error_reset);
+ 
+ 	hci_dev_do_close(hdev);
+ 
+@@ -3292,7 +3316,14 @@ void hci_unregister_dev(struct hci_dev *hdev)
+ 	}
+ 
+ 	device_del(&hdev->dev);
++	/* Actual cleanup is deferred until hci_cleanup_dev(). */
++	hci_dev_put(hdev);
++}
++EXPORT_SYMBOL(hci_unregister_dev);
+ 
++/* Cleanup HCI device */
++void hci_cleanup_dev(struct hci_dev *hdev)
++{
+ 	debugfs_remove_recursive(hdev->debugfs);
+ 	kfree_const(hdev->hw_info);
+ 	kfree_const(hdev->fw_info);
+@@ -3315,11 +3346,8 @@ void hci_unregister_dev(struct hci_dev *hdev)
+ 	hci_discovery_filter_clear(hdev);
+ 	hci_dev_unlock(hdev);
+ 
+-	hci_dev_put(hdev);
+-
+-	ida_simple_remove(&hci_index_ida, id);
++	ida_simple_remove(&hci_index_ida, hdev->id);
+ }
+-EXPORT_SYMBOL(hci_unregister_dev);
+ 
+ /* Suspend HCI device */
+ int hci_suspend_dev(struct hci_dev *hdev)
+@@ -3903,15 +3931,27 @@ static inline int __get_blocks(struct hci_dev *hdev, struct sk_buff *skb)
+ 	return DIV_ROUND_UP(skb->len - HCI_ACL_HDR_SIZE, hdev->block_len);
+ }
+ 
+-static void __check_timeout(struct hci_dev *hdev, unsigned int cnt)
++static void __check_timeout(struct hci_dev *hdev, unsigned int cnt, u8 type)
+ {
+-	if (!hci_dev_test_flag(hdev, HCI_UNCONFIGURED)) {
+-		/* ACL tx timeout must be longer than maximum
+-		 * link supervision timeout (40.9 seconds) */
+-		if (!cnt && time_after(jiffies, hdev->acl_last_tx +
+-				       HCI_ACL_TX_TIMEOUT))
+-			hci_link_tx_to(hdev, ACL_LINK);
++	unsigned long last_tx;
++
++	if (hci_dev_test_flag(hdev, HCI_UNCONFIGURED))
++		return;
++
++	switch (type) {
++	case LE_LINK:
++		last_tx = hdev->le_last_tx;
++		break;
++	default:
++		last_tx = hdev->acl_last_tx;
++		break;
+ 	}
++
++	/* tx timeout must be longer than maximum link supervision timeout
++	 * (40.9 seconds)
++	 */
++	if (!cnt && time_after(jiffies, last_tx + HCI_ACL_TX_TIMEOUT))
++		hci_link_tx_to(hdev, type);
+ }
+ 
+ static void hci_sched_acl_pkt(struct hci_dev *hdev)
+@@ -3921,7 +3961,7 @@ static void hci_sched_acl_pkt(struct hci_dev *hdev)
+ 	struct sk_buff *skb;
+ 	int quote;
+ 
+-	__check_timeout(hdev, cnt);
++	__check_timeout(hdev, cnt, ACL_LINK);
+ 
+ 	while (hdev->acl_cnt &&
+ 	       (chan = hci_chan_sent(hdev, ACL_LINK, &quote))) {
+@@ -3960,8 +4000,6 @@ static void hci_sched_acl_blk(struct hci_dev *hdev)
+ 	int quote;
+ 	u8 type;
+ 
+-	__check_timeout(hdev, cnt);
+-
+ 	BT_DBG("%s", hdev->name);
+ 
+ 	if (hdev->dev_type == HCI_AMP)
+@@ -3969,6 +4007,8 @@ static void hci_sched_acl_blk(struct hci_dev *hdev)
+ 	else
+ 		type = ACL_LINK;
+ 
++	__check_timeout(hdev, cnt, type);
++
+ 	while (hdev->block_cnt > 0 &&
+ 	       (chan = hci_chan_sent(hdev, type, &quote))) {
+ 		u32 priority = (skb_peek(&chan->data_q))->priority;
+@@ -4081,24 +4121,19 @@ static void hci_sched_le(struct hci_dev *hdev)
+ {
+ 	struct hci_chan *chan;
+ 	struct sk_buff *skb;
+-	int quote, cnt, tmp;
++	int quote, *cnt, tmp;
+ 
+ 	BT_DBG("%s", hdev->name);
+ 
+ 	if (!hci_conn_num(hdev, LE_LINK))
+ 		return;
+ 
+-	if (!hci_dev_test_flag(hdev, HCI_UNCONFIGURED)) {
+-		/* LE tx timeout must be longer than maximum
+-		 * link supervision timeout (40.9 seconds) */
+-		if (!hdev->le_cnt && hdev->le_pkts &&
+-		    time_after(jiffies, hdev->le_last_tx + HZ * 45))
+-			hci_link_tx_to(hdev, LE_LINK);
+-	}
++	cnt = hdev->le_pkts ? &hdev->le_cnt : &hdev->acl_cnt;
+ 
+-	cnt = hdev->le_pkts ? hdev->le_cnt : hdev->acl_cnt;
+-	tmp = cnt;
+-	while (cnt && (chan = hci_chan_sent(hdev, LE_LINK, &quote))) {
++	__check_timeout(hdev, *cnt, LE_LINK);
++
++	tmp = *cnt;
++	while (*cnt && (chan = hci_chan_sent(hdev, LE_LINK, &quote))) {
+ 		u32 priority = (skb_peek(&chan->data_q))->priority;
+ 		while (quote-- && (skb = skb_peek(&chan->data_q))) {
+ 			BT_DBG("chan %p skb %p len %d priority %u", chan, skb,
+@@ -4113,18 +4148,13 @@ static void hci_sched_le(struct hci_dev *hdev)
+ 			hci_send_frame(hdev, skb);
+ 			hdev->le_last_tx = jiffies;
+ 
+-			cnt--;
++			(*cnt)--;
+ 			chan->sent++;
+ 			chan->conn->sent++;
+ 		}
+ 	}
+ 
+-	if (hdev->le_pkts)
+-		hdev->le_cnt = cnt;
+-	else
+-		hdev->acl_cnt = cnt;
+-
+-	if (cnt != tmp)
++	if (*cnt != tmp)
+ 		hci_prio_recalculate(hdev, LE_LINK);
+ }
+ 
+@@ -4311,7 +4341,7 @@ void hci_req_cmd_complete(struct hci_dev *hdev, u16 opcode, u8 status,
+ 			*req_complete_skb = bt_cb(skb)->hci.req_complete_skb;
+ 		else
+ 			*req_complete = bt_cb(skb)->hci.req_complete;
+-		kfree_skb(skb);
++		dev_kfree_skb_irq(skb);
+ 	}
+ 	spin_unlock_irqrestore(&hdev->cmd_q.lock, flags);
+ }
+diff --git a/net/bluetooth/hci_debugfs.c b/net/bluetooth/hci_debugfs.c
+index 51f5b1efc..a01479f84 100644
+--- a/net/bluetooth/hci_debugfs.c
++++ b/net/bluetooth/hci_debugfs.c
+@@ -200,10 +200,12 @@ static int conn_info_min_age_set(void *data, u64 val)
+ {
+ 	struct hci_dev *hdev = data;
+ 
+-	if (val == 0 || val > hdev->conn_info_max_age)
+-		return -EINVAL;
+-
+ 	hci_dev_lock(hdev);
++	if (val == 0 || val > hdev->conn_info_max_age) {
++		hci_dev_unlock(hdev);
++		return -EINVAL;
++	}
++
+ 	hdev->conn_info_min_age = val;
+ 	hci_dev_unlock(hdev);
+ 
+@@ -228,10 +230,12 @@ static int conn_info_max_age_set(void *data, u64 val)
+ {
+ 	struct hci_dev *hdev = data;
+ 
+-	if (val == 0 || val < hdev->conn_info_min_age)
+-		return -EINVAL;
+-
+ 	hci_dev_lock(hdev);
++	if (val == 0 || val < hdev->conn_info_min_age) {
++		hci_dev_unlock(hdev);
++		return -EINVAL;
++	}
++
+ 	hdev->conn_info_max_age = val;
+ 	hci_dev_unlock(hdev);
+ 
+@@ -479,10 +483,12 @@ static int sniff_min_interval_set(void *data, u64 val)
+ {
+ 	struct hci_dev *hdev = data;
+ 
+-	if (val == 0 || val % 2 || val > hdev->sniff_max_interval)
+-		return -EINVAL;
+-
+ 	hci_dev_lock(hdev);
++	if (val == 0 || val % 2 || val > hdev->sniff_max_interval) {
++		hci_dev_unlock(hdev);
++		return -EINVAL;
++	}
++
+ 	hdev->sniff_min_interval = val;
+ 	hci_dev_unlock(hdev);
+ 
+@@ -507,10 +513,12 @@ static int sniff_max_interval_set(void *data, u64 val)
+ {
+ 	struct hci_dev *hdev = data;
+ 
+-	if (val == 0 || val % 2 || val < hdev->sniff_min_interval)
+-		return -EINVAL;
+-
+ 	hci_dev_lock(hdev);
++	if (val == 0 || val % 2 || val < hdev->sniff_min_interval) {
++		hci_dev_unlock(hdev);
++		return -EINVAL;
++	}
++
+ 	hdev->sniff_max_interval = val;
+ 	hci_dev_unlock(hdev);
+ 
+@@ -749,10 +757,12 @@ static int conn_min_interval_set(void *data, u64 val)
+ {
+ 	struct hci_dev *hdev = data;
+ 
+-	if (val < 0x0006 || val > 0x0c80 || val > hdev->le_conn_max_interval)
+-		return -EINVAL;
+-
+ 	hci_dev_lock(hdev);
++	if (val < 0x0006 || val > 0x0c80 || val > hdev->le_conn_max_interval) {
++		hci_dev_unlock(hdev);
++		return -EINVAL;
++	}
++
+ 	hdev->le_conn_min_interval = val;
+ 	hci_dev_unlock(hdev);
+ 
+@@ -777,10 +787,12 @@ static int conn_max_interval_set(void *data, u64 val)
+ {
+ 	struct hci_dev *hdev = data;
+ 
+-	if (val < 0x0006 || val > 0x0c80 || val < hdev->le_conn_min_interval)
+-		return -EINVAL;
+-
+ 	hci_dev_lock(hdev);
++	if (val < 0x0006 || val > 0x0c80 || val < hdev->le_conn_min_interval) {
++		hci_dev_unlock(hdev);
++		return -EINVAL;
++	}
++
+ 	hdev->le_conn_max_interval = val;
+ 	hci_dev_unlock(hdev);
+ 
+@@ -889,10 +901,12 @@ static int adv_min_interval_set(void *data, u64 val)
+ {
+ 	struct hci_dev *hdev = data;
+ 
+-	if (val < 0x0020 || val > 0x4000 || val > hdev->le_adv_max_interval)
+-		return -EINVAL;
+-
+ 	hci_dev_lock(hdev);
++	if (val < 0x0020 || val > 0x4000 || val > hdev->le_adv_max_interval) {
++		hci_dev_unlock(hdev);
++		return -EINVAL;
++	}
++
+ 	hdev->le_adv_min_interval = val;
+ 	hci_dev_unlock(hdev);
+ 
+@@ -917,10 +931,12 @@ static int adv_max_interval_set(void *data, u64 val)
+ {
+ 	struct hci_dev *hdev = data;
+ 
+-	if (val < 0x0020 || val > 0x4000 || val < hdev->le_adv_min_interval)
+-		return -EINVAL;
+-
+ 	hci_dev_lock(hdev);
++	if (val < 0x0020 || val > 0x4000 || val < hdev->le_adv_min_interval) {
++		hci_dev_unlock(hdev);
++		return -EINVAL;
++	}
++
+ 	hdev->le_adv_max_interval = val;
+ 	hci_dev_unlock(hdev);
+ 
+diff --git a/net/bluetooth/hci_event.c b/net/bluetooth/hci_event.c
+index 2e2cad58b..83eaf11fc 100644
+--- a/net/bluetooth/hci_event.c
++++ b/net/bluetooth/hci_event.c
+@@ -25,6 +25,8 @@
+ /* Bluetooth HCI event handling. */
+ 
+ #include <asm/unaligned.h>
++#include <linux/crypto.h>
++#include <crypto/algapi.h>
+ 
+ #include <net/bluetooth/bluetooth.h>
+ #include <net/bluetooth/hci_core.h>
+@@ -1699,7 +1701,8 @@ static void hci_cs_inquiry(struct hci_dev *hdev, __u8 status)
+ 		return;
+ 	}
+ 
+-	set_bit(HCI_INQUIRY, &hdev->flags);
++	if (hci_sent_cmd_data(hdev, HCI_OP_INQUIRY))
++		set_bit(HCI_INQUIRY, &hdev->flags);
+ }
+ 
+ static void hci_cs_create_conn(struct hci_dev *hdev, __u8 status)
+@@ -2450,6 +2453,31 @@ static void hci_conn_complete_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 		if (test_bit(HCI_ENCRYPT, &hdev->flags))
+ 			set_bit(HCI_CONN_ENCRYPT, &conn->flags);
+ 
++		/* "Link key request" completed ahead of "connect request" completes */
++		if (ev->encr_mode == 1 && !test_bit(HCI_CONN_ENCRYPT, &conn->flags) &&
++		    ev->link_type == ACL_LINK) {
++			struct link_key *key;
++			struct hci_cp_read_enc_key_size cp;
++
++			key = hci_find_link_key(hdev, &ev->bdaddr);
++			if (key) {
++				set_bit(HCI_CONN_ENCRYPT, &conn->flags);
++
++				if (!(hdev->commands[20] & 0x10)) {
++					conn->enc_key_size = HCI_LINK_KEY_SIZE;
++				} else {
++					cp.handle = cpu_to_le16(conn->handle);
++					if (hci_send_cmd(hdev, HCI_OP_READ_ENC_KEY_SIZE,
++							 sizeof(cp), &cp)) {
++						bt_dev_err(hdev, "sending read key size failed");
++						conn->enc_key_size = HCI_LINK_KEY_SIZE;
++					}
++				}
++
++				hci_encrypt_cfm(conn, ev->status);
++			}
++		}
++
+ 		/* Get remote features */
+ 		if (conn->type == ACL_LINK) {
+ 			struct hci_cp_read_remote_features cp;
+@@ -2510,6 +2538,16 @@ static void hci_conn_request_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 	BT_DBG("%s bdaddr %pMR type 0x%x", hdev->name, &ev->bdaddr,
+ 	       ev->link_type);
+ 
++	/* Reject incoming connection from device with same BD ADDR against
++	 * CVE-2020-26555
++	 */
++	if (hdev && !bacmp(&hdev->bdaddr, &ev->bdaddr)) {
++		bt_dev_dbg(hdev, "Reject connection with same BD_ADDR %pMR\n",
++			   &ev->bdaddr);
++		hci_reject_conn(hdev, &ev->bdaddr);
++		return;
++	}
++
+ 	mask |= hci_proto_connect_ind(hdev, &ev->bdaddr, ev->link_type,
+ 				      &flags);
+ 
+@@ -2709,14 +2747,8 @@ static void hci_auth_complete_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 
+ 	if (!ev->status) {
+ 		clear_bit(HCI_CONN_AUTH_FAILURE, &conn->flags);
+-
+-		if (!hci_conn_ssp_enabled(conn) &&
+-		    test_bit(HCI_CONN_REAUTH_PEND, &conn->flags)) {
+-			bt_dev_info(hdev, "re-auth of legacy device is not possible.");
+-		} else {
+-			set_bit(HCI_CONN_AUTH, &conn->flags);
+-			conn->sec_level = conn->pending_sec_level;
+-		}
++		set_bit(HCI_CONN_AUTH, &conn->flags);
++		conn->sec_level = conn->pending_sec_level;
+ 	} else {
+ 		if (ev->status == HCI_ERROR_PIN_OR_KEY_MISSING)
+ 			set_bit(HCI_CONN_AUTH_FAILURE, &conn->flags);
+@@ -2725,7 +2757,6 @@ static void hci_auth_complete_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 	}
+ 
+ 	clear_bit(HCI_CONN_AUTH_PEND, &conn->flags);
+-	clear_bit(HCI_CONN_REAUTH_PEND, &conn->flags);
+ 
+ 	if (conn->state == BT_CONFIG) {
+ 		if (!ev->status && hci_conn_ssp_enabled(conn)) {
+@@ -2771,8 +2802,6 @@ static void hci_remote_name_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 
+ 	BT_DBG("%s", hdev->name);
+ 
+-	hci_conn_check_pending(hdev);
+-
+ 	hci_dev_lock(hdev);
+ 
+ 	conn = hci_conn_hash_lookup_ba(hdev, ACL_LINK, &ev->bdaddr);
+@@ -3816,6 +3845,15 @@ static void hci_link_key_notify_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 	if (!conn)
+ 		goto unlock;
+ 
++	/* Ignore NULL link key against CVE-2020-26555 */
++	if (!crypto_memneq(ev->link_key, ZERO_KEY, HCI_LINK_KEY_SIZE)) {
++		bt_dev_dbg(hdev, "Ignore NULL link key (ZERO KEY) for %pMR",
++			   &ev->bdaddr);
++		hci_disconnect(conn, HCI_ERROR_AUTH_FAILURE);
++		hci_conn_drop(conn);
++		goto unlock;
++	}
++
+ 	hci_conn_hold(conn);
+ 	conn->disc_timeout = HCI_DISCONN_TIMEOUT;
+ 	hci_conn_drop(conn);
+@@ -4083,6 +4121,21 @@ static void hci_sync_conn_complete_evt(struct hci_dev *hdev,
+ 
+ 	switch (ev->status) {
+ 	case 0x00:
++		/* The synchronous connection complete event should only be
++		 * sent once per new connection. Receiving a successful
++		 * complete event when the connection status is already
++		 * BT_CONNECTED means that the device is misbehaving and sent
++		 * multiple complete event packets for the same new connection.
++		 *
++		 * Registering the device more than once can corrupt kernel
++		 * memory, hence upon detecting this invalid event, we report
++		 * an error and ignore the packet.
++		 */
++		if (conn->state == BT_CONNECTED) {
++			bt_dev_err(hdev, "Ignoring connect complete event for existing connection");
++			goto unlock;
++		}
++
+ 		conn->handle = __le16_to_cpu(ev->handle);
+ 		conn->state  = BT_CONNECTED;
+ 		conn->type   = ev->link_type;
+@@ -4279,8 +4332,8 @@ static u8 bredr_oob_data_present(struct hci_conn *conn)
+ 		 * available, then do not declare that OOB data is
+ 		 * present.
+ 		 */
+-		if (!memcmp(data->rand256, ZERO_KEY, 16) ||
+-		    !memcmp(data->hash256, ZERO_KEY, 16))
++		if (!crypto_memneq(data->rand256, ZERO_KEY, 16) ||
++		    !crypto_memneq(data->hash256, ZERO_KEY, 16))
+ 			return 0x00;
+ 
+ 		return 0x02;
+@@ -4290,8 +4343,8 @@ static u8 bredr_oob_data_present(struct hci_conn *conn)
+ 	 * not supported by the hardware, then check that if
+ 	 * P-192 data values are present.
+ 	 */
+-	if (!memcmp(data->rand192, ZERO_KEY, 16) ||
+-	    !memcmp(data->hash192, ZERO_KEY, 16))
++	if (!crypto_memneq(data->rand192, ZERO_KEY, 16) ||
++	    !crypto_memneq(data->hash192, ZERO_KEY, 16))
+ 		return 0x00;
+ 
+ 	return 0x01;
+@@ -4307,9 +4360,12 @@ static void hci_io_capa_request_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 	hci_dev_lock(hdev);
+ 
+ 	conn = hci_conn_hash_lookup_ba(hdev, ACL_LINK, &ev->bdaddr);
+-	if (!conn)
++	if (!conn || !hci_dev_test_flag(hdev, HCI_SSP_ENABLED))
+ 		goto unlock;
+ 
++	/* Assume remote supports SSP since it has triggered this event */
++	set_bit(HCI_CONN_SSP_ENABLED, &conn->flags);
++
+ 	hci_conn_hold(conn);
+ 
+ 	if (!hci_dev_test_flag(hdev, HCI_MGMT))
+@@ -4542,7 +4598,7 @@ static void hci_simple_pair_complete_evt(struct hci_dev *hdev,
+ 	hci_dev_lock(hdev);
+ 
+ 	conn = hci_conn_hash_lookup_ba(hdev, ACL_LINK, &ev->bdaddr);
+-	if (!conn)
++	if (!conn || !hci_conn_ssp_enabled(conn))
+ 		goto unlock;
+ 
+ 	/* Reset the authentication requirement to unknown */
+@@ -4777,8 +4833,9 @@ static void hci_disconn_phylink_complete_evt(struct hci_dev *hdev,
+ 	hci_dev_lock(hdev);
+ 
+ 	hcon = hci_conn_hash_lookup_handle(hdev, ev->phy_handle);
+-	if (hcon) {
++	if (hcon && hcon->type == AMP_LINK) {
+ 		hcon->state = BT_CLOSED;
++		hci_disconn_cfm(hcon, ev->reason);
+ 		hci_conn_del(hcon);
+ 	}
+ 
+@@ -4786,9 +4843,64 @@ static void hci_disconn_phylink_complete_evt(struct hci_dev *hdev,
+ }
+ #endif
+ 
++static void le_conn_update_addr(struct hci_conn *conn, bdaddr_t *bdaddr,
++				u8 bdaddr_type, bdaddr_t *local_rpa)
++{
++	if (conn->out) {
++		conn->dst_type = bdaddr_type;
++		conn->resp_addr_type = bdaddr_type;
++		bacpy(&conn->resp_addr, bdaddr);
++
++		/* Check if the controller has set a Local RPA then it must be
++		 * used instead or hdev->rpa.
++		 */
++		if (local_rpa && bacmp(local_rpa, BDADDR_ANY)) {
++			conn->init_addr_type = ADDR_LE_DEV_RANDOM;
++			bacpy(&conn->init_addr, local_rpa);
++		} else if (hci_dev_test_flag(conn->hdev, HCI_PRIVACY)) {
++			conn->init_addr_type = ADDR_LE_DEV_RANDOM;
++			bacpy(&conn->init_addr, &conn->hdev->rpa);
++		} else {
++			hci_copy_identity_address(conn->hdev, &conn->init_addr,
++						  &conn->init_addr_type);
++		}
++	} else {
++		conn->resp_addr_type = conn->hdev->adv_addr_type;
++		/* Check if the controller has set a Local RPA then it must be
++		 * used instead or hdev->rpa.
++		 */
++		if (local_rpa && bacmp(local_rpa, BDADDR_ANY)) {
++			conn->resp_addr_type = ADDR_LE_DEV_RANDOM;
++			bacpy(&conn->resp_addr, local_rpa);
++		} else if (conn->hdev->adv_addr_type == ADDR_LE_DEV_RANDOM) {
++			/* In case of ext adv, resp_addr will be updated in
++			 * Adv Terminated event.
++			 */
++			if (!ext_adv_capable(conn->hdev))
++				bacpy(&conn->resp_addr,
++				      &conn->hdev->random_addr);
++		} else {
++			bacpy(&conn->resp_addr, &conn->hdev->bdaddr);
++		}
++
++		conn->init_addr_type = bdaddr_type;
++		bacpy(&conn->init_addr, bdaddr);
++
++		/* For incoming connections, set the default minimum
++		 * and maximum connection interval. They will be used
++		 * to check if the parameters are in range and if not
++		 * trigger the connection update procedure.
++		 */
++		conn->le_conn_min_interval = conn->hdev->le_conn_min_interval;
++		conn->le_conn_max_interval = conn->hdev->le_conn_max_interval;
++	}
++}
++
+ static void le_conn_complete_evt(struct hci_dev *hdev, u8 status,
+-			bdaddr_t *bdaddr, u8 bdaddr_type, u8 role, u16 handle,
+-			u16 interval, u16 latency, u16 supervision_timeout)
++				 bdaddr_t *bdaddr, u8 bdaddr_type,
++				 bdaddr_t *local_rpa, u8 role, u16 handle,
++				 u16 interval, u16 latency,
++				 u16 supervision_timeout)
+ {
+ 	struct hci_conn_params *params;
+ 	struct hci_conn *conn;
+@@ -4836,32 +4948,7 @@ static void le_conn_complete_evt(struct hci_dev *hdev, u8 status,
+ 		cancel_delayed_work(&conn->le_conn_timeout);
+ 	}
+ 
+-	if (!conn->out) {
+-		/* Set the responder (our side) address type based on
+-		 * the advertising address type.
+-		 */
+-		conn->resp_addr_type = hdev->adv_addr_type;
+-		if (hdev->adv_addr_type == ADDR_LE_DEV_RANDOM) {
+-			/* In case of ext adv, resp_addr will be updated in
+-			 * Adv Terminated event.
+-			 */
+-			if (!ext_adv_capable(hdev))
+-				bacpy(&conn->resp_addr, &hdev->random_addr);
+-		} else {
+-			bacpy(&conn->resp_addr, &hdev->bdaddr);
+-		}
+-
+-		conn->init_addr_type = bdaddr_type;
+-		bacpy(&conn->init_addr, bdaddr);
+-
+-		/* For incoming connections, set the default minimum
+-		 * and maximum connection interval. They will be used
+-		 * to check if the parameters are in range and if not
+-		 * trigger the connection update procedure.
+-		 */
+-		conn->le_conn_min_interval = hdev->le_conn_min_interval;
+-		conn->le_conn_max_interval = hdev->le_conn_max_interval;
+-	}
++	le_conn_update_addr(conn, bdaddr, bdaddr_type, local_rpa);
+ 
+ 	/* Lookup the identity address from the stored connection
+ 	 * address and address type.
+@@ -4959,7 +5046,7 @@ static void hci_le_conn_complete_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
+ 
+ 	le_conn_complete_evt(hdev, ev->status, &ev->bdaddr, ev->bdaddr_type,
+-			     ev->role, le16_to_cpu(ev->handle),
++			     NULL, ev->role, le16_to_cpu(ev->handle),
+ 			     le16_to_cpu(ev->interval),
+ 			     le16_to_cpu(ev->latency),
+ 			     le16_to_cpu(ev->supervision_timeout));
+@@ -4973,7 +5060,7 @@ static void hci_le_enh_conn_complete_evt(struct hci_dev *hdev,
+ 	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
+ 
+ 	le_conn_complete_evt(hdev, ev->status, &ev->bdaddr, ev->bdaddr_type,
+-			     ev->role, le16_to_cpu(ev->handle),
++			     &ev->local_rpa, ev->role, le16_to_cpu(ev->handle),
+ 			     le16_to_cpu(ev->interval),
+ 			     le16_to_cpu(ev->latency),
+ 			     le16_to_cpu(ev->supervision_timeout));
+@@ -4986,14 +5073,26 @@ static void hci_le_ext_adv_term_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 
+ 	BT_DBG("%s status 0x%2.2x", hdev->name, ev->status);
+ 
+-	if (ev->status)
++	if (ev->status) {
++		struct adv_info *adv;
++
++		adv = hci_find_adv_instance(hdev, ev->handle);
++		if (!adv)
++			return;
++
++		/* Remove advertising as it has been terminated */
++		hci_remove_adv_instance(hdev, ev->handle);
++		mgmt_advertising_removed(NULL, hdev, ev->handle);
++
+ 		return;
++	}
+ 
+ 	conn = hci_conn_hash_lookup_handle(hdev, __le16_to_cpu(ev->conn_handle));
+ 	if (conn) {
+ 		struct adv_info *adv_instance;
+ 
+-		if (hdev->adv_addr_type != ADDR_LE_DEV_RANDOM)
++		if (hdev->adv_addr_type != ADDR_LE_DEV_RANDOM ||
++		    bacmp(&conn->resp_addr, BDADDR_ANY))
+ 			return;
+ 
+ 		if (!hdev->cur_adv_instance) {
+@@ -5334,7 +5433,13 @@ static void hci_le_adv_report_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 		struct hci_ev_le_advertising_info *ev = ptr;
+ 		s8 rssi;
+ 
+-		if (ev->length <= HCI_MAX_AD_LENGTH) {
++		if (ptr > (void *)skb_tail_pointer(skb) - sizeof(*ev)) {
++			bt_dev_err(hdev, "Malicious advertising data.");
++			break;
++		}
++
++		if (ev->length <= HCI_MAX_AD_LENGTH &&
++		    ev->data + ev->length <= skb_tail_pointer(skb)) {
+ 			rssi = ev->data[ev->length];
+ 			process_adv_report(hdev, ev->evt_type, &ev->bdaddr,
+ 					   ev->bdaddr_type, NULL, 0, rssi,
+@@ -5343,7 +5448,7 @@ static void hci_le_adv_report_evt(struct hci_dev *hdev, struct sk_buff *skb)
+ 			bt_dev_err(hdev, "Dropping invalid advertising data");
+ 		}
+ 
+-		ptr += sizeof(*ev) + ev->length + 1;
++		ptr += sizeof(*ev) + ev->length;
+ 	}
+ 
+ 	hci_dev_unlock(hdev);
+@@ -5559,6 +5664,10 @@ static void hci_le_remote_conn_param_req_evt(struct hci_dev *hdev,
+ 		return send_conn_param_neg_reply(hdev, handle,
+ 						 HCI_ERROR_UNKNOWN_CONN_ID);
+ 
++	if (max > hcon->le_conn_max_interval)
++		return send_conn_param_neg_reply(hdev, handle,
++						 HCI_ERROR_INVALID_LL_PARAMS);
++
+ 	if (hci_check_conn_params(min, max, latency, timeout))
+ 		return send_conn_param_neg_reply(hdev, handle,
+ 						 HCI_ERROR_INVALID_LL_PARAMS);
+diff --git a/net/bluetooth/hci_request.c b/net/bluetooth/hci_request.c
+index 76bd6b122..6b9082c3c 100644
+--- a/net/bluetooth/hci_request.c
++++ b/net/bluetooth/hci_request.c
+@@ -107,8 +107,10 @@ static void hci_req_sync_complete(struct hci_dev *hdev, u8 result, u16 opcode,
+ 	if (hdev->req_status == HCI_REQ_PEND) {
+ 		hdev->req_result = result;
+ 		hdev->req_status = HCI_REQ_DONE;
+-		if (skb)
++		if (skb) {
++			kfree_skb(hdev->req_skb);
+ 			hdev->req_skb = skb_get(skb);
++		}
+ 		wake_up_interruptible(&hdev->req_wait_q);
+ 	}
+ }
+diff --git a/net/bluetooth/hci_sock.c b/net/bluetooth/hci_sock.c
+index e506c51ff..a7e5bca9f 100644
+--- a/net/bluetooth/hci_sock.c
++++ b/net/bluetooth/hci_sock.c
+@@ -59,6 +59,17 @@ struct hci_pinfo {
+ 	char              comm[TASK_COMM_LEN];
+ };
+ 
++static struct hci_dev *hci_hdev_from_sock(struct sock *sk)
++{
++	struct hci_dev *hdev = hci_pi(sk)->hdev;
++
++	if (!hdev)
++		return ERR_PTR(-EBADFD);
++	if (hci_dev_test_flag(hdev, HCI_UNREGISTER))
++		return ERR_PTR(-EPIPE);
++	return hdev;
++}
++
+ void hci_sock_set_flag(struct sock *sk, int nr)
+ {
+ 	set_bit(nr, &hci_pi(sk)->flags);
+@@ -419,7 +430,8 @@ static struct sk_buff *create_monitor_event(struct hci_dev *hdev, int event)
+ 		ni->type = hdev->dev_type;
+ 		ni->bus = hdev->bus;
+ 		bacpy(&ni->bdaddr, &hdev->bdaddr);
+-		memcpy(ni->name, hdev->name, 8);
++		memcpy_and_pad(ni->name, sizeof(ni->name), hdev->name,
++			       strnlen(hdev->name, sizeof(ni->name)), '\0');
+ 
+ 		opcode = cpu_to_le16(HCI_MON_NEW_INDEX);
+ 		break;
+@@ -752,19 +764,13 @@ void hci_sock_dev_event(struct hci_dev *hdev, int event)
+ 	if (event == HCI_DEV_UNREG) {
+ 		struct sock *sk;
+ 
+-		/* Detach sockets from device */
++		/* Wake up sockets using this dead device */
+ 		read_lock(&hci_sk_list.lock);
+ 		sk_for_each(sk, &hci_sk_list.head) {
+-			bh_lock_sock_nested(sk);
+ 			if (hci_pi(sk)->hdev == hdev) {
+-				hci_pi(sk)->hdev = NULL;
+ 				sk->sk_err = EPIPE;
+-				sk->sk_state = BT_OPEN;
+ 				sk->sk_state_change(sk);
+-
+-				hci_dev_put(hdev);
+ 			}
+-			bh_unlock_sock(sk);
+ 		}
+ 		read_unlock(&hci_sk_list.lock);
+ 	}
+@@ -876,10 +882,6 @@ static int hci_sock_release(struct socket *sock)
+ 	}
+ 
+ 	sock_orphan(sk);
+-
+-	skb_queue_purge(&sk->sk_receive_queue);
+-	skb_queue_purge(&sk->sk_write_queue);
+-
+ 	release_sock(sk);
+ 	sock_put(sk);
+ 	return 0;
+@@ -923,10 +925,10 @@ static int hci_sock_blacklist_del(struct hci_dev *hdev, void __user *arg)
+ static int hci_sock_bound_ioctl(struct sock *sk, unsigned int cmd,
+ 				unsigned long arg)
+ {
+-	struct hci_dev *hdev = hci_pi(sk)->hdev;
++	struct hci_dev *hdev = hci_hdev_from_sock(sk);
+ 
+-	if (!hdev)
+-		return -EBADFD;
++	if (IS_ERR(hdev))
++		return PTR_ERR(hdev);
+ 
+ 	if (hci_dev_test_flag(hdev, HCI_USER_CHANNEL))
+ 		return -EBUSY;
+@@ -972,6 +974,34 @@ static int hci_sock_ioctl(struct socket *sock, unsigned int cmd,
+ 
+ 	BT_DBG("cmd %x arg %lx", cmd, arg);
+ 
++	/* Make sure the cmd is valid before doing anything */
++	switch (cmd) {
++	case HCIGETDEVLIST:
++	case HCIGETDEVINFO:
++	case HCIGETCONNLIST:
++	case HCIDEVUP:
++	case HCIDEVDOWN:
++	case HCIDEVRESET:
++	case HCIDEVRESTAT:
++	case HCISETSCAN:
++	case HCISETAUTH:
++	case HCISETENCRYPT:
++	case HCISETPTYPE:
++	case HCISETLINKPOL:
++	case HCISETLINKMODE:
++	case HCISETACLMTU:
++	case HCISETSCOMTU:
++	case HCIINQUIRY:
++	case HCISETRAW:
++	case HCIGETCONNINFO:
++	case HCIGETAUTHINFO:
++	case HCIBLOCKADDR:
++	case HCIUNBLOCKADDR:
++		break;
++	default:
++		return -ENOIOCTLCMD;
++	}
++
+ 	lock_sock(sk);
+ 
+ 	if (hci_pi(sk)->channel != HCI_CHANNEL_RAW) {
+@@ -988,7 +1018,14 @@ static int hci_sock_ioctl(struct socket *sock, unsigned int cmd,
+ 	if (hci_sock_gen_cookie(sk)) {
+ 		struct sk_buff *skb;
+ 
+-		if (capable(CAP_NET_ADMIN))
++		/* Perform careful checks before setting the HCI_SOCK_TRUSTED
++		 * flag. Make sure that not only the current task but also
++		 * the socket opener has the required capability, since
++		 * privileged programs can be tricked into making ioctl calls
++		 * on HCI sockets, and the socket should not be marked as
++		 * trusted simply because the ioctl caller is privileged.
++		 */
++		if (sk_capable(sk, CAP_NET_ADMIN))
+ 			hci_sock_set_flag(sk, HCI_SOCK_TRUSTED);
+ 
+ 		/* Send event to monitor */
+@@ -1080,6 +1117,18 @@ static int hci_sock_bind(struct socket *sock, struct sockaddr *addr,
+ 
+ 	lock_sock(sk);
+ 
++	/* Allow detaching from dead device and attaching to alive device, if
++	 * the caller wants to re-bind (instead of close) this socket in
++	 * response to hci_sock_dev_event(HCI_DEV_UNREG) notification.
++	 */
++	hdev = hci_pi(sk)->hdev;
++	if (hdev && hci_dev_test_flag(hdev, HCI_UNREGISTER)) {
++		hci_pi(sk)->hdev = NULL;
++		sk->sk_state = BT_OPEN;
++		hci_dev_put(hdev);
++	}
++	hdev = NULL;
++
+ 	if (sk->sk_state == BT_BOUND) {
+ 		err = -EALREADY;
+ 		goto done;
+@@ -1356,9 +1405,9 @@ static int hci_sock_getname(struct socket *sock, struct sockaddr *addr,
+ 
+ 	lock_sock(sk);
+ 
+-	hdev = hci_pi(sk)->hdev;
+-	if (!hdev) {
+-		err = -EBADFD;
++	hdev = hci_hdev_from_sock(sk);
++	if (IS_ERR(hdev)) {
++		err = PTR_ERR(hdev);
+ 		goto done;
+ 	}
+ 
+@@ -1718,9 +1767,9 @@ static int hci_sock_sendmsg(struct socket *sock, struct msghdr *msg,
+ 		goto done;
+ 	}
+ 
+-	hdev = hci_pi(sk)->hdev;
+-	if (!hdev) {
+-		err = -EBADFD;
++	hdev = hci_hdev_from_sock(sk);
++	if (IS_ERR(hdev)) {
++		err = PTR_ERR(hdev);
+ 		goto done;
+ 	}
+ 
+@@ -1968,6 +2017,12 @@ done:
+ 	return err;
+ }
+ 
++static void hci_sock_destruct(struct sock *sk)
++{
++	skb_queue_purge(&sk->sk_receive_queue);
++	skb_queue_purge(&sk->sk_write_queue);
++}
++
+ static const struct proto_ops hci_sock_ops = {
+ 	.family		= PF_BLUETOOTH,
+ 	.owner		= THIS_MODULE,
+@@ -2018,6 +2073,7 @@ static int hci_sock_create(struct net *net, struct socket *sock, int protocol,
+ 
+ 	sock->state = SS_UNCONNECTED;
+ 	sk->sk_state = BT_OPEN;
++	sk->sk_destruct = hci_sock_destruct;
+ 
+ 	bt_sock_link(&hci_sk_list, sk);
+ 	return 0;
+diff --git a/net/bluetooth/hci_sysfs.c b/net/bluetooth/hci_sysfs.c
+index 9874844a9..266112c96 100644
+--- a/net/bluetooth/hci_sysfs.c
++++ b/net/bluetooth/hci_sysfs.c
+@@ -33,7 +33,7 @@ void hci_conn_init_sysfs(struct hci_conn *conn)
+ {
+ 	struct hci_dev *hdev = conn->hdev;
+ 
+-	BT_DBG("conn %p", conn);
++	bt_dev_dbg(hdev, "conn %p", conn);
+ 
+ 	conn->dev.type = &bt_link;
+ 	conn->dev.class = bt_class;
+@@ -46,24 +46,30 @@ void hci_conn_add_sysfs(struct hci_conn *conn)
+ {
+ 	struct hci_dev *hdev = conn->hdev;
+ 
+-	BT_DBG("conn %p", conn);
++	bt_dev_dbg(hdev, "conn %p", conn);
++
++	if (device_is_registered(&conn->dev))
++		return;
+ 
+ 	dev_set_name(&conn->dev, "%s:%d", hdev->name, conn->handle);
+ 
+-	if (device_add(&conn->dev) < 0) {
++	if (device_add(&conn->dev) < 0)
+ 		bt_dev_err(hdev, "failed to register connection device");
+-		return;
+-	}
+-
+-	hci_dev_hold(hdev);
+ }
+ 
+ void hci_conn_del_sysfs(struct hci_conn *conn)
+ {
+ 	struct hci_dev *hdev = conn->hdev;
+ 
+-	if (!device_is_registered(&conn->dev))
++	bt_dev_dbg(hdev, "conn %p", conn);
++
++	if (!device_is_registered(&conn->dev)) {
++		/* If device_add() has *not* succeeded, use *only* put_device()
++		 * to drop the reference count.
++		 */
++		put_device(&conn->dev);
+ 		return;
++	}
+ 
+ 	while (1) {
+ 		struct device *dev;
+@@ -75,14 +81,15 @@ void hci_conn_del_sysfs(struct hci_conn *conn)
+ 		put_device(dev);
+ 	}
+ 
+-	device_del(&conn->dev);
+-
+-	hci_dev_put(hdev);
++	device_unregister(&conn->dev);
+ }
+ 
+ static void bt_host_release(struct device *dev)
+ {
+ 	struct hci_dev *hdev = to_hci_dev(dev);
++
++	if (hci_dev_test_flag(hdev, HCI_UNREGISTER))
++		hci_cleanup_dev(hdev);
+ 	kfree(hdev);
+ 	module_put(THIS_MODULE);
+ }
+diff --git a/net/bluetooth/hidp/core.c b/net/bluetooth/hidp/core.c
+index 253975cce..00dae8e87 100644
+--- a/net/bluetooth/hidp/core.c
++++ b/net/bluetooth/hidp/core.c
+@@ -428,7 +428,7 @@ static void hidp_set_timer(struct hidp_session *session)
+ static void hidp_del_timer(struct hidp_session *session)
+ {
+ 	if (session->idle_to > 0)
+-		del_timer(&session->timer);
++		del_timer_sync(&session->timer);
+ }
+ 
+ static void hidp_process_report(struct hidp_session *session, int type,
+@@ -1282,7 +1282,7 @@ static int hidp_session_thread(void *arg)
+ 
+ 	/* cleanup runtime environment */
+ 	remove_wait_queue(sk_sleep(session->intr_sock->sk), &intr_wait);
+-	remove_wait_queue(sk_sleep(session->intr_sock->sk), &ctrl_wait);
++	remove_wait_queue(sk_sleep(session->ctrl_sock->sk), &ctrl_wait);
+ 	wake_up_interruptible(&session->report_queue);
+ 	hidp_del_timer(session);
+ 
+diff --git a/net/bluetooth/l2cap_core.c b/net/bluetooth/l2cap_core.c
+index c0d64b414..ca225c132 100644
+--- a/net/bluetooth/l2cap_core.c
++++ b/net/bluetooth/l2cap_core.c
+@@ -63,6 +63,9 @@ static void l2cap_send_disconn_req(struct l2cap_chan *chan, int err);
+ 
+ static void l2cap_tx(struct l2cap_chan *chan, struct l2cap_ctrl *control,
+ 		     struct sk_buff_head *skbs, u8 event);
++static void l2cap_retrans_timeout(struct work_struct *work);
++static void l2cap_monitor_timeout(struct work_struct *work);
++static void l2cap_ack_timeout(struct work_struct *work);
+ 
+ static inline u8 bdaddr_type(u8 link_type, u8 bdaddr_type)
+ {
+@@ -113,7 +116,8 @@ static struct l2cap_chan *__l2cap_get_chan_by_scid(struct l2cap_conn *conn,
+ }
+ 
+ /* Find channel with given SCID.
+- * Returns locked channel. */
++ * Returns a reference locked channel.
++ */
+ static struct l2cap_chan *l2cap_get_chan_by_scid(struct l2cap_conn *conn,
+ 						 u16 cid)
+ {
+@@ -121,15 +125,19 @@ static struct l2cap_chan *l2cap_get_chan_by_scid(struct l2cap_conn *conn,
+ 
+ 	mutex_lock(&conn->chan_lock);
+ 	c = __l2cap_get_chan_by_scid(conn, cid);
+-	if (c)
+-		l2cap_chan_lock(c);
++	if (c) {
++		/* Only lock if chan reference is not 0 */
++		c = l2cap_chan_hold_unless_zero(c);
++		if (c)
++			l2cap_chan_lock(c);
++	}
+ 	mutex_unlock(&conn->chan_lock);
+ 
+ 	return c;
+ }
+ 
+ /* Find channel with given DCID.
+- * Returns locked channel.
++ * Returns a reference locked channel.
+  */
+ static struct l2cap_chan *l2cap_get_chan_by_dcid(struct l2cap_conn *conn,
+ 						 u16 cid)
+@@ -138,8 +146,12 @@ static struct l2cap_chan *l2cap_get_chan_by_dcid(struct l2cap_conn *conn,
+ 
+ 	mutex_lock(&conn->chan_lock);
+ 	c = __l2cap_get_chan_by_dcid(conn, cid);
+-	if (c)
+-		l2cap_chan_lock(c);
++	if (c) {
++		/* Only lock if chan reference is not 0 */
++		c = l2cap_chan_hold_unless_zero(c);
++		if (c)
++			l2cap_chan_lock(c);
++	}
+ 	mutex_unlock(&conn->chan_lock);
+ 
+ 	return c;
+@@ -164,8 +176,12 @@ static struct l2cap_chan *l2cap_get_chan_by_ident(struct l2cap_conn *conn,
+ 
+ 	mutex_lock(&conn->chan_lock);
+ 	c = __l2cap_get_chan_by_ident(conn, ident);
+-	if (c)
+-		l2cap_chan_lock(c);
++	if (c) {
++		/* Only lock if chan reference is not 0 */
++		c = l2cap_chan_hold_unless_zero(c);
++		if (c)
++			l2cap_chan_lock(c);
++	}
+ 	mutex_unlock(&conn->chan_lock);
+ 
+ 	return c;
+@@ -413,6 +429,9 @@ static void l2cap_chan_timeout(struct work_struct *work)
+ 
+ 	BT_DBG("chan %p state %s", chan, state_to_string(chan->state));
+ 
++	if (!conn)
++		return;
++
+ 	mutex_lock(&conn->chan_lock);
+ 	/* __set_chan_timer() calls l2cap_chan_hold(chan) while scheduling
+ 	 * this work. No need to call l2cap_chan_hold(chan) here again.
+@@ -457,6 +476,9 @@ struct l2cap_chan *l2cap_chan_create(void)
+ 	write_unlock(&chan_list_lock);
+ 
+ 	INIT_DELAYED_WORK(&chan->chan_timer, l2cap_chan_timeout);
++	INIT_DELAYED_WORK(&chan->retrans_timer, l2cap_retrans_timeout);
++	INIT_DELAYED_WORK(&chan->monitor_timer, l2cap_monitor_timeout);
++	INIT_DELAYED_WORK(&chan->ack_timer, l2cap_ack_timeout);
+ 
+ 	chan->state = BT_OPEN;
+ 
+@@ -491,6 +513,16 @@ void l2cap_chan_hold(struct l2cap_chan *c)
+ 	kref_get(&c->kref);
+ }
+ 
++struct l2cap_chan *l2cap_chan_hold_unless_zero(struct l2cap_chan *c)
++{
++	BT_DBG("chan %p orig refcnt %u", c, kref_read(&c->kref));
++
++	if (!kref_get_unless_zero(&c->kref))
++		return NULL;
++
++	return c;
++}
++
+ void l2cap_chan_put(struct l2cap_chan *c)
+ {
+ 	BT_DBG("chan %p orig refcnt %d", c, kref_read(&c->kref));
+@@ -1781,11 +1813,11 @@ static struct l2cap_chan *l2cap_global_chan_by_psm(int state, __le16 psm,
+ 						   bdaddr_t *dst,
+ 						   u8 link_type)
+ {
+-	struct l2cap_chan *c, *c1 = NULL;
++	struct l2cap_chan *c, *tmp, *c1 = NULL;
+ 
+ 	read_lock(&chan_list_lock);
+ 
+-	list_for_each_entry(c, &chan_list, global_l) {
++	list_for_each_entry_safe(c, tmp, &chan_list, global_l) {
+ 		if (state && c->state != state)
+ 			continue;
+ 
+@@ -1795,7 +1827,7 @@ static struct l2cap_chan *l2cap_global_chan_by_psm(int state, __le16 psm,
+ 		if (link_type == LE_LINK && c->src_type == BDADDR_BREDR)
+ 			continue;
+ 
+-		if (c->psm == psm) {
++		if (c->chan_type != L2CAP_CHAN_FIXED && c->psm == psm) {
+ 			int src_match, dst_match;
+ 			int src_any, dst_any;
+ 
+@@ -1803,7 +1835,9 @@ static struct l2cap_chan *l2cap_global_chan_by_psm(int state, __le16 psm,
+ 			src_match = !bacmp(&c->src, src);
+ 			dst_match = !bacmp(&c->dst, dst);
+ 			if (src_match && dst_match) {
+-				l2cap_chan_hold(c);
++				if (!l2cap_chan_hold_unless_zero(c))
++					continue;
++
+ 				read_unlock(&chan_list_lock);
+ 				return c;
+ 			}
+@@ -1818,7 +1852,7 @@ static struct l2cap_chan *l2cap_global_chan_by_psm(int state, __le16 psm,
+ 	}
+ 
+ 	if (c1)
+-		l2cap_chan_hold(c1);
++		c1 = l2cap_chan_hold_unless_zero(c1);
+ 
+ 	read_unlock(&chan_list_lock);
+ 
+@@ -2486,14 +2520,6 @@ int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len)
+ 		if (IS_ERR(skb))
+ 			return PTR_ERR(skb);
+ 
+-		/* Channel lock is released before requesting new skb and then
+-		 * reacquired thus we need to recheck channel state.
+-		 */
+-		if (chan->state != BT_CONNECTED) {
+-			kfree_skb(skb);
+-			return -ENOTCONN;
+-		}
+-
+ 		l2cap_do_send(chan, skb);
+ 		return len;
+ 	}
+@@ -2537,14 +2563,6 @@ int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len)
+ 		if (IS_ERR(skb))
+ 			return PTR_ERR(skb);
+ 
+-		/* Channel lock is released before requesting new skb and then
+-		 * reacquired thus we need to recheck channel state.
+-		 */
+-		if (chan->state != BT_CONNECTED) {
+-			kfree_skb(skb);
+-			return -ENOTCONN;
+-		}
+-
+ 		l2cap_do_send(chan, skb);
+ 		err = len;
+ 		break;
+@@ -2565,14 +2583,6 @@ int l2cap_chan_send(struct l2cap_chan *chan, struct msghdr *msg, size_t len)
+ 		 */
+ 		err = l2cap_segment_sdu(chan, &seg_queue, msg, len);
+ 
+-		/* The channel could have been closed while segmenting,
+-		 * check that it is still connected.
+-		 */
+-		if (chan->state != BT_CONNECTED) {
+-			__skb_queue_purge(&seg_queue);
+-			err = -ENOTCONN;
+-		}
+-
+ 		if (err)
+ 			break;
+ 
+@@ -3129,10 +3139,6 @@ int l2cap_ertm_init(struct l2cap_chan *chan)
+ 	chan->rx_state = L2CAP_RX_STATE_RECV;
+ 	chan->tx_state = L2CAP_TX_STATE_XMIT;
+ 
+-	INIT_DELAYED_WORK(&chan->retrans_timer, l2cap_retrans_timeout);
+-	INIT_DELAYED_WORK(&chan->monitor_timer, l2cap_monitor_timeout);
+-	INIT_DELAYED_WORK(&chan->ack_timer, l2cap_ack_timeout);
+-
+ 	skb_queue_head_init(&chan->srej_q);
+ 
+ 	err = l2cap_seq_list_init(&chan->srej_list, chan->tx_win);
+@@ -3524,7 +3530,8 @@ done:
+ 			l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC,
+ 					   sizeof(rfc), (unsigned long) &rfc, endptr - ptr);
+ 
+-			if (test_bit(FLAG_EFS_ENABLE, &chan->flags)) {
++			if (remote_efs &&
++			    test_bit(FLAG_EFS_ENABLE, &chan->flags)) {
+ 				chan->remote_id = efs.id;
+ 				chan->remote_stype = efs.stype;
+ 				chan->remote_msdu = le16_to_cpu(efs.msdu);
+@@ -4003,6 +4010,10 @@ static int l2cap_connect_create_rsp(struct l2cap_conn *conn,
+ 	result = __le16_to_cpu(rsp->result);
+ 	status = __le16_to_cpu(rsp->status);
+ 
++	if (result == L2CAP_CR_SUCCESS && (dcid < L2CAP_CID_DYN_START ||
++					   dcid > L2CAP_CID_DYN_END))
++		return -EPROTO;
++
+ 	BT_DBG("dcid 0x%4.4x scid 0x%4.4x result 0x%2.2x status 0x%2.2x",
+ 	       dcid, scid, result, status);
+ 
+@@ -4022,12 +4033,23 @@ static int l2cap_connect_create_rsp(struct l2cap_conn *conn,
+ 		}
+ 	}
+ 
++	chan = l2cap_chan_hold_unless_zero(chan);
++	if (!chan) {
++		err = -EBADSLT;
++		goto unlock;
++	}
++
+ 	err = 0;
+ 
+ 	l2cap_chan_lock(chan);
+ 
+ 	switch (result) {
+ 	case L2CAP_CR_SUCCESS:
++		if (__l2cap_get_chan_by_dcid(conn, dcid)) {
++			err = -EBADSLT;
++			break;
++		}
++
+ 		l2cap_state_change(chan, BT_CONFIG);
+ 		chan->ident = 0;
+ 		chan->dcid = dcid;
+@@ -4051,6 +4073,7 @@ static int l2cap_connect_create_rsp(struct l2cap_conn *conn,
+ 	}
+ 
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ 
+ unlock:
+ 	mutex_unlock(&conn->chan_lock);
+@@ -4158,7 +4181,8 @@ static inline int l2cap_config_req(struct l2cap_conn *conn,
+ 
+ 	chan->ident = cmd->ident;
+ 	l2cap_send_cmd(conn, cmd->ident, L2CAP_CONF_RSP, len, rsp);
+-	chan->num_conf_rsp++;
++	if (chan->num_conf_rsp < L2CAP_CONF_MAX_CONF_RSP)
++		chan->num_conf_rsp++;
+ 
+ 	/* Reset config buffer. */
+ 	chan->conf_len = 0;
+@@ -4204,6 +4228,7 @@ static inline int l2cap_config_req(struct l2cap_conn *conn,
+ 
+ unlock:
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ 	return err;
+ }
+ 
+@@ -4316,6 +4341,7 @@ static inline int l2cap_config_rsp(struct l2cap_conn *conn,
+ 
+ done:
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ 	return err;
+ }
+ 
+@@ -4336,33 +4362,29 @@ static inline int l2cap_disconnect_req(struct l2cap_conn *conn,
+ 
+ 	BT_DBG("scid 0x%4.4x dcid 0x%4.4x", scid, dcid);
+ 
+-	mutex_lock(&conn->chan_lock);
+-
+-	chan = __l2cap_get_chan_by_scid(conn, dcid);
++	chan = l2cap_get_chan_by_scid(conn, dcid);
+ 	if (!chan) {
+-		mutex_unlock(&conn->chan_lock);
+ 		cmd_reject_invalid_cid(conn, cmd->ident, dcid, scid);
+ 		return 0;
+ 	}
+ 
+-	l2cap_chan_hold(chan);
+-	l2cap_chan_lock(chan);
+-
+ 	rsp.dcid = cpu_to_le16(chan->scid);
+ 	rsp.scid = cpu_to_le16(chan->dcid);
+ 	l2cap_send_cmd(conn, cmd->ident, L2CAP_DISCONN_RSP, sizeof(rsp), &rsp);
+ 
+ 	chan->ops->set_shutdown(chan);
+ 
++	l2cap_chan_unlock(chan);
++	mutex_lock(&conn->chan_lock);
++	l2cap_chan_lock(chan);
+ 	l2cap_chan_del(chan, ECONNRESET);
++	mutex_unlock(&conn->chan_lock);
+ 
+ 	chan->ops->close(chan);
+ 
+ 	l2cap_chan_unlock(chan);
+ 	l2cap_chan_put(chan);
+ 
+-	mutex_unlock(&conn->chan_lock);
+-
+ 	return 0;
+ }
+ 
+@@ -4382,33 +4404,28 @@ static inline int l2cap_disconnect_rsp(struct l2cap_conn *conn,
+ 
+ 	BT_DBG("dcid 0x%4.4x scid 0x%4.4x", dcid, scid);
+ 
+-	mutex_lock(&conn->chan_lock);
+-
+-	chan = __l2cap_get_chan_by_scid(conn, scid);
++	chan = l2cap_get_chan_by_scid(conn, scid);
+ 	if (!chan) {
+-		mutex_unlock(&conn->chan_lock);
+ 		return 0;
+ 	}
+ 
+-	l2cap_chan_hold(chan);
+-	l2cap_chan_lock(chan);
+-
+ 	if (chan->state != BT_DISCONN) {
+ 		l2cap_chan_unlock(chan);
+ 		l2cap_chan_put(chan);
+-		mutex_unlock(&conn->chan_lock);
+ 		return 0;
+ 	}
+ 
++	l2cap_chan_unlock(chan);
++	mutex_lock(&conn->chan_lock);
++	l2cap_chan_lock(chan);
+ 	l2cap_chan_del(chan, 0);
++	mutex_unlock(&conn->chan_lock);
+ 
+ 	chan->ops->close(chan);
+ 
+ 	l2cap_chan_unlock(chan);
+ 	l2cap_chan_put(chan);
+ 
+-	mutex_unlock(&conn->chan_lock);
+-
+ 	return 0;
+ }
+ 
+@@ -5044,6 +5061,7 @@ send_move_response:
+ 	l2cap_send_move_chan_rsp(chan, result);
+ 
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ 
+ 	return 0;
+ }
+@@ -5136,6 +5154,7 @@ static void l2cap_move_continue(struct l2cap_conn *conn, u16 icid, u16 result)
+ 	}
+ 
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ }
+ 
+ static void l2cap_move_fail(struct l2cap_conn *conn, u8 ident, u16 icid,
+@@ -5165,6 +5184,7 @@ static void l2cap_move_fail(struct l2cap_conn *conn, u8 ident, u16 icid,
+ 	l2cap_send_move_chan_cfm(chan, L2CAP_MC_UNCONFIRMED);
+ 
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ }
+ 
+ static int l2cap_move_channel_rsp(struct l2cap_conn *conn,
+@@ -5228,6 +5248,7 @@ static int l2cap_move_channel_confirm(struct l2cap_conn *conn,
+ 	l2cap_send_move_chan_cfm_rsp(conn, cmd->ident, icid);
+ 
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ 
+ 	return 0;
+ }
+@@ -5263,6 +5284,7 @@ static inline int l2cap_move_channel_confirm_rsp(struct l2cap_conn *conn,
+ 	}
+ 
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ 
+ 	return 0;
+ }
+@@ -5511,6 +5533,19 @@ static int l2cap_le_connect_req(struct l2cap_conn *conn,
+ 	BT_DBG("psm 0x%2.2x scid 0x%4.4x mtu %u mps %u", __le16_to_cpu(psm),
+ 	       scid, mtu, mps);
+ 
++	/* BLUETOOTH CORE SPECIFICATION Version 5.3 | Vol 3, Part A
++	 * page 1059:
++	 *
++	 * Valid range: 0x0001-0x00ff
++	 *
++	 * Table 4.15: L2CAP_LE_CREDIT_BASED_CONNECTION_REQ SPSM ranges
++	 */
++	if (!psm || __le16_to_cpu(psm) > L2CAP_PSM_LE_DYN_END) {
++		result = L2CAP_CR_BAD_PSM;
++		chan = NULL;
++		goto response;
++	}
++
+ 	/* Check if we have socket listening on psm */
+ 	pchan = l2cap_global_chan_by_psm(BT_LISTEN, psm, &conn->hcon->src,
+ 					 &conn->hcon->dst, LE_LINK);
+@@ -5635,12 +5670,11 @@ static inline int l2cap_le_credits(struct l2cap_conn *conn,
+ 	if (credits > max_credits) {
+ 		BT_ERR("LE credits overflow");
+ 		l2cap_send_disconn_req(chan, ECONNRESET);
+-		l2cap_chan_unlock(chan);
+ 
+ 		/* Return 0 so that we don't trigger an unnecessary
+ 		 * command reject packet.
+ 		 */
+-		return 0;
++		goto unlock;
+ 	}
+ 
+ 	chan->tx_credits += credits;
+@@ -5651,7 +5685,9 @@ static inline int l2cap_le_credits(struct l2cap_conn *conn,
+ 	if (chan->tx_credits)
+ 		chan->ops->resume(chan);
+ 
++unlock:
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ 
+ 	return 0;
+ }
+@@ -5672,9 +5708,14 @@ static inline int l2cap_le_command_rej(struct l2cap_conn *conn,
+ 	if (!chan)
+ 		goto done;
+ 
++	chan = l2cap_chan_hold_unless_zero(chan);
++	if (!chan)
++		goto done;
++
+ 	l2cap_chan_lock(chan);
+ 	l2cap_chan_del(chan, ECONNREFUSED);
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ 
+ done:
+ 	mutex_unlock(&conn->chan_lock);
+@@ -6213,6 +6254,7 @@ static int l2cap_rx_state_recv(struct l2cap_chan *chan,
+ 			       struct l2cap_ctrl *control,
+ 			       struct sk_buff *skb, u8 event)
+ {
++	struct l2cap_ctrl local_control;
+ 	int err = 0;
+ 	bool skb_in_use = false;
+ 
+@@ -6237,15 +6279,32 @@ static int l2cap_rx_state_recv(struct l2cap_chan *chan,
+ 			chan->buffer_seq = chan->expected_tx_seq;
+ 			skb_in_use = true;
+ 
++			/* l2cap_reassemble_sdu may free skb, hence invalidate
++			 * control, so make a copy in advance to use it after
++			 * l2cap_reassemble_sdu returns and to avoid the race
++			 * condition, for example:
++			 *
++			 * The current thread calls:
++			 *   l2cap_reassemble_sdu
++			 *     chan->ops->recv == l2cap_sock_recv_cb
++			 *       __sock_queue_rcv_skb
++			 * Another thread calls:
++			 *   bt_sock_recvmsg
++			 *     skb_recv_datagram
++			 *     skb_free_datagram
++			 * Then the current thread tries to access control, but
++			 * it was freed by skb_free_datagram.
++			 */
++			local_control = *control;
+ 			err = l2cap_reassemble_sdu(chan, skb, control);
+ 			if (err)
+ 				break;
+ 
+-			if (control->final) {
++			if (local_control.final) {
+ 				if (!test_and_clear_bit(CONN_REJ_ACT,
+ 							&chan->conn_state)) {
+-					control->final = 0;
+-					l2cap_retransmit_all(chan, control);
++					local_control.final = 0;
++					l2cap_retransmit_all(chan, &local_control);
+ 					l2cap_ertm_send(chan);
+ 				}
+ 			}
+@@ -6625,11 +6684,27 @@ static int l2cap_rx(struct l2cap_chan *chan, struct l2cap_ctrl *control,
+ static int l2cap_stream_rx(struct l2cap_chan *chan, struct l2cap_ctrl *control,
+ 			   struct sk_buff *skb)
+ {
++	/* l2cap_reassemble_sdu may free skb, hence invalidate control, so store
++	 * the txseq field in advance to use it after l2cap_reassemble_sdu
++	 * returns and to avoid the race condition, for example:
++	 *
++	 * The current thread calls:
++	 *   l2cap_reassemble_sdu
++	 *     chan->ops->recv == l2cap_sock_recv_cb
++	 *       __sock_queue_rcv_skb
++	 * Another thread calls:
++	 *   bt_sock_recvmsg
++	 *     skb_recv_datagram
++	 *     skb_free_datagram
++	 * Then the current thread tries to access control, but it was freed by
++	 * skb_free_datagram.
++	 */
++	u16 txseq = control->txseq;
++
+ 	BT_DBG("chan %p, control %p, skb %p, state %d", chan, control, skb,
+ 	       chan->rx_state);
+ 
+-	if (l2cap_classify_txseq(chan, control->txseq) ==
+-	    L2CAP_TXSEQ_EXPECTED) {
++	if (l2cap_classify_txseq(chan, txseq) == L2CAP_TXSEQ_EXPECTED) {
+ 		l2cap_pass_to_tx(chan, control);
+ 
+ 		BT_DBG("buffer_seq %d->%d", chan->buffer_seq,
+@@ -6652,8 +6727,8 @@ static int l2cap_stream_rx(struct l2cap_chan *chan, struct l2cap_ctrl *control,
+ 		}
+ 	}
+ 
+-	chan->last_acked_seq = control->txseq;
+-	chan->expected_tx_seq = __next_seq(chan, control->txseq);
++	chan->last_acked_seq = txseq;
++	chan->expected_tx_seq = __next_seq(chan, txseq);
+ 
+ 	return 0;
+ }
+@@ -6891,6 +6966,7 @@ static void l2cap_data_channel(struct l2cap_conn *conn, u16 cid,
+ 				return;
+ 			}
+ 
++			l2cap_chan_hold(chan);
+ 			l2cap_chan_lock(chan);
+ 		} else {
+ 			BT_DBG("unknown cid 0x%4.4x", cid);
+@@ -6949,6 +7025,7 @@ drop:
+ 
+ done:
+ 	l2cap_chan_unlock(chan);
++	l2cap_chan_put(chan);
+ }
+ 
+ static void l2cap_conless_channel(struct l2cap_conn *conn, __le16 psm,
+@@ -6978,6 +7055,7 @@ static void l2cap_conless_channel(struct l2cap_conn *conn, __le16 psm,
+ 	bt_cb(skb)->l2cap.psm = psm;
+ 
+ 	if (!chan->ops->recv(chan, skb)) {
++		l2cap_chan_unlock(chan);
+ 		l2cap_chan_put(chan);
+ 		return;
+ 	}
+@@ -7353,7 +7431,7 @@ static struct l2cap_chan *l2cap_global_fixed_chan(struct l2cap_chan *c,
+ 		if (src_type != c->src_type)
+ 			continue;
+ 
+-		l2cap_chan_hold(c);
++		c = l2cap_chan_hold_unless_zero(c);
+ 		read_unlock(&chan_list_lock);
+ 		return c;
+ 	}
+diff --git a/net/bluetooth/l2cap_sock.c b/net/bluetooth/l2cap_sock.c
+index 967a9bb14..8dcd3af05 100644
+--- a/net/bluetooth/l2cap_sock.c
++++ b/net/bluetooth/l2cap_sock.c
+@@ -45,6 +45,7 @@ static const struct proto_ops l2cap_sock_ops;
+ static void l2cap_sock_init(struct sock *sk, struct sock *parent);
+ static struct sock *l2cap_sock_alloc(struct net *net, struct socket *sock,
+ 				     int proto, gfp_t prio, int kern);
++static void l2cap_sock_cleanup_listen(struct sock *parent);
+ 
+ bool l2cap_is_socket(struct socket *sock)
+ {
+@@ -404,7 +405,8 @@ static int l2cap_sock_getsockopt_old(struct socket *sock, int optname,
+ 	struct l2cap_chan *chan = l2cap_pi(sk)->chan;
+ 	struct l2cap_options opts;
+ 	struct l2cap_conninfo cinfo;
+-	int len, err = 0;
++	int err = 0;
++	size_t len;
+ 	u32 opt;
+ 
+ 	BT_DBG("sk %p", sk);
+@@ -435,7 +437,7 @@ static int l2cap_sock_getsockopt_old(struct socket *sock, int optname,
+ 		opts.max_tx   = chan->max_tx;
+ 		opts.txwin_size = chan->tx_win;
+ 
+-		len = min_t(unsigned int, len, sizeof(opts));
++		len = min(len, sizeof(opts));
+ 		if (copy_to_user(optval, (char *) &opts, len))
+ 			err = -EFAULT;
+ 
+@@ -485,7 +487,7 @@ static int l2cap_sock_getsockopt_old(struct socket *sock, int optname,
+ 		cinfo.hci_handle = chan->conn->hcon->handle;
+ 		memcpy(cinfo.dev_class, chan->conn->hcon->dev_class, 3);
+ 
+-		len = min_t(unsigned int, len, sizeof(cinfo));
++		len = min(len, sizeof(cinfo));
+ 		if (copy_to_user(optval, (char *) &cinfo, len))
+ 			err = -EFAULT;
+ 
+@@ -1205,6 +1207,7 @@ static int l2cap_sock_release(struct socket *sock)
+ 	if (!sk)
+ 		return 0;
+ 
++	l2cap_sock_cleanup_listen(sk);
+ 	bt_sock_unlink(&l2cap_sk_list, sk);
+ 
+ 	err = l2cap_sock_shutdown(sock, 2);
+@@ -1328,6 +1331,9 @@ static void l2cap_sock_close_cb(struct l2cap_chan *chan)
+ {
+ 	struct sock *sk = chan->data;
+ 
++	if (!sk)
++		return;
++
+ 	l2cap_sock_kill(sk);
+ }
+ 
+@@ -1336,6 +1342,9 @@ static void l2cap_sock_teardown_cb(struct l2cap_chan *chan, int err)
+ 	struct sock *sk = chan->data;
+ 	struct sock *parent;
+ 
++	if (!sk)
++		return;
++
+ 	BT_DBG("chan %p state %s", chan, state_to_string(chan->state));
+ 
+ 	/* This callback can be called both for server (BT_LISTEN)
+@@ -1408,6 +1417,14 @@ static struct sk_buff *l2cap_sock_alloc_skb_cb(struct l2cap_chan *chan,
+ 	if (!skb)
+ 		return ERR_PTR(err);
+ 
++	/* Channel lock is released before requesting new skb and then
++	 * reacquired thus we need to recheck channel state.
++	 */
++	if (chan->state != BT_CONNECTED) {
++		kfree_skb(skb);
++		return ERR_PTR(-ENOTCONN);
++	}
++
+ 	skb->priority = sk->sk_priority;
+ 
+ 	bt_cb(skb)->l2cap.chan = chan;
+@@ -1519,8 +1536,10 @@ static void l2cap_sock_destruct(struct sock *sk)
+ {
+ 	BT_DBG("sk %p", sk);
+ 
+-	if (l2cap_pi(sk)->chan)
++	if (l2cap_pi(sk)->chan) {
++		l2cap_pi(sk)->chan->data = NULL;
+ 		l2cap_chan_put(l2cap_pi(sk)->chan);
++	}
+ 
+ 	if (l2cap_pi(sk)->rx_busy_skb) {
+ 		kfree_skb(l2cap_pi(sk)->rx_busy_skb);
+diff --git a/net/bluetooth/mgmt.c b/net/bluetooth/mgmt.c
+index 5340b1097..6473c0cd6 100644
+--- a/net/bluetooth/mgmt.c
++++ b/net/bluetooth/mgmt.c
+@@ -219,12 +219,15 @@ static u8 mgmt_status_table[] = {
+ 	MGMT_STATUS_TIMEOUT,		/* Instant Passed */
+ 	MGMT_STATUS_NOT_SUPPORTED,	/* Pairing Not Supported */
+ 	MGMT_STATUS_FAILED,		/* Transaction Collision */
++	MGMT_STATUS_FAILED,		/* Reserved for future use */
+ 	MGMT_STATUS_INVALID_PARAMS,	/* Unacceptable Parameter */
+ 	MGMT_STATUS_REJECTED,		/* QoS Rejected */
+ 	MGMT_STATUS_NOT_SUPPORTED,	/* Classification Not Supported */
+ 	MGMT_STATUS_REJECTED,		/* Insufficient Security */
+ 	MGMT_STATUS_INVALID_PARAMS,	/* Parameter Out Of Range */
++	MGMT_STATUS_FAILED,		/* Reserved for future use */
+ 	MGMT_STATUS_BUSY,		/* Role Switch Pending */
++	MGMT_STATUS_FAILED,		/* Reserved for future use */
+ 	MGMT_STATUS_FAILED,		/* Slot Violation */
+ 	MGMT_STATUS_FAILED,		/* Role Switch Failed */
+ 	MGMT_STATUS_INVALID_PARAMS,	/* EIR Too Large */
+@@ -2910,6 +2913,10 @@ static int pair_device(struct sock *sk, struct hci_dev *hdev, void *data,
+ 		 * will be kept and this function does nothing.
+ 		 */
+ 		p = hci_conn_params_add(hdev, &cp->addr.bdaddr, addr_type);
++		if (!p) {
++			err = -EIO;
++			goto unlock;
++		}
+ 
+ 		if (p->auto_connect == HCI_AUTO_CONN_EXPLICIT)
+ 			p->auto_connect = HCI_AUTO_CONN_DISABLED;
+@@ -6468,6 +6475,9 @@ static bool tlv_data_is_valid(struct hci_dev *hdev, u32 adv_flags, u8 *data,
+ 	for (i = 0, cur_len = 0; i < len; i += (cur_len + 1)) {
+ 		cur_len = data[i];
+ 
++		if (!cur_len)
++			continue;
++
+ 		if (data[i + 1] == EIR_FLAGS &&
+ 		    (!is_adv_data || flags_managed(adv_flags)))
+ 			return false;
+diff --git a/net/bluetooth/rfcomm/core.c b/net/bluetooth/rfcomm/core.c
+index b98225d65..b2e695004 100644
+--- a/net/bluetooth/rfcomm/core.c
++++ b/net/bluetooth/rfcomm/core.c
+@@ -552,22 +552,58 @@ struct rfcomm_dlc *rfcomm_dlc_exists(bdaddr_t *src, bdaddr_t *dst, u8 channel)
+ 	return dlc;
+ }
+ 
+-int rfcomm_dlc_send(struct rfcomm_dlc *d, struct sk_buff *skb)
++static int rfcomm_dlc_send_frag(struct rfcomm_dlc *d, struct sk_buff *frag)
+ {
+-	int len = skb->len;
+-
+-	if (d->state != BT_CONNECTED)
+-		return -ENOTCONN;
++	int len = frag->len;
+ 
+ 	BT_DBG("dlc %p mtu %d len %d", d, d->mtu, len);
+ 
+ 	if (len > d->mtu)
+ 		return -EINVAL;
+ 
+-	rfcomm_make_uih(skb, d->addr);
+-	skb_queue_tail(&d->tx_queue, skb);
++	rfcomm_make_uih(frag, d->addr);
++	__skb_queue_tail(&d->tx_queue, frag);
+ 
+-	if (!test_bit(RFCOMM_TX_THROTTLED, &d->flags))
++	return len;
++}
++
++int rfcomm_dlc_send(struct rfcomm_dlc *d, struct sk_buff *skb)
++{
++	unsigned long flags;
++	struct sk_buff *frag, *next;
++	int len;
++
++	if (d->state != BT_CONNECTED)
++		return -ENOTCONN;
++
++	frag = skb_shinfo(skb)->frag_list;
++	skb_shinfo(skb)->frag_list = NULL;
++
++	/* Queue all fragments atomically. */
++	spin_lock_irqsave(&d->tx_queue.lock, flags);
++
++	len = rfcomm_dlc_send_frag(d, skb);
++	if (len < 0 || !frag)
++		goto unlock;
++
++	for (; frag; frag = next) {
++		int ret;
++
++		next = frag->next;
++
++		ret = rfcomm_dlc_send_frag(d, frag);
++		if (ret < 0) {
++			dev_kfree_skb_irq(frag);
++			goto unlock;
++		}
++
++		len += ret;
++	}
++
++unlock:
++	spin_unlock_irqrestore(&d->tx_queue.lock, flags);
++
++	if (len > 0 && !test_bit(RFCOMM_TX_THROTTLED, &d->flags))
+ 		rfcomm_schedule();
+ 	return len;
+ }
+@@ -1903,7 +1939,7 @@ static struct rfcomm_session *rfcomm_process_rx(struct rfcomm_session *s)
+ 	/* Get data directly from socket receive queue without copying it. */
+ 	while ((skb = skb_dequeue(&sk->sk_receive_queue))) {
+ 		skb_orphan(skb);
+-		if (!skb_linearize(skb)) {
++		if (!skb_linearize(skb) && sk->sk_state != BT_CLOSED) {
+ 			s = rfcomm_recv_frame(s, skb);
+ 			if (!s)
+ 				break;
+diff --git a/net/bluetooth/rfcomm/sock.c b/net/bluetooth/rfcomm/sock.c
+index c044ff2f7..da8ea1480 100644
+--- a/net/bluetooth/rfcomm/sock.c
++++ b/net/bluetooth/rfcomm/sock.c
+@@ -578,47 +578,21 @@ static int rfcomm_sock_sendmsg(struct socket *sock, struct msghdr *msg,
+ 	lock_sock(sk);
+ 
+ 	sent = bt_sock_wait_ready(sk, msg->msg_flags);
+-	if (sent)
+-		goto done;
+ 
+-	while (len) {
+-		size_t size = min_t(size_t, len, d->mtu);
+-		int err;
+-
+-		skb = sock_alloc_send_skb(sk, size + RFCOMM_SKB_RESERVE,
+-				msg->msg_flags & MSG_DONTWAIT, &err);
+-		if (!skb) {
+-			if (sent == 0)
+-				sent = err;
+-			break;
+-		}
+-		skb_reserve(skb, RFCOMM_SKB_HEAD_RESERVE);
+-
+-		err = memcpy_from_msg(skb_put(skb, size), msg, size);
+-		if (err) {
+-			kfree_skb(skb);
+-			if (sent == 0)
+-				sent = err;
+-			break;
+-		}
+-
+-		skb->priority = sk->sk_priority;
+-
+-		err = rfcomm_dlc_send(d, skb);
+-		if (err < 0) {
+-			kfree_skb(skb);
+-			if (sent == 0)
+-				sent = err;
+-			break;
+-		}
+-
+-		sent += size;
+-		len  -= size;
+-	}
+-
+-done:
+ 	release_sock(sk);
+ 
++	if (sent)
++		return sent;
++
++	skb = bt_skb_sendmmsg(sk, msg, len, d->mtu, RFCOMM_SKB_HEAD_RESERVE,
++			      RFCOMM_SKB_TAIL_RESERVE);
++	if (IS_ERR(skb))
++		return PTR_ERR(skb);
++
++	sent = rfcomm_dlc_send(d, skb);
++	if (sent < 0)
++		kfree_skb(skb);
++
+ 	return sent;
+ }
+ 
+@@ -762,7 +736,8 @@ static int rfcomm_sock_getsockopt_old(struct socket *sock, int optname, char __u
+ 	struct sock *l2cap_sk;
+ 	struct l2cap_conn *conn;
+ 	struct rfcomm_conninfo cinfo;
+-	int len, err = 0;
++	int err = 0;
++	size_t len;
+ 	u32 opt;
+ 
+ 	BT_DBG("sk %p", sk);
+@@ -816,7 +791,7 @@ static int rfcomm_sock_getsockopt_old(struct socket *sock, int optname, char __u
+ 		cinfo.hci_handle = conn->hcon->handle;
+ 		memcpy(cinfo.dev_class, conn->hcon->dev_class, 3);
+ 
+-		len = min_t(unsigned int, len, sizeof(cinfo));
++		len = min(len, sizeof(cinfo));
+ 		if (copy_to_user(optval, (char *) &cinfo, len))
+ 			err = -EFAULT;
+ 
+@@ -835,7 +810,8 @@ static int rfcomm_sock_getsockopt(struct socket *sock, int level, int optname, c
+ {
+ 	struct sock *sk = sock->sk;
+ 	struct bt_security sec;
+-	int len, err = 0;
++	int err = 0;
++	size_t len;
+ 
+ 	BT_DBG("sk %p", sk);
+ 
+@@ -860,7 +836,7 @@ static int rfcomm_sock_getsockopt(struct socket *sock, int level, int optname, c
+ 		sec.level = rfcomm_pi(sk)->sec_level;
+ 		sec.key_size = 0;
+ 
+-		len = min_t(unsigned int, len, sizeof(sec));
++		len = min(len, sizeof(sec));
+ 		if (copy_to_user(optval, (char *) &sec, len))
+ 			err = -EFAULT;
+ 
+@@ -898,9 +874,7 @@ static int rfcomm_sock_ioctl(struct socket *sock, unsigned int cmd, unsigned lon
+ 
+ 	if (err == -ENOIOCTLCMD) {
+ #ifdef CONFIG_BT_RFCOMM_TTY
+-		lock_sock(sk);
+ 		err = rfcomm_dev_ioctl(sk, cmd, (void __user *) arg);
+-		release_sock(sk);
+ #else
+ 		err = -EOPNOTSUPP;
+ #endif
+diff --git a/net/bluetooth/sco.c b/net/bluetooth/sco.c
+index a4ca55df7..42b5d56d8 100644
+--- a/net/bluetooth/sco.c
++++ b/net/bluetooth/sco.c
+@@ -48,6 +48,8 @@ struct sco_conn {
+ 	spinlock_t	lock;
+ 	struct sock	*sk;
+ 
++	struct delayed_work	timeout_work;
++
+ 	unsigned int    mtu;
+ };
+ 
+@@ -73,9 +75,24 @@ struct sco_pinfo {
+ #define SCO_CONN_TIMEOUT	(HZ * 40)
+ #define SCO_DISCONN_TIMEOUT	(HZ * 2)
+ 
+-static void sco_sock_timeout(struct timer_list *t)
++static void sco_sock_timeout(struct work_struct *work)
+ {
+-	struct sock *sk = from_timer(sk, t, sk_timer);
++	struct sco_conn *conn = container_of(work, struct sco_conn,
++					     timeout_work.work);
++	struct sock *sk;
++
++	sco_conn_lock(conn);
++	if (!conn->hcon) {
++		sco_conn_unlock(conn);
++		return;
++	}
++	sk = conn->sk;
++	if (sk)
++		sock_hold(sk);
++	sco_conn_unlock(conn);
++
++	if (!sk)
++		return;
+ 
+ 	BT_DBG("sock %p state %d", sk, sk->sk_state);
+ 
+@@ -84,20 +101,26 @@ static void sco_sock_timeout(struct timer_list *t)
+ 	sk->sk_state_change(sk);
+ 	bh_unlock_sock(sk);
+ 
+-	sco_sock_kill(sk);
+ 	sock_put(sk);
+ }
+ 
+ static void sco_sock_set_timer(struct sock *sk, long timeout)
+ {
++	if (!sco_pi(sk)->conn)
++		return;
++
+ 	BT_DBG("sock %p state %d timeout %ld", sk, sk->sk_state, timeout);
+-	sk_reset_timer(sk, &sk->sk_timer, jiffies + timeout);
++	cancel_delayed_work(&sco_pi(sk)->conn->timeout_work);
++	schedule_delayed_work(&sco_pi(sk)->conn->timeout_work, timeout);
+ }
+ 
+ static void sco_sock_clear_timer(struct sock *sk)
+ {
++	if (!sco_pi(sk)->conn)
++		return;
++
+ 	BT_DBG("sock %p state %d", sk, sk->sk_state);
+-	sk_stop_timer(sk, &sk->sk_timer);
++	cancel_delayed_work(&sco_pi(sk)->conn->timeout_work);
+ }
+ 
+ /* ---- SCO connections ---- */
+@@ -114,6 +137,7 @@ static struct sco_conn *sco_conn_add(struct hci_conn *hcon)
+ 		return NULL;
+ 
+ 	spin_lock_init(&conn->lock);
++	INIT_DELAYED_WORK(&conn->timeout_work, sco_sock_timeout);
+ 
+ 	hcon->sco_data = conn;
+ 	conn->hcon = hcon;
+@@ -176,10 +200,12 @@ static void sco_conn_del(struct hci_conn *hcon, int err)
+ 		sco_sock_clear_timer(sk);
+ 		sco_chan_del(sk, err);
+ 		bh_unlock_sock(sk);
+-		sco_sock_kill(sk);
+ 		sock_put(sk);
+ 	}
+ 
++	/* Ensure no more work items will run before freeing conn. */
++	cancel_delayed_work_sync(&conn->timeout_work);
++
+ 	hcon->sco_data = NULL;
+ 	kfree(conn);
+ }
+@@ -211,44 +237,32 @@ static int sco_chan_add(struct sco_conn *conn, struct sock *sk,
+ 	return err;
+ }
+ 
+-static int sco_connect(struct sock *sk)
++static int sco_connect(struct hci_dev *hdev, struct sock *sk)
+ {
+ 	struct sco_conn *conn;
+ 	struct hci_conn *hcon;
+-	struct hci_dev  *hdev;
+ 	int err, type;
+ 
+ 	BT_DBG("%pMR -> %pMR", &sco_pi(sk)->src, &sco_pi(sk)->dst);
+ 
+-	hdev = hci_get_route(&sco_pi(sk)->dst, &sco_pi(sk)->src, BDADDR_BREDR);
+-	if (!hdev)
+-		return -EHOSTUNREACH;
+-
+-	hci_dev_lock(hdev);
+-
+ 	if (lmp_esco_capable(hdev) && !disable_esco)
+ 		type = ESCO_LINK;
+ 	else
+ 		type = SCO_LINK;
+ 
+ 	if (sco_pi(sk)->setting == BT_VOICE_TRANSPARENT &&
+-	    (!lmp_transp_capable(hdev) || !lmp_esco_capable(hdev))) {
+-		err = -EOPNOTSUPP;
+-		goto done;
+-	}
++	    (!lmp_transp_capable(hdev) || !lmp_esco_capable(hdev)))
++		return -EOPNOTSUPP;
+ 
+ 	hcon = hci_connect_sco(hdev, type, &sco_pi(sk)->dst,
+ 			       sco_pi(sk)->setting);
+-	if (IS_ERR(hcon)) {
+-		err = PTR_ERR(hcon);
+-		goto done;
+-	}
++	if (IS_ERR(hcon))
++		return PTR_ERR(hcon);
+ 
+ 	conn = sco_conn_add(hcon);
+ 	if (!conn) {
+ 		hci_conn_drop(hcon);
+-		err = -ENOMEM;
+-		goto done;
++		return -ENOMEM;
+ 	}
+ 
+ 	/* Update source addr of the socket */
+@@ -256,7 +270,7 @@ static int sco_connect(struct sock *sk)
+ 
+ 	err = sco_chan_add(conn, sk, NULL);
+ 	if (err)
+-		goto done;
++		return err;
+ 
+ 	if (hcon->state == BT_CONNECTED) {
+ 		sco_sock_clear_timer(sk);
+@@ -266,17 +280,13 @@ static int sco_connect(struct sock *sk)
+ 		sco_sock_set_timer(sk, sk->sk_sndtimeo);
+ 	}
+ 
+-done:
+-	hci_dev_unlock(hdev);
+-	hci_dev_put(hdev);
+ 	return err;
+ }
+ 
+-static int sco_send_frame(struct sock *sk, struct msghdr *msg, int len)
++static int sco_send_frame(struct sock *sk, struct sk_buff *skb)
+ {
+ 	struct sco_conn *conn = sco_pi(sk)->conn;
+-	struct sk_buff *skb;
+-	int err;
++	int len = skb->len;
+ 
+ 	/* Check outgoing MTU */
+ 	if (len > conn->mtu)
+@@ -284,15 +294,6 @@ static int sco_send_frame(struct sock *sk, struct msghdr *msg, int len)
+ 
+ 	BT_DBG("sk %p len %d", sk, len);
+ 
+-	skb = bt_skb_send_alloc(sk, len, msg->msg_flags & MSG_DONTWAIT, &err);
+-	if (!skb)
+-		return err;
+-
+-	if (memcpy_from_msg(skb_put(skb, len), msg, len)) {
+-		kfree_skb(skb);
+-		return -EFAULT;
+-	}
+-
+ 	hci_send_sco(conn->hcon, skb);
+ 
+ 	return len;
+@@ -393,8 +394,7 @@ static void sco_sock_cleanup_listen(struct sock *parent)
+  */
+ static void sco_sock_kill(struct sock *sk)
+ {
+-	if (!sock_flag(sk, SOCK_ZAPPED) || sk->sk_socket ||
+-	    sock_flag(sk, SOCK_DEAD))
++	if (!sock_flag(sk, SOCK_ZAPPED) || sk->sk_socket)
+ 		return;
+ 
+ 	BT_DBG("sk %p state %d", sk, sk->sk_state);
+@@ -446,7 +446,6 @@ static void sco_sock_close(struct sock *sk)
+ 	lock_sock(sk);
+ 	__sco_sock_close(sk);
+ 	release_sock(sk);
+-	sco_sock_kill(sk);
+ }
+ 
+ static void sco_sock_init(struct sock *sk, struct sock *parent)
+@@ -488,8 +487,6 @@ static struct sock *sco_sock_alloc(struct net *net, struct socket *sock,
+ 
+ 	sco_pi(sk)->setting = BT_VOICE_CVSD_16BIT;
+ 
+-	timer_setup(&sk->sk_timer, sco_sock_timeout, 0);
+-
+ 	bt_sock_link(&sco_sk_list, sk);
+ 	return sk;
+ }
+@@ -554,6 +551,7 @@ static int sco_sock_connect(struct socket *sock, struct sockaddr *addr, int alen
+ {
+ 	struct sockaddr_sco *sa = (struct sockaddr_sco *) addr;
+ 	struct sock *sk = sock->sk;
++	struct hci_dev  *hdev;
+ 	int err;
+ 
+ 	BT_DBG("sk %p", sk);
+@@ -562,18 +560,30 @@ static int sco_sock_connect(struct socket *sock, struct sockaddr *addr, int alen
+ 	    addr->sa_family != AF_BLUETOOTH)
+ 		return -EINVAL;
+ 
+-	if (sk->sk_state != BT_OPEN && sk->sk_state != BT_BOUND)
+-		return -EBADFD;
+-
+-	if (sk->sk_type != SOCK_SEQPACKET)
+-		return -EINVAL;
+-
+ 	lock_sock(sk);
++	if (sk->sk_state != BT_OPEN && sk->sk_state != BT_BOUND) {
++		err = -EBADFD;
++		goto done;
++	}
++
++	if (sk->sk_type != SOCK_SEQPACKET) {
++		err = -EINVAL;
++		goto done;
++	}
++
++	hdev = hci_get_route(&sa->sco_bdaddr, &sco_pi(sk)->src, BDADDR_BREDR);
++	if (!hdev) {
++		err = -EHOSTUNREACH;
++		goto done;
++	}
++	hci_dev_lock(hdev);
+ 
+ 	/* Set destination address and psm */
+ 	bacpy(&sco_pi(sk)->dst, &sa->sco_bdaddr);
+ 
+-	err = sco_connect(sk);
++	err = sco_connect(hdev, sk);
++	hci_dev_unlock(hdev);
++	hci_dev_put(hdev);
+ 	if (err)
+ 		goto done;
+ 
+@@ -702,6 +712,7 @@ static int sco_sock_sendmsg(struct socket *sock, struct msghdr *msg,
+ 			    size_t len)
+ {
+ 	struct sock *sk = sock->sk;
++	struct sk_buff *skb;
+ 	int err;
+ 
+ 	BT_DBG("sock %p, sk %p", sock, sk);
+@@ -713,14 +724,21 @@ static int sco_sock_sendmsg(struct socket *sock, struct msghdr *msg,
+ 	if (msg->msg_flags & MSG_OOB)
+ 		return -EOPNOTSUPP;
+ 
++	skb = bt_skb_sendmsg(sk, msg, len, len, 0, 0);
++	if (IS_ERR(skb))
++		return PTR_ERR(skb);
++
+ 	lock_sock(sk);
+ 
+ 	if (sk->sk_state == BT_CONNECTED)
+-		err = sco_send_frame(sk, msg, len);
++		err = sco_send_frame(sk, skb);
+ 	else
+ 		err = -ENOTCONN;
+ 
+ 	release_sock(sk);
++
++	if (err < 0)
++		kfree_skb(skb);
+ 	return err;
+ }
+ 
+@@ -761,6 +779,11 @@ static void sco_conn_defer_accept(struct hci_conn *conn, u16 setting)
+ 			cp.max_latency = cpu_to_le16(0xffff);
+ 			cp.retrans_effort = 0xff;
+ 			break;
++		default:
++			/* use CVSD settings as fallback */
++			cp.max_latency = cpu_to_le16(0xffff);
++			cp.retrans_effort = 0xff;
++			break;
+ 		}
+ 
+ 		hci_send_cmd(hdev, HCI_OP_ACCEPT_SYNC_CONN_REQ,
+@@ -861,7 +884,8 @@ static int sco_sock_getsockopt_old(struct socket *sock, int optname,
+ 	struct sock *sk = sock->sk;
+ 	struct sco_options opts;
+ 	struct sco_conninfo cinfo;
+-	int len, err = 0;
++	int err = 0;
++	size_t len;
+ 
+ 	BT_DBG("sk %p", sk);
+ 
+@@ -883,7 +907,7 @@ static int sco_sock_getsockopt_old(struct socket *sock, int optname,
+ 
+ 		BT_DBG("mtu %d", opts.mtu);
+ 
+-		len = min_t(unsigned int, len, sizeof(opts));
++		len = min(len, sizeof(opts));
+ 		if (copy_to_user(optval, (char *)&opts, len))
+ 			err = -EFAULT;
+ 
+@@ -901,7 +925,7 @@ static int sco_sock_getsockopt_old(struct socket *sock, int optname,
+ 		cinfo.hci_handle = sco_pi(sk)->conn->hcon->handle;
+ 		memcpy(cinfo.dev_class, sco_pi(sk)->conn->hcon->dev_class, 3);
+ 
+-		len = min_t(unsigned int, len, sizeof(cinfo));
++		len = min(len, sizeof(cinfo));
+ 		if (copy_to_user(optval, (char *)&cinfo, len))
+ 			err = -EFAULT;
+ 
+diff --git a/net/bluetooth/smp.c b/net/bluetooth/smp.c
+index cc2f7ca91..719ae1dff 100644
+--- a/net/bluetooth/smp.c
++++ b/net/bluetooth/smp.c
+@@ -2703,6 +2703,15 @@ static int smp_cmd_public_key(struct l2cap_conn *conn, struct sk_buff *skb)
+ 	if (skb->len < sizeof(*key))
+ 		return SMP_INVALID_PARAMS;
+ 
++	/* Check if remote and local public keys are the same and debug key is
++	 * not in use.
++	 */
++	if (!test_bit(SMP_FLAG_DEBUG_KEY, &smp->flags) &&
++	    !crypto_memneq(key, smp->local_pk, 64)) {
++		bt_dev_err(hdev, "Remote and local public keys are identical");
++		return SMP_UNSPECIFIED;
++	}
++
+ 	memcpy(smp->remote_pk, key, 64);
+ 
+ 	if (test_bit(SMP_FLAG_REMOTE_OOB, &smp->flags)) {
