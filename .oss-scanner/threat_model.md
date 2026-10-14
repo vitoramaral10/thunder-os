@@ -92,6 +92,8 @@ On the PC:
   `thunder.debug=1`), and the diagnostic beacon sends pstore and dmesg to 172.16.42.2:9999.
 - **The password** (`THUNDER_PASSWORD`, required by the build, no default; the same for root
   and the user) is documented and meant to be changed with `passwd`.
+- **Physical possession**: the data partition is not encrypted and the bootloader is
+  unlocked, and the `console` profile has no lock screen (documented in the README).
 - **PMF is off by default on wlan0** (`60-xiaomi-thunder.conf`); the reason is documented
   there.
 - Code under `build/` other than the kernel tree is generated. Firmware blobs are not in

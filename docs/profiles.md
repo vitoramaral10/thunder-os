@@ -88,6 +88,9 @@ phoc's output power management) and back on at the first touch or key;
 `THUNDER_IDLE_TIMEOUT` in `systemctl edit thunder-console@USER` changes the delay. A
 logind drop-in makes a short press of the power key only wake the screen; holding it
 powers off (logind's default powered the phone off on the first press).
+There is no lock screen: waking the panel shows the terminal of the logged-in user.
+`swaylock` takes no input from squeekboard, so locking would lock the owner out too;
+a touch-capable locker is due before the profile is promoted to tested.
 
 **phosh**: Arch's Phosh with gnome-session 51 on `systemd --user`. At boot,
 `thunder-phosh@USER.service` (in `rootfs/profiles/phosh/overlay`) runs it as

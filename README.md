@@ -109,6 +109,15 @@ tools/flash.sh                      # dry run; --sim writes
   `THUNDER_PASSWORD`, and the installer asks for one (and a separate root
   password). Three wrong passwords lock the account for a while, root
   included (1 minute; 10 minutes for the user).
+- **The data partition is not encrypted**, as on a default Arch install. With
+  the bootloader unlocked, whoever holds the phone can boot their own image
+  from fastboot and read it.
+- **The `console` profile has no lock screen.** A touch wakes the panel straight
+  into your terminal. `sudo` still asks for the password. The `phosh` profile
+  locks.
+- Kernel controls that Android leaves world-writable and closes with SELinux
+  (touch modes, UID statistics, sdcardfs) are root-only through
+  `systemd-tmpfiles`.
 
 ## Licensing
 
