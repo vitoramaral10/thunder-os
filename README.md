@@ -28,8 +28,8 @@ Want your phone here? Read [docs/porting.md](docs/porting.md) and open a pull re
   partition and switches to Arch. If anything fails it stays up with a rescue
   shell on the cable instead of rebooting.
 - The phone at `172.16.42.1` over the USB cable (RNDIS, DHCP gives the host
-  `172.16.42.2`), with SSH and a telnet login fallback. Both stay reachable in
-  emergency and rescue mode.
+  `172.16.42.2`), with SSH. A telnet login opens on the cable only in emergency
+  and rescue mode, or when SSH has been down for two minutes.
 - Arch Linux ARM, verified against its signing key, with systemd, your SSH key,
   your user and the device's firmware, modules and services.
 - `thunder-reboot bootloader` to get back to fastboot without buttons.
@@ -105,8 +105,9 @@ tools/flash.sh                      # dry run; --sim writes
   telnet shell on the USB link (`172.16.42.1`). It never listens on Wi-Fi, and
   it stops when the system boots.
 - **The image ships a provisional password** (`THUNDER_PASSWORD`, default
-  `147147`) for root and the user, used by the telnet login on the USB link.
-  Change it with `passwd` on first login.
+  `147147`) for root and the user (the installer asks for a separate root
+  password). Change it with `passwd` on first login. Three wrong passwords lock
+  the account for a while, root included (1 minute; 10 minutes for the user).
 
 ## Licensing
 

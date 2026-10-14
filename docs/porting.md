@@ -165,7 +165,7 @@ glib-based software may need the patches in `rootfs/packages/glib/`.
 ## Unit conventions
 
 - The cable units (`thunder-usb-network`, `thunder-telnet-usb`,
-  `thunder-sshd-rescue`) stay `DefaultDependencies=no`, so the cable works in
+  `thunder-telnet-fallback`, `thunder-sshd-rescue`) stay `DefaultDependencies=no`, so the cable works in
   emergency and rescue mode.
 - Device units never order `Before=` the cable units.
 - Device policy (`sleep.conf.d`, generator masks) goes in the device overlay,

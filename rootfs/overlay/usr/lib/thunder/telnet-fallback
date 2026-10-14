@@ -1,0 +1,22 @@
+#!/bin/sh
+# Vigia do thunder-telnet-usb no boot normal: o telnet com login so sobe se o SSH do
+# cabo ficar fora do ar por $grace segundos seguidos (sshd.service e thunder-sshd-rescue
+# inativos), seja porque o sshd nao sobe, seja porque o boot travou antes do multi-user.
+# Com o SSH no ar a porta 23 fica fechada; no emergency e no rescue o telnet sobe direto
+# (WantedBy= da propria unit). Depois de subir, fica ate o proximo boot ou isolate.
+
+grace=${THUNDER_TELNET_GRACE:-120}
+down=0
+while :; do
+	if systemctl is-active -q sshd.service thunder-sshd-rescue.service; then
+		down=0
+	else
+		down=$((down + 10))
+	fi
+	if [ "$down" -ge "$grace" ]; then
+		echo "SSH fora do ar ha ${down} s: subindo o telnet do cabo"
+		systemctl start --no-block thunder-telnet-usb.service
+		exit 0
+	fi
+	sleep 10
+done

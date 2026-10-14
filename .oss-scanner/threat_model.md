@@ -25,8 +25,9 @@ On the phone:
   (`devices/xiaomi-thunder/patches/add-btmtk-stp-hci-driver.patch`) and the BlueZ stack.
   An attacker in radio range, before or without authentication, is the most important case.
 - **The USB cable network** (RNDIS gadget, phone 172.16.42.1, host 172.16.42.2): sshd,
-  a telnet login on 172.16.42.1:23 (`thunder-telnet-usb.service`), and udhcpd. Whoever
-  holds the cable reaches these.
+  a telnet login on 172.16.42.1:23 (`thunder-telnet-usb.service`, only in emergency and
+  rescue mode or after sshd has been down for 2 minutes), and udhcpd. Whoever holds the
+  cable reaches these. Wrong passwords lock root too (pam_faillock `even_deny_root`).
 - **Unprivileged local processes** reaching the kernel: our patches add syscall
   backports (`backport-statx-mount-id`, `backport-waitid-pidfd`, `backport-close-range`,
   `backport-utimensat-empty-path`, `backport-faccessat2`), an nf_tables user-namespace
