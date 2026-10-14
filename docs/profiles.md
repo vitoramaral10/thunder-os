@@ -83,6 +83,11 @@ as `THUNDER_USER`. Local tweaks such as `WLR_RENDERER` go through
 `systemctl edit thunder-console@USER`. cage does not work: it has neither
 layer-shell nor input-method-v2, which squeekboard needs. The keyboard can be
 forced visible with `SQUEEKBOARD_DEBUG=force_show`.
+The session turns the panel off after 60 s idle (`swayidle` + `wlopm`, through
+phoc's output power management) and back on at the first touch or key;
+`THUNDER_IDLE_TIMEOUT` in `systemctl edit thunder-console@USER` changes the delay. A
+logind drop-in makes a short press of the power key only wake the screen; holding it
+powers off (logind's default powered the phone off on the first press).
 
 **phosh**: Arch's Phosh with gnome-session 51 on `systemd --user`. At boot,
 `thunder-phosh@USER.service` (in `rootfs/profiles/phosh/overlay`) runs it as
