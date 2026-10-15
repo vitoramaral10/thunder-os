@@ -284,11 +284,16 @@ class Backend {
 
   static const _sshOpts = ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5'];
 
-  Future<ProcessResult> _ssh(String command) => Process.run('ssh', [
-    ..._sshOpts,
-    'root@$thunderAddr',
-    command,
-  ]).timeout(const Duration(seconds: 30));
+  /// Nome de rede vem do ar, em bytes crus: um so nome fora do UTF-8 por perto fazia o
+  /// decodificador padrao lancar FormatException e derrubava a lista de redes.
+  static const sshText = Utf8Codec(allowMalformed: true);
+
+  Future<ProcessResult> _ssh(String command) => Process.run(
+    'ssh',
+    [..._sshOpts, 'root@$thunderAddr', command],
+    stdoutEncoding: sshText,
+    stderrEncoding: sshText,
+  ).timeout(const Duration(seconds: 30));
 
   Future<WifiStatus> wifiStatus() async =>
       parseWifiStatus('${(await _ssh('thunder-wifi status')).stdout}');
@@ -318,8 +323,8 @@ class Backend {
     await p.stdin.close();
     final out = StringBuffer();
     final pipes = Future.wait([
-      p.stdout.transform(utf8.decoder).forEach(out.write),
-      p.stderr.transform(utf8.decoder).forEach(out.write),
+      p.stdout.transform(sshText.decoder).forEach(out.write),
+      p.stderr.transform(sshText.decoder).forEach(out.write),
     ]);
     final code = await p.exitCode.timeout(const Duration(seconds: 60));
     await pipes;
