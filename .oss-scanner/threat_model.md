@@ -94,8 +94,6 @@ On the PC:
   and the user) is documented and meant to be changed with `passwd`.
 - **Physical possession**: the data partition is not encrypted and the bootloader is
   unlocked, and the `console` profile has no lock screen (documented in the README).
-- **PMF is off by default on wlan0** (`60-xiaomi-thunder.conf`); the reason is documented
-  there.
 - Code under `build/` other than the kernel tree is generated. Firmware blobs are not in
   the repository and come from the user's phone.
 - Kernel 4.19 is end of life upstream and MediaTek published no newer BSP for this chip;

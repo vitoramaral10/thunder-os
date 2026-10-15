@@ -469,10 +469,11 @@ through external auth. Measured 2026-10-13 with a profile holding the passphrase
 and PMF optional: `key_mgmt=SAE`, `pmf=1`, group 19, associated in 3.4 s.
 
 Profiles saved by `thunder-wifi` hold the password and set `pmf=2` (optional), so
-they get WPA3 on a transition network. The device default in
-`60-xiaomi-thunder.conf` keeps PMF off for profiles that do not set it, which
-covers older profiles saved with only the derived PSK: with PMF optional they
-would pick SAE and fail with `SAE: No password available`.
+they get WPA3 on a transition network. Other profiles (Phosh's settings, `nmcli`)
+follow NetworkManager's default, which is optional too: the device no longer forces
+PMF off (2026-10-14). The gen4m driver has no `-EINVAL` path that depends on MFP.
+A profile saved with only the derived 64-hex PSK cannot do SAE; on a WPA2/WPA3
+network, save it again with `thunder-wifi connect`.
 
 ### The plan
 
