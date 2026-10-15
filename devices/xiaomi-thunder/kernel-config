@@ -254,7 +254,9 @@ CONFIG_MTK_MET_PLF=m
 CONFIG_MTPROF=y
 CONFIG_MTK_AEE_HANGDET=y
 CONFIG_MTK_CM_MGR_LEGACY=y
-CONFIG_MTK_VIBRATOR=y
+# thunder: o driver de vibrador do vendor (so o LED "vibrator" do Android) brigaria com o
+# regulator-haptic pelo mesmo LDO, escrevendo no PMIC por fora do regulador.
+# CONFIG_MTK_VIBRATOR is not set
 CONFIG_MTK_LEGACY_THERMAL=y
 CONFIG_MTK_THERMAL_PA_VIA_ATCMD=y
 CONFIG_MTK_CAMERA_ISP_RSC_SUPPORT=y
@@ -665,3 +667,7 @@ CONFIG_IP6_NF_TARGET_MASQUERADE=y
 # ematch "ipt" do tc: o mesmo desvio do act_ipt (match xt sem o gate); ninguem faz select,
 # fica explicito para nao voltar por engano.
 # CONFIG_NET_EMATCH_IPT is not set
+# thunder: vibracao pelo regulator-haptic (add-thunder-regulator-haptic.patch): input de
+# force-feedback que o feedbackd usa; o driver do vendor so expoe um LED.
+CONFIG_INPUT_FF_MEMLESS=y
+CONFIG_INPUT_REGULATOR_HAPTIC=y

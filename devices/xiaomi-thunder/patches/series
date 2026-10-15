@@ -57,5 +57,8 @@ backport-nl80211-wpa-version-3.patch
 # thunder Wi-Fi: limites no parse de quadros do ar (gen4m; docs/kernel.md)
 fix-gen4m-rnr-parse-bounds.patch
 fix-gen4m-he-cap-bounds.patch
+# thunder vibracao (feedbackd) e lanterna (Phosh): regulator-haptic e LED class do FLED1
+add-thunder-regulator-haptic.patch
+add-mt6360-torch-led-class.patch
 # thunder modem ausente: MDDP sem ruido no log
 fix-mddp-quiet-without-modem.patch

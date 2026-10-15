@@ -351,6 +351,23 @@ list and the sha256 of the body; the CVE map is in `build/research/bt/REPORT.md`
 - **ABI:** `struct hci_dev` changes (`name` becomes `const char *`), so `btmtk_stp.ko` must come
   from the same build (the kernel package does that). No config change.
 
+### Vibration and flashlight
+
+- **add-thunder-regulator-haptic.** A `regulator-haptic` node in `mt6833.dts` on the
+  MT6359P VIBR LDO (2.4 to 3.0 V), with `CONFIG_INPUT_REGULATOR_HAPTIC`. The vendor
+  `mediatek,vibrator` driver (its node comes from the factory dtbo) only offers Android's
+  "vibrator" LED; feedbackd wants a force-feedback input, and its udev rules already know
+  `regulator-haptic`. Measured: a 1 s rumble enables the LDO at 2.8 V and turns it off at
+  the end. `CONFIG_MTK_VIBRATOR` is off: the vendor driver writes the LDO enable bit
+  straight to the PMIC (on suspend and overcurrent), behind the regulator's back.
+- **add-mt6360-torch-led-class.** The rear LED is FLED1 of the MT6360 PMIC (the
+  `ktd3137_flash` LED belongs to the backlight chip). The vendor reaches it only through the
+  camera HAL's `/dev/flashlight`; the patch adds a `white:torch` LED class device, which
+  Phosh's torch button finds. Brightness 1 to 15 is 25 to 200 mA in torch mode; the chip
+  goes to 400 mA, but torch mode has no hardware timeout. Flash (strobe) mode is not exposed. It shares
+  FLED1 with MediaTek's flashlight core without a common lock; harmless while nothing uses
+  the camera HAL.
+
 ### gen4m: bounds on frames from the air
 
 Two fixes in the Wi-Fi driver, found by a review of what a stranger in radio range reaches
