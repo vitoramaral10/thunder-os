@@ -63,6 +63,14 @@ up() {
 	fi
 	[ -d "$G/functions/$FUNC" ] || create || { log "falha ao criar o gadget"; return 1; }
 
+	# Kernel mainline: o musb em OTG so liga o PHY quando o papel vira "device" pela
+	# usb_role. O kernel de fabricante nao tem /sys/class/usb_role e nada muda nele.
+	for role in /sys/class/usb_role/*/role; do
+		[ -w "$role" ] || continue
+		[ "$(cat "$role")" = device ] || echo device > "$role" ||
+			log "falha ao por $role em device"
+	done
+
 	if [ -z "$(cat "$G/UDC")" ]; then
 		udc=$(ls /sys/class/udc | head -n 1)
 		[ -n "$udc" ] || { log "nenhum UDC em /sys/class/udc"; return 1; }
