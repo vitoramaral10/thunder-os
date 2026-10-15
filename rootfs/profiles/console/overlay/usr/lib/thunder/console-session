@@ -29,11 +29,14 @@ osk=$!
 # Tela apagada por inatividade: o swayidle (ext-idle-notify do phoc) desliga o painel
 # pelo wlr-output-power-management (wlopm) e o religa no primeiro toque ou tecla. Sem
 # isso o painel fica aceso no brilho maximo para sempre. THUNDER_IDLE_TIMEOUT (segundos)
-# ajusta pelo systemctl edit thunder-console@USUARIO.
+# ajusta pelo systemctl edit thunder-console@USUARIO. O idlehint marca a sessao como
+# ociosa no logind junto com o painel: e dai que conta o IdleAction (suspensao), onde o
+# aparelho tem.
 idle_timeout=${THUNDER_IDLE_TIMEOUT:-60}
 (
 	while kill -0 "$phoc" 2>/dev/null; do
-		swayidle -w timeout "$idle_timeout" 'wlopm --off "*"' resume 'wlopm --on "*"'
+		swayidle -w timeout "$idle_timeout" 'wlopm --off "*"' resume 'wlopm --on "*"' \
+			idlehint "$idle_timeout"
 		sleep 2
 	done
 ) &

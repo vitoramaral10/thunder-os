@@ -84,9 +84,10 @@ DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt)
 # ligado).
 # bluez: o bluetoothd do driver HCI btmtk_stp (thunder-wmt-bt). bluez-utils: bluetoothctl,
 # unico jeito de parear no perfil console (sem tela de configuracoes), e btmon.
-DEVICE_PACKAGES=(alsa-utils bluez bluez-utils)
+# iw: WoWLAN e diagnostico do Wi-Fi na suspensao (docs/suspend.md).
+DEVICE_PACKAGES=(alsa-utils bluez bluez-utils iw)
 DEVICE_SERVICES=(thunder-wmt-connsys.service thunder-wmt-wifi.service
-	thunder-wmt-bt.service bluetooth.service)
+	thunder-wmt-bt.service bluetooth.service xiaomi-thunder-suspend-guard.service)
 # Modulos do nucleo WMT, antes do DO_MODULE_INIT.
 WMT_CORE_MODULES=(wmt_drv connfem)
 # Modulos do Wi-Fi, depois do CONNSYS pronto (ordem do init.wlan_drv.rc do Android).
