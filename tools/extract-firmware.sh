@@ -36,7 +36,15 @@ erofs*|*EROFS*)
 	command -v fsck.erofs >/dev/null || { echo "particao EROFS: instale erofs-utils (fsck.erofs)" >&2; exit 1; }
 	mkdir -p "$tmp/tree"
 	fsck.erofs --extract="$tmp/tree" "$tmp/part.img" >/dev/null
-	get() { [ -s "$tmp/tree$1" ] && cp "$tmp/tree$1" "$2"; } ;;
+	# A ROM vem de fora: um link simbolico nela (absoluto, ou com ..) faria o cp ler um
+	# arquivo do PC e leva-lo para a imagem. So vale arquivo que resolve dentro da arvore.
+	tree=$(realpath -e -- "$tmp/tree")
+	get() {
+		local f
+		f=$(realpath -e -- "$tmp/tree$1" 2>/dev/null) || return 1
+		case $f in "$tree"/*) ;; *) return 1 ;; esac
+		[ -f "$f" ] && [ -s "$f" ] && cp -- "$f" "$2"
+	} ;;
 *)
 	echo "sistema de arquivos desconhecido na particao: $fs" >&2; exit 1 ;;
 esac
