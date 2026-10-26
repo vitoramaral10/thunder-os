@@ -325,7 +325,7 @@ class _InstallStepState extends State<InstallStep> {
             icon: Icons.celebration_outlined,
             text:
                 'O aparelho esta reiniciando no Thunder OS. Com o cabo ligado: '
-                'ssh ${cfg.user}@172.16.42.1 (o primeiro boot demora mais, porque o '
+                'ssh ${Platform.isWindows ? '<usuario da imagem>' : cfg.user}@172.16.42.1 (o primeiro boot demora mais, porque o '
                 'sistema cresce ate ocupar a particao).',
           ),
         if (finished && !cfg.flash)

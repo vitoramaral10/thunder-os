@@ -116,22 +116,37 @@ Future<void> flash(
     if (!f.existsSync() || f.lengthSync() == 0) throw 'falta ${f.path}';
   }
 
+  // Um aparelho so no fastboot, e todo comando vai para ele (-s): com dois no cabo,
+  // nunca gravar no errado.
   final deadline = DateTime.now().add(wait);
-  while ((await getvar('product')).isEmpty) {
+  var serials = <String>[];
+  String product = '';
+  while (true) {
     if (cancelled?.call() ?? false) throw 'cancelado';
+    serials = parseFastbootDevices((await runTool(fb, ['devices'])).$2);
+    if (serials.length > 1) {
+      throw 'mais de um aparelho no fastboot (${serials.join(', ')}): deixe so '
+          'o que vai receber o Thunder OS no cabo';
+    }
+    if (serials.length == 1) {
+      product = await getvar('product', serial: serials.first);
+      if (product.isNotEmpty) break;
+    }
     if (DateTime.now().isAfter(deadline)) {
       throw 'nenhum aparelho respondendo no fastboot';
     }
     await Future<void>.delayed(const Duration(seconds: 1));
   }
-  final product = await getvar('product');
+  final serial = serials.first;
   if (!t.products.contains(product)) {
     throw "produto '$product' nao e ${t.products.join(' ')}";
   }
-  if (await getvar('unlocked') != 'yes') throw 'bootloader travado';
+  if (await getvar('unlocked', serial: serial) != 'yes') {
+    throw 'bootloader travado';
+  }
   var suffix = '';
   if (t.ab) {
-    final slot = await getvar('current-slot');
+    final slot = await getvar('current-slot', serial: serial);
     if (slot.isEmpty) throw 'o aparelho nao informa current-slot';
     if (t.slot.isNotEmpty && slot != t.slot) {
       throw "slot ativo e '$slot', esperado '${t.slot}'";
@@ -142,7 +157,7 @@ Future<void> flash(
   Future<void> step(List<String> args) async {
     if (cancelled?.call() ?? false) throw 'cancelado';
     log('fastboot ${args.join(' ')}');
-    final p = await Process.start(fb, args);
+    final p = await Process.start(fb, ['-s', serial, ...args]);
     await Future.wait([
       for (final s in [p.stdout, p.stderr])
         s

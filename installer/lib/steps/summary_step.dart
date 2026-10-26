@@ -49,51 +49,57 @@ class SummaryStep extends StatelessWidget {
     final d = ctx.device!;
     final t = Theme.of(context).textTheme;
     final profile = ctx.catalogue.profile(cfg.profile);
+    // No Windows o app so grava imagens prontas: nada da montagem chega ao aparelho.
+    final buildsImage = !Platform.isWindows;
     final rows = <(IconData, String, String)>[
       (Icons.smartphone_outlined, 'Aparelho', '${d.label} (${d.codename})'),
-      if (d.needsRom)
+      if (buildsImage) ...[
+        if (d.needsRom)
+          (
+            Icons.inventory_2_outlined,
+            'ROM de fabrica',
+            cfg.romPath?.split('/').last ?? '-',
+          ),
         (
-          Icons.inventory_2_outlined,
-          'ROM de fabrica',
-          cfg.romPath?.split('/').last ?? '-',
+          Icons.dashboard_customize_outlined,
+          'Interface',
+          profile?.title ?? cfg.profile,
         ),
-      (
-        Icons.dashboard_customize_outlined,
-        'Interface',
-        profile?.title ?? cfg.profile,
-      ),
-      if (cfg.extraPackages.trim().isNotEmpty)
-        (Icons.add_box_outlined, 'Pacotes extras', cfg.extraPackages.trim()),
-      (Icons.person_outline, 'Usuario', '${cfg.user} (sudo)'),
-      (
-        Icons.admin_panel_settings_outlined,
-        'Root',
-        cfg.rootSameAsUser ? 'mesma senha do usuario' : 'senha propria',
-      ),
-      (Icons.lan_outlined, 'Hostname', cfg.effectiveHostname(d)),
-      (
-        Icons.key,
-        'Chave SSH',
-        cfg.sshKey?.split('/').last ?? 'nenhuma (login por senha)',
-      ),
-      if (d.hasWifi)
+        if (cfg.extraPackages.trim().isNotEmpty)
+          (Icons.add_box_outlined, 'Pacotes extras', cfg.extraPackages.trim()),
+        (Icons.person_outline, 'Usuario', '${cfg.user} (sudo)'),
         (
-          Icons.wifi,
-          'Wi-Fi',
-          cfg.wifiSsid.isEmpty ? 'sem rede salva' : '"${cfg.wifiSsid}"',
+          Icons.admin_panel_settings_outlined,
+          'Root',
+          cfg.rootSameAsUser ? 'mesma senha do usuario' : 'senha propria',
         ),
-      (Icons.translate, 'Idioma', cfg.locale),
-      (Icons.schedule, 'Fuso horario', cfg.timezone),
+        (Icons.lan_outlined, 'Hostname', cfg.effectiveHostname(d)),
+        (
+          Icons.key,
+          'Chave SSH',
+          cfg.sshKey?.split('/').last ?? 'nenhuma (login por senha)',
+        ),
+        if (d.hasWifi)
+          (
+            Icons.wifi,
+            'Wi-Fi',
+            cfg.wifiSsid.isEmpty ? 'sem rede salva' : '"${cfg.wifiSsid}"',
+          ),
+        (Icons.translate, 'Idioma', cfg.locale),
+        (Icons.schedule, 'Fuso horario', cfg.timezone),
+      ],
     ];
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const StepHeader(
+        StepHeader(
           title: 'Resumo',
-          subtitle:
-              'Confira antes de comecar. A montagem roda neste computador, sem '
-              'root, e pode levar de 20 minutos a mais de uma hora na primeira vez.',
+          subtitle: buildsImage
+              ? 'Confira antes de comecar. A montagem roda neste computador, sem '
+                    'root, e pode levar de 20 minutos a mais de uma hora na primeira vez.'
+              : 'Confira antes de comecar. O instalador grava as imagens que ja estao '
+                    'em build/${d.id}/out/; usuario, senhas e regiao sao os delas.',
         ),
         Card.outlined(
           child: Padding(
@@ -119,23 +125,25 @@ class SummaryStep extends StatelessWidget {
             ),
           ),
         ),
-        const SizedBox(height: 24),
-        Text('Tamanho inicial da imagem', style: t.titleSmall),
-        const SizedBox(height: 8),
-        SegmentedButton<String>(
-          segments: const [
-            ButtonSegment(value: '4G', label: Text('4 GB')),
-            ButtonSegment(value: '8G', label: Text('8 GB')),
-            ButtonSegment(value: '16G', label: Text('16 GB')),
-          ],
-          selected: {cfg.size},
-          onSelectionChanged: (v) => cfg.update(() => cfg.size = v.first),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'No primeiro boot o sistema cresce ate ocupar a particao inteira.',
-          style: t.bodySmall,
-        ),
+        if (buildsImage) ...[
+          const SizedBox(height: 24),
+          Text('Tamanho inicial da imagem', style: t.titleSmall),
+          const SizedBox(height: 8),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: '4G', label: Text('4 GB')),
+              ButtonSegment(value: '8G', label: Text('8 GB')),
+              ButtonSegment(value: '16G', label: Text('16 GB')),
+            ],
+            selected: {cfg.size},
+            onSelectionChanged: (v) => cfg.update(() => cfg.size = v.first),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'No primeiro boot o sistema cresce ate ocupar a particao inteira.',
+            style: t.bodySmall,
+          ),
+        ],
         const SizedBox(height: 16),
         // No Windows o app ainda nao monta imagens, so grava: nao ha o que desligar.
         if (!Platform.isWindows)

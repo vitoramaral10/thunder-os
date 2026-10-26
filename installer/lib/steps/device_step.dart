@@ -51,8 +51,9 @@ class _DeviceStepState extends State<DeviceStep> {
   // Detecta, e de novo 3 s depois de terminar (nunca duas deteccoes ao mesmo tempo).
   Future<void> _poll() async {
     tools ??= await PlatformTools.available();
+    if (!mounted) return;
     if (tools == false) {
-      if (mounted) setState(() => checking = false);
+      setState(() => checking = false);
       return;
     }
     try {
@@ -86,8 +87,9 @@ class _DeviceStepState extends State<DeviceStep> {
       await PlatformTools.download(
         progress: (p) => mounted ? setState(() => downloading = p) : null,
       );
+      if (!mounted) return;
       tools = true;
-      if (mounted) setState(() => checking = true);
+      setState(() => checking = true);
       _poll();
     } catch (e) {
       if (mounted) setState(() => error = '$e');
