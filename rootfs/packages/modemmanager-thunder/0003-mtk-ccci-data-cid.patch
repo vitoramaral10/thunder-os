@@ -1,0 +1,58 @@
+thunder: mtk-ccci: nunca discar no cid 0 (contexto de attach do LTE no MD MediaTek).
+
+O gerenciador de perfis escolhe o cid 0 quando o APN dele bate com o pedido; ativar o
+cid 0 nao sobe ccmni (+EIF ifup nunca chega) e o connect falha por timeout. O bearer
+passa a usar o cid 1 nesse caso, no dial, na configuracao de IP e no disconnect.
+
+--- a/src/plugins/mtk-ccci/mm-broadband-bearer-mtk-ccci.c
++++ b/src/plugins/mtk-ccci/mm-broadband-bearer-mtk-ccci.c
+@@ -92,6 +92,20 @@
+ }
+ 
+ /*****************************************************************************/
++/* The MD keeps cid 0 for the LTE attach (initial EPS bearer): activating it never
++ * brings up a ccmni (no "+EIF ifup", measured on the MT6833), and the profile
++ * manager picks it whenever its APN matches the one asked for. Data always goes
++ * through a cid of our own; the same mapping is used to dial, to read the IP
++ * config and to disconnect. */
++#define MTK_CCCI_DATA_CID 1
++
++static guint
++data_cid (guint cid)
++{
++    return cid == 0 ? MTK_CCCI_DATA_CID : cid;
++}
++
++/*****************************************************************************/
+ /* 3GPP dialing (sub-step of the 3GPP connection sequence) */
+ 
+ typedef struct {
+@@ -478,7 +492,9 @@
+     ctx = g_slice_new0 (DialContext);
+     ctx->modem   = MM_BROADBAND_MODEM_MTK_CCCI (g_object_ref (modem));
+     ctx->primary = g_object_ref (primary);
+-    ctx->cid     = cid;
++    ctx->cid     = data_cid (cid);
++    if (ctx->cid != cid)
++        mm_obj_dbg (_self, "cid %u is the attach context; dialing on cid %u", cid, ctx->cid);
+     g_task_set_task_data (task, ctx, (GDestroyNotify) dial_context_free);
+ 
+     dial_check_active (task);
+@@ -756,7 +772,7 @@
+     ctx = g_slice_new0 (IpConfigContext);
+     ctx->modem     = MM_BROADBAND_MODEM_MTK_CCCI (g_object_ref (modem));
+     ctx->primary   = g_object_ref (primary);
+-    ctx->cid       = cid;
++    ctx->cid       = data_cid (cid);
+     ctx->ip_family = ip_family;
+     if (self->priv->connected)
+         ctx->ifup = mm_mtk_ccci_eif_info_dup (self->priv->connected);
+@@ -817,7 +833,7 @@
+     /* The "ifdown" that follows is ours, not a network drop */
+     g_clear_pointer (&self->priv->connected, mm_mtk_ccci_eif_info_free);
+ 
+-    cmd = (cid > 0 ? g_strdup_printf ("+CGACT=0,%u", cid) : g_strdup ("+CGACT=0"));
++    cmd = g_strdup_printf ("+CGACT=0,%u", data_cid (cid));
+     mm_base_modem_at_command_full (MM_BASE_MODEM (modem),
+                                    MM_IFACE_PORT_AT (primary),
+                                    cmd,

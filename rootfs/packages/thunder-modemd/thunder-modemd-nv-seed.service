@@ -1,0 +1,16 @@
+# Semeia a copia da NVRAM do modem uma vez (so se ainda nao existe), antes do
+# thunder-modemd. Monta as particoes de fabrica so leitura num namespace privado.
+[Unit]
+Description=Seed the modem NVRAM working copy from the factory partitions
+ConditionPathExists=!/var/lib/thunder-modem/nv/nvdata/md
+Before=thunder-modemd.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/thunder/modem/thunder-modemd-nv-seed
+# As montagens ro ficam so neste namespace e somem com ele.
+PrivateMounts=yes
+PrivateNetwork=yes
+StateDirectory=thunder-modem
+StateDirectoryMode=0700

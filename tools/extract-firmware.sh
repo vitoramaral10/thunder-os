@@ -63,6 +63,27 @@ for f in "${FIRMWARE_REQUIRED[@]}" "${INITRAMFS_FIRMWARE[@]}"; do
 	[ -s "$FIRMWARE/$f" ] || { echo "faltou $f, obrigatorio para $DEVICE: a ROM e deste aparelho?" >&2; exit 1; }
 done
 [ ${#missing[@]} -eq 0 ] || echo "aviso: nao achei na ROM: ${missing[*]}" >&2
+
+# Arvores do modem (MODEM_ROM_TREES): so arquivos regulares; link simbolico vindo da ROM
+# e apagado depois da copia (nunca seguido), pelo mesmo motivo do get() acima.
+if [ ${#MODEM_ROM_TREES[@]} -gt 0 ]; then
+	rm -rf "$MODEM_RO"; mkdir -p "$MODEM_RO"
+	for t in "${MODEM_ROM_TREES[@]}"; do
+		src=${t%%:*} name=${t#*:}
+		case $fs in
+		ext*|*ext2*|*ext4*)
+			mkdir -p "$tmp/trees"
+			debugfs -R "rdump \"$src\" \"$tmp/trees\"" "$tmp/part.img" >/dev/null 2>&1 || true
+			got=$tmp/trees/$(basename "$src") ;;
+		*)
+			got=$tmp/tree$src ;;
+		esac
+		[ -d "$got" ] && [ ! -L "$got" ] || { echo "aviso: $src ausente na ROM" >&2; continue; }
+		cp -r --no-dereference -- "$got" "$MODEM_RO/$name"
+		find "$MODEM_RO/$name" -type l -delete
+		echo "  $src -> modem-ro/$name ($(find "$MODEM_RO/$name" -type f | wc -l) arquivos)"
+	done
+fi
 echo "firmware em $FIRMWARE: $(( ${#FIRMWARE_FILES[@]} - ${#missing[@]} )) de ${#FIRMWARE_FILES[@]} arquivos"
 exit
 }

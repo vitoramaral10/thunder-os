@@ -74,7 +74,10 @@ FIRMWARE_REQUIRED=(
 # (rootfs/packages) faz o papel do wmt_loader, do wmt_launcher e do wlan_assistant do
 # Android. thunder-wmt-connsys inicializa o driver e fica residente; thunder-wmt-wifi
 # liga o radio. O toque e uma regra do udev (overlay/usr/lib/udev/rules.d).
-DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt)
+# Dados so leitura que o modem le pelo CCCI FS (thunder-modemd: drive T: = perfis de
+# operadora, R: = certificados), tirados da particao vendor da ROM: <dir na ROM>:<nome>.
+MODEM_ROM_TREES=(/etc/mdota:mdota /etc/md:etc_md)
+DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt thunder-modemd)
 # Audio: o UCM do cartao (overlay/usr/share/alsa/ucm2/conf.d/mt6833-mt6359) e as regras
 # do WirePlumber (overlay/usr/share/wireplumber). alsa-utils: a regra do udev roda o
 # alsactl no boot, que aplica a FixedBootSequence do UCM (amplificador desligado, ganhos
@@ -87,7 +90,8 @@ DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt)
 # iw: WoWLAN e diagnostico do Wi-Fi na suspensao (docs/suspend.md).
 DEVICE_PACKAGES=(alsa-utils bluez bluez-utils iw)
 DEVICE_SERVICES=(thunder-wmt-connsys.service thunder-wmt-wifi.service
-	thunder-wmt-bt.service bluetooth.service xiaomi-thunder-suspend-guard.service)
+	thunder-wmt-bt.service bluetooth.service xiaomi-thunder-suspend-guard.service
+	thunder-modemd.service)
 # Modulos do nucleo WMT, antes do DO_MODULE_INIT.
 WMT_CORE_MODULES=(wmt_drv connfem)
 # Modulos do Wi-Fi, depois do CONNSYS pronto (ordem do init.wlan_drv.rc do Android).

@@ -1,0 +1,30 @@
+# Userspace do modem MediaTek (eccci, MD1 do MT6833): o ccci_mdinit (partida, supervisao
+# e servidor FS da NVRAM do modem) e o ccci_rpcd do Android num programa so
+# (thunder-modemd), com a unit do systemd. thunder-modemd-nv-seed.service semeia a copia
+# da NVRAM no primeiro boot (particoes de fabrica so leitura).
+#
+# Fontes locais (esta pasta): o hash da receita no tools/build-rootfs.sh ja cobre a
+# integridade, por isso SKIP.
+pkgname=thunder-modemd
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Thunder OS: MediaTek MD1 modem owner (boot, NVRAM file server, RPC)'
+arch=(any)
+url='https://github.com/vitoramaral10/thunder-os'
+license=(GPL-3.0-or-later)
+depends=(python)
+source=(thunder_modemd.py test_thunder_modemd.py thunder-modemd.service
+	thunder-modemd-nv-seed thunder-modemd-nv-seed.service)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP)
+
+check() {
+	cd "$srcdir"
+	python -m unittest -v test_thunder_modemd
+}
+
+package() {
+	install -Dm755 "$srcdir/thunder_modemd.py" "$pkgdir/usr/lib/thunder/modem/thunder-modemd"
+	install -Dm755 "$srcdir/thunder-modemd-nv-seed" "$pkgdir/usr/lib/thunder/modem/thunder-modemd-nv-seed"
+	install -Dm644 -t "$pkgdir/usr/lib/systemd/system" "$srcdir/thunder-modemd.service" \
+		"$srcdir/thunder-modemd-nv-seed.service"
+}

@@ -1,0 +1,534 @@
+thunder: CCCI AT port ttyC0 as a real TTY, for ModemManager.
+
+/dev/ttyC0 (CCCI_UART2, the modem AT channel) is a CCCI char port: open,
+read, write and poll only. tcsetattr() on it fails with ENOTTY, so
+ModemManager (and any serial tool) cannot set the port up and never probes
+the modem.
+
+Add a TTY port type to eccci (port/port_tty.c) and switch only the ttyC0
+entry of port_cfg.c to it. The CCCI side is the char port's: same
+rx_skb_list and rx_length_th, the kernel adds and strips the ccci_header
+(userspace still sees raw AT text), CCCI_UART2_RX data is queued while the
+port is closed, and the first open/last close call port_user_register()/
+port_user_unregister(), so a holder of ttyC0 is still CRIT_USR_MUXD and
+blocks or permits an MD start exactly as before. In front of it sits a
+one-line tty_driver named after the port ("ttyC" + name_base 0), so the
+node stays /dev/ttyC0; the char ports ttyC1/C2/C3/C5/C6 keep their
+ccci_node devices. The tty's parent is the eccci platform device, so udev
+can match KERNEL=="ttyC0" and tag it for ModemManager.
+
+RX: recv_skb only queues (port_recv_skb) and kicks a work item that feeds
+the flip buffer; while the tty is throttled or the flip buffer is full the
+data stays queued and, past rx_length_th, the CCIF queue keeps it in shared
+memory (the back pressure of a char reader; nothing is dropped). TX: split
+to CCCI_MTU, pool skb and HIF send without blocking; a full ring returns a
+short count and a delayed work wakes the writer. Writes need MD READY
+(-ENODEV otherwise). Termios starts raw 8N1 B115200 with CLOCAL and is
+accepted and ignored; TIOCMGET reports a connected line.
+
+---
+--- a/drivers/misc/mediatek/eccci/port/Makefile	2026-10-15 18:22:24.665116121 -0300
++++ b/drivers/misc/mediatek/eccci/port/Makefile	2026-10-15 20:27:37.561392511 -0300
+@@ -37,6 +37,7 @@
+ obj-$(CONFIG_MTK_ECCCI_DRIVER) := ccci_port.o
+ ccci_port-y := port_cfg.o \
+ 		port_char.o \
++		port_tty.o \
+ 		port_ctlmsg.o \
+ 		port_udc.o \
+ 		port_misc.o \
+--- a/drivers/misc/mediatek/eccci/port/port_cfg.c	2026-06-01 23:17:27.000000000 -0300
++++ b/drivers/misc/mediatek/eccci/port/port_cfg.c	2026-10-15 20:27:37.561195101 -0300
+@@ -124,9 +124,10 @@
+ 	{CCCI_UART1_TX, CCCI_UART1_RX, 1, 1, EXP_CTRL_Q, EXP_CTRL_Q,
+ 		MD1_NORMAL_HIF, PORT_F_WITH_CHAR_NODE,
+ 		&char_port_ops, 2, "ccci_md_log_ctrl",},
++	/* thunder: real tty (port_tty.c) so ModemManager can use the AT port */
+ 	{CCCI_UART2_TX, CCCI_UART2_RX, DATA_AT_CMD_Q, DATA_AT_CMD_Q, 0xFF, 0xFF,
+-		MD1_NORMAL_HIF, PORT_F_WITH_CHAR_NODE,
+-		&char_port_ops, 3, "ttyC0",},
++		MD1_NORMAL_HIF, 0,
++		&ccci_tty_port_ops, 3, "ttyC0",},
+ 	{CCCI_FS_TX, CCCI_FS_RX, DATA_FSD_Q, DATA_FSD_Q, 1, 1, MD1_NORMAL_HIF,
+ 		PORT_F_USER_HEADER | PORT_F_WITH_CHAR_NODE | PORT_F_CLEAN,
+ 		&char_port_ops, 4, "ccci_fs",},
+--- a/drivers/misc/mediatek/eccci/port/port_cfg.h	2026-06-01 23:17:27.000000000 -0300
++++ b/drivers/misc/mediatek/eccci/port/port_cfg.h	2026-10-15 20:27:37.561313810 -0300
+@@ -17,4 +17,5 @@
+ extern struct port_ops smem_port_ops;
+ extern struct port_ops ccci_udc_port_ops;
+ extern struct port_ops ccci_misc_port_ops;
++extern struct port_ops ccci_tty_port_ops;
+ #endif /* __PORT_CFG_H__ */
+--- a/drivers/misc/mediatek/eccci/port/port_tty.c	1969-12-31 21:00:00.000000000 -0300
++++ b/drivers/misc/mediatek/eccci/port/port_tty.c	2026-10-15 20:30:54.311339102 -0300
+@@ -0,0 +1,469 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * thunder: CCCI port exported as a real TTY.
++ *
++ * A char port (port_char.c) only has open/read/write/poll, so tcsetattr()
++ * on it fails with ENOTTY and ModemManager cannot use the modem AT channel.
++ * This port type keeps the CCCI side of a char port (same rx_skb_list, same
++ * header handling, same critical-user bookkeeping in port_proxy.c) and puts
++ * a tty_driver with a single line in front of it. The device keeps the
++ * port name: "ttyC0" becomes tty driver "ttyC" with name_base 0, so the
++ * node is still /dev/ttyC0 and the char ports ttyC1/C2/C3/C5/C6 (class
++ * ccci_node, CCCI major) are untouched.
++ *
++ * Context:
++ * - recv_skb runs from the HIF RX path (CCIF: ccif_rx_work on the rxN_worker
++ *   workqueue). It only queues the skb with port_recv_skb() and kicks
++ *   rx_work, so it never sleeps and would also be safe in atomic context.
++ * - rx_work (system_wq, process context) moves the queued payload into the
++ *   tty flip buffer. It is the only consumer of rx_skb_list while the tty is
++ *   open; shutdown cancels it synchronously before purging the list.
++ * - write is non-blocking: pool skb without sleep, port_send_skb_to_md()
++ *   with blocking=0. A full HIF ring returns a short count and arms
++ *   tx_wake_work, which wakes the writer (no HIF TX-done event exists for
++ *   normal ports).
++ *
++ * Throttling: nothing is dropped. While the tty is throttled (or the flip
++ * buffer is full) rx_work stops and the payload stays in rx_skb_list; past
++ * rx_length_th, port_recv_skb() returns -CCCI_ERR_PORT_RX_FULL and the CCIF
++ * queue leaves the data in shared memory until port_ask_more_req_to_md().
++ * This is the same back pressure a char port reader applies today.
++ */
++#include <linux/ctype.h>
++#include <linux/device.h>
++#include <linux/kernel.h>
++#include <linux/slab.h>
++#include <linux/string.h>
++#include <linux/tty.h>
++#include <linux/tty_driver.h>
++#include <linux/tty_flip.h>
++#include <linux/workqueue.h>
++#include "ccci_config.h"
++#include "ccci_common_config.h"
++#include "ccci_bm.h"
++#include "ccci_fsm.h"
++#include "modem_sys.h"
++#include "port_proxy.h"
++#include "port_t.h"
++
++#define TAG CHAR
++
++#define PORT_TTY_MAX_QUEUE_LENGTH	32
++#define PORT_TTY_RX_RETRY_MS		10
++#define PORT_TTY_TX_RETRY_MS		10
++
++/* pt->flags bits */
++#define PORT_TTY_OPEN			0
++#define PORT_TTY_TX_BUSY		1
++
++struct port_tty {
++	struct tty_port tport;
++	struct tty_driver *driver;
++	struct port_t *port;
++	char *name;
++	unsigned long flags;
++	struct delayed_work rx_work;
++	struct delayed_work tx_wake_work;
++};
++
++static void port_tty_rx_work(struct work_struct *work)
++{
++	struct port_tty *pt = container_of(to_delayed_work(work),
++		struct port_tty, rx_work);
++	struct port_t *port = pt->port;
++	struct tty_struct *tty;
++	struct sk_buff *skb;
++	unsigned long flags;
++	int pushed = 0, n;
++	bool retry = false;
++
++	if (!test_bit(PORT_TTY_OPEN, &pt->flags))
++		return;
++	tty = tty_port_tty_get(&pt->tport);
++	if (!tty)
++		return;
++
++	while (test_bit(PORT_TTY_OPEN, &pt->flags)) {
++		/* the unthrottle callback kicks us again */
++		if (tty_throttled(tty))
++			break;
++		spin_lock_irqsave(&port->rx_skb_list.lock, flags);
++		skb = skb_peek(&port->rx_skb_list);
++		spin_unlock_irqrestore(&port->rx_skb_list.lock, flags);
++		if (!skb)
++			break;
++		/* only this work dequeues while open: skb stays at the head */
++		n = tty_insert_flip_string(&pt->tport, skb->data, skb->len);
++		if (n > 0 && (port->flags & PORT_F_CH_TRAFFIC))
++			port_ch_dump(port, 0, skb->data, n);
++		pushed += n;
++		if (n < skb->len) {
++			/* flip buffer full: keep the rest, retry later */
++			skb_pull(skb, n);
++			retry = true;
++			break;
++		}
++		spin_lock_irqsave(&port->rx_skb_list.lock, flags);
++		__skb_unlink(skb, &port->rx_skb_list);
++		/* same refill rule as port_dev_read() */
++		if (port->rx_skb_list.qlen == 0)
++			port_ask_more_req_to_md(port);
++		spin_unlock_irqrestore(&port->rx_skb_list.lock, flags);
++		ccci_free_skb(skb);
++	}
++	if (pushed)
++		tty_flip_buffer_push(&pt->tport);
++	tty_kref_put(tty);
++	if (retry)
++		queue_delayed_work(system_wq, &pt->rx_work,
++			msecs_to_jiffies(PORT_TTY_RX_RETRY_MS));
++}
++
++static void port_tty_tx_wake_work(struct work_struct *work)
++{
++	struct port_tty *pt = container_of(to_delayed_work(work),
++		struct port_tty, tx_wake_work);
++
++	clear_bit(PORT_TTY_TX_BUSY, &pt->flags);
++	tty_port_tty_wakeup(&pt->tport);
++}
++
++/* tty_port: first open and last close (or hangup), under tport.mutex */
++static int port_tty_activate(struct tty_port *tport, struct tty_struct *tty)
++{
++	struct port_tty *pt = container_of(tport, struct port_tty, tport);
++	struct port_t *port = pt->port;
++
++	/* open count seen by dump_info and mtk_ccci_open_port() */
++	atomic_set(&port->usage_cnt, 1);
++	/* CCCI_UART2_RX -> CRIT_USR_MUXD, exactly as port_dev_open() */
++	port_user_register(port);
++	clear_bit(PORT_TTY_TX_BUSY, &pt->flags);
++	set_bit(PORT_TTY_OPEN, &pt->flags);
++	CCCI_NORMAL_LOG(port->md_id, TAG, "port %s (tty) open by %s\n",
++		port->name, current->comm);
++	/* deliver what arrived while closed, like a char port reader would */
++	mod_delayed_work(system_wq, &pt->rx_work, 0);
++	return 0;
++}
++
++static void port_tty_shutdown(struct tty_port *tport)
++{
++	struct port_tty *pt = container_of(tport, struct port_tty, tport);
++	struct port_t *port = pt->port;
++	struct sk_buff *skb;
++	unsigned long flags;
++	int clear_cnt = 0;
++
++	clear_bit(PORT_TTY_OPEN, &pt->flags);
++	cancel_delayed_work_sync(&pt->rx_work);
++	cancel_delayed_work_sync(&pt->tx_wake_work);
++	clear_bit(PORT_TTY_TX_BUSY, &pt->flags);
++	/* the rest mirrors port_dev_close() */
++	atomic_set(&port->usage_cnt, 0);
++	spin_lock_irqsave(&port->rx_skb_list.lock, flags);
++	while ((skb = __skb_dequeue(&port->rx_skb_list)) != NULL) {
++		ccci_free_skb(skb);
++		clear_cnt++;
++	}
++	port->rx_drop_cnt += clear_cnt;
++	port_ask_more_req_to_md(port);
++	spin_unlock_irqrestore(&port->rx_skb_list.lock, flags);
++	CCCI_NORMAL_LOG(port->md_id, TAG,
++		"port %s (tty) close by %s clear_cnt=%d drop=%d\n",
++		port->name, current->comm, clear_cnt, port->rx_drop_cnt);
++	port_user_unregister(port);
++}
++
++static const struct tty_port_operations port_tty_port_ops = {
++	.activate = port_tty_activate,
++	.shutdown = port_tty_shutdown,
++};
++
++/* tty_operations */
++static int port_tty_install(struct tty_driver *driver, struct tty_struct *tty)
++{
++	struct port_tty *pt = driver->driver_state;
++	int ret;
++
++	ret = tty_port_install(&pt->tport, driver, tty);
++	if (ret == 0)
++		tty->driver_data = pt;
++	return ret;
++}
++
++static int port_tty_open(struct tty_struct *tty, struct file *filp)
++{
++	struct port_tty *pt = tty->driver_data;
++
++	return tty_port_open(&pt->tport, tty, filp);
++}
++
++static void port_tty_close(struct tty_struct *tty, struct file *filp)
++{
++	struct port_tty *pt = tty->driver_data;
++
++	tty_port_close(&pt->tport, tty, filp);
++}
++
++static void port_tty_hangup(struct tty_struct *tty)
++{
++	struct port_tty *pt = tty->driver_data;
++
++	tty_port_hangup(&pt->tport);
++}
++
++static void port_tty_tx_busy(struct port_tty *pt)
++{
++	set_bit(PORT_TTY_TX_BUSY, &pt->flags);
++	queue_delayed_work(system_wq, &pt->tx_wake_work,
++		msecs_to_jiffies(PORT_TTY_TX_RETRY_MS));
++}
++
++static int port_tty_write(struct tty_struct *tty, const unsigned char *buf,
++	int count)
++{
++	struct port_tty *pt = tty->driver_data;
++	struct port_t *port = pt->port;
++	struct ccci_header *ccci_h;
++	struct sk_buff *skb;
++	int md_state, done = 0, len, ret;
++
++	md_state = ccci_fsm_get_md_state(port->md_id);
++	if (md_state != READY) {
++		CCCI_DEBUG_LOG(port->md_id, TAG,
++			"port %s write refused, md_state=%d\n",
++			port->name, md_state);
++		return -ENODEV;
++	}
++
++	while (done < count) {
++		len = min_t(int, count - done, CCCI_MTU);
++		/* never sleeps: pool skb, no retry loop */
++		skb = ccci_alloc_skb(len + sizeof(struct ccci_header),
++			port->skb_from_pool, 0);
++		if (!skb) {
++			port_tty_tx_busy(pt);
++			break;
++		}
++		ccci_h = (struct ccci_header *)skb_put(skb,
++			sizeof(struct ccci_header));
++		ccci_h->data[0] = 0;
++		ccci_h->data[1] = len + sizeof(struct ccci_header);
++		ccci_h->channel = port->tx_ch;
++		ccci_h->reserved = 0;
++		memcpy(skb_put(skb, len), buf + done, len);
++		if (port->flags & PORT_F_CH_TRAFFIC)
++			port_ch_dump(port, 1, (void *)(buf + done), len);
++		/* on success the HIF owns (and frees) the skb */
++		ret = port_send_skb_to_md(port, skb, 0);
++		if (ret) {
++			ccci_free_skb(skb);
++			/* -EBUSY: ring full; -ENOMEM: CCIF with usb bypass */
++			if (ret == -EBUSY || ret == -ENOMEM) {
++				port_tty_tx_busy(pt);
++				break;
++			}
++			CCCI_NORMAL_LOG(port->md_id, TAG,
++				"write error on %s, ret=%d\n", port->name, ret);
++			return done ? done : ret;
++		}
++		done += len;
++	}
++	return done;
++}
++
++static int port_tty_write_room(struct tty_struct *tty)
++{
++	struct port_tty *pt = tty->driver_data;
++
++	/* no TX queue of our own; 0 only until tx_wake_work runs */
++	if (test_bit(PORT_TTY_TX_BUSY, &pt->flags))
++		return 0;
++	return CCCI_MTU;
++}
++
++static void port_tty_set_termios(struct tty_struct *tty,
++	struct ktermios *old)
++{
++	/* no line: accept any setting (baud, CSIZE, CRTSCTS) and ignore it */
++}
++
++/* no modem control lines: report a connected line, ignore changes */
++static int port_tty_tiocmget(struct tty_struct *tty)
++{
++	return TIOCM_DTR | TIOCM_RTS | TIOCM_CTS | TIOCM_DSR | TIOCM_CAR;
++}
++
++static int port_tty_tiocmset(struct tty_struct *tty, unsigned int set,
++	unsigned int clear)
++{
++	return 0;
++}
++
++static void port_tty_unthrottle(struct tty_struct *tty)
++{
++	struct port_tty *pt = tty->driver_data;
++
++	mod_delayed_work(system_wq, &pt->rx_work, 0);
++}
++
++static const struct tty_operations port_tty_ops = {
++	.install = port_tty_install,
++	.open = port_tty_open,
++	.close = port_tty_close,
++	.hangup = port_tty_hangup,
++	.write = port_tty_write,
++	.write_room = port_tty_write_room,
++	.set_termios = port_tty_set_termios,
++	.tiocmget = port_tty_tiocmget,
++	.tiocmset = port_tty_tiocmset,
++	.unthrottle = port_tty_unthrottle,
++};
++
++/* port_ops */
++static int port_tty_recv_skb(struct port_t *port, struct sk_buff *skb)
++{
++	struct port_tty *pt = port->private_data;
++	int ret;
++
++	if (!pt)
++		return -CCCI_ERR_DROP_PACKET;
++	/*
++	 * Like port_char_recv_skb() for CCCI_UART2_RX: queue even while
++	 * closed (up to rx_length_th). port_recv_skb() strips the
++	 * ccci_header (PORT_F_ADJUST_HEADER), so the tty sees raw AT text.
++	 * 0: we own the skb; -CCCI_ERR_PORT_RX_FULL: the HIF keeps it.
++	 */
++	ret = port_recv_skb(port, skb);
++	if (ret == 0 && test_bit(PORT_TTY_OPEN, &pt->flags))
++		mod_delayed_work(system_wq, &pt->rx_work, 0);
++	return ret;
++}
++
++static void port_tty_md_state_notify(struct port_t *port,
++	unsigned int state)
++{
++	struct port_tty *pt = port->private_data;
++
++	/* blocked writers retry (and see -ENODEV when not READY) */
++	if (pt && test_bit(PORT_TTY_OPEN, &pt->flags))
++		tty_port_tty_wakeup(&pt->tport);
++}
++
++static void port_tty_dump_info(struct port_t *port, unsigned int flag)
++{
++	if (atomic_read(&port->usage_cnt) == 0)
++		return;
++	if (port->flags & PORT_F_CH_TRAFFIC)
++		CCCI_REPEAT_LOG(port->md_id, TAG,
++			"TTY:(%d):%dR(%d,%d,%d):%dT(%d)\n",
++			port->flags, port->rx_ch,
++			port->rx_skb_list.qlen,
++			port->rx_pkg_cnt, port->rx_drop_cnt,
++			port->tx_ch, port->tx_pkg_cnt);
++}
++
++static int port_tty_init(struct port_t *port)
++{
++	struct ccci_modem *md = ccci_md_get_modem_by_id(port->md_id);
++	struct device *parent = NULL;
++	struct tty_driver *drv;
++	struct port_tty *pt;
++	struct device *dev;
++	const char *digits;
++	unsigned int base = 0;
++	int ret;
++
++	port->rx_length_th = PORT_TTY_MAX_QUEUE_LENGTH;
++	port->skb_from_pool = 1;
++	port->interception = 0;
++	/* kernel adds/strips the ccci_header, as for the char ttyC0 */
++	port->flags &= ~PORT_F_USER_HEADER;
++	port->flags |= PORT_F_ADJUST_HEADER | PORT_F_CH_TRAFFIC;
++
++	pt = kzalloc(sizeof(*pt), GFP_KERNEL);
++	if (!pt)
++		return -ENOMEM;
++	pt->port = port;
++	INIT_DELAYED_WORK(&pt->rx_work, port_tty_rx_work);
++	INIT_DELAYED_WORK(&pt->tx_wake_work, port_tty_tx_wake_work);
++	tty_port_init(&pt->tport);
++	pt->tport.ops = &port_tty_port_ops;
++
++	/* "ttyC0" -> driver "ttyC", name_base 0 -> device ttyC0 */
++	digits = port->name + strlen(port->name);
++	while (digits > port->name && isdigit(digits[-1]))
++		digits--;
++	if (digits == port->name || !*digits ||
++	    kstrtouint(digits, 10, &base))
++		digits = port->name + strlen(port->name);
++	pt->name = kstrndup(port->name, digits - port->name, GFP_KERNEL);
++	if (!pt->name) {
++		ret = -ENOMEM;
++		goto err_free;
++	}
++
++	drv = tty_alloc_driver(1, TTY_DRIVER_REAL_RAW |
++		TTY_DRIVER_DYNAMIC_DEV);
++	if (IS_ERR(drv)) {
++		ret = PTR_ERR(drv);
++		goto err_free;
++	}
++	drv->driver_name = "ccci_tty";
++	drv->name = pt->name;
++	drv->name_base = base;
++	drv->major = 0;
++	drv->minor_start = 0;
++	drv->type = TTY_DRIVER_TYPE_SERIAL;
++	drv->subtype = SERIAL_TYPE_NORMAL;
++	/* raw 8N1, no echo, no flow control: what ModemManager sets anyway */
++	drv->init_termios = tty_std_termios;
++	drv->init_termios.c_iflag = 0;
++	drv->init_termios.c_oflag = 0;
++	drv->init_termios.c_lflag = 0;
++	drv->init_termios.c_cflag = B115200 | CS8 | CREAD | CLOCAL;
++	drv->init_termios.c_ispeed = 115200;
++	drv->init_termios.c_ospeed = 115200;
++	drv->driver_state = pt;
++	tty_set_operations(drv, &port_tty_ops);
++	ret = tty_register_driver(drv);
++	if (ret)
++		goto err_put;
++	pt->driver = drv;
++
++	/* parent: the eccci platform device, so udev/ModemManager see a
++	 * physical device under /sys/devices/platform
++	 */
++	if (md && md->plat_dev)
++		parent = &md->plat_dev->dev;
++	dev = tty_port_register_device(&pt->tport, drv, 0, parent);
++	if (IS_ERR(dev)) {
++		ret = PTR_ERR(dev);
++		goto err_unregister;
++	}
++	port->private_data = pt;
++	CCCI_INIT_LOG(port->md_id, TAG, "port %s is a tty (%s%u)\n",
++		port->name, pt->name, base);
++	return 0;
++
++err_unregister:
++	tty_unregister_driver(drv);
++	pt->driver = NULL;
++err_put:
++	put_tty_driver(drv);
++err_free:
++	tty_port_destroy(&pt->tport);
++	kfree(pt->name);
++	kfree(pt);
++	CCCI_ERROR_LOG(port->md_id, TAG, "port %s tty init fail %d\n",
++		port->name, ret);
++	return ret;
++}
++
++struct port_ops ccci_tty_port_ops = {
++	.init = &port_tty_init,
++	.recv_skb = &port_tty_recv_skb,
++	.md_state_notify = &port_tty_md_state_notify,
++	.dump_info = &port_tty_dump_info,
++};

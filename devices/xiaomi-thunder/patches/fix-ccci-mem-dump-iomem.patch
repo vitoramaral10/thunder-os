@@ -1,0 +1,110 @@
+thunder: CCCI memory dumps without __memcpy on ioremapped registers.
+
+On a modem exception the FSM dumps the DPMAIF registers through
+ccci_util_mem_dump(). The tail of each range (len % 16) was copied with a byte
+loop that gcc turns into a __memcpy; its 8-byte unaligned load on Device memory
+takes an alignment fault and panics the kernel (ccci_fsm1, __memcpy <-
+ccci_util_mem_dump <- dpmaif_dump_register <- fsm_routine_exception), so any
+modem assert rebooted the phone and lost the EE report. Read only aligned 32-bit
+words with READ_ONCE, the last one masked to the tail length. Same change in
+ccci_util_cmpt_mem_dump.
+
+--- a/drivers/misc/mediatek/ccci_util/ccci_private_log.c
++++ b/drivers/misc/mediatek/ccci_util/ccci_private_log.c
+@@ -967,11 +967,16 @@
+ 
+ void ccci_util_mem_dump(int md_id, int buf_type, void *start_addr, int len)
+ {
+-	unsigned int *curr_p = (unsigned int *)start_addr;
+-	unsigned char *curr_ch_p = NULL;
++	/* thunder: callers pass ioremapped registers (dpmaif_dump_register on a
++	 * modem exception). Plain loads let the compiler turn the byte loop of
++	 * the tail into a __memcpy, whose 8-byte unaligned load faults on Device
++	 * memory (alignment fault -> kernel panic). Only aligned 32-bit
++	 * READ_ONCE loads here; every caller passes a 4-byte aligned base.
++	 */
++	const u32 *curr_p = (const u32 *)start_addr;
+ 	int _16_fix_num = len / 16;
+ 	int tail_num = len % 16;
+-	char buf[16];
++	u32 w[4];
+ 	int i, j;
+ 
+ 	if (curr_p == NULL) {
+@@ -986,27 +991,23 @@
+ 	ccci_dump_write(md_id, buf_type, 0, "Base: %p\n", start_addr);
+ 	/* Fix section */
+ 	for (i = 0; i < _16_fix_num; i++) {
++		for (j = 0; j < 4; j++)
++			w[j] = READ_ONCE(curr_p[j]);
+ 		ccci_dump_write(md_id, buf_type, 0,
+ 				"%03X: %08X %08X %08X %08X\n",
+-				i * 16, *curr_p, *(curr_p + 1),
+-				*(curr_p + 2), *(curr_p + 3));
++				i * 16, w[0], w[1], w[2], w[3]);
+ 		curr_p += 4;
+ 	}
+ 
+-	/* Tail section */
++	/* Tail section: whole words, the last one masked to tail_num bytes */
+ 	if (tail_num > 0) {
+-		curr_ch_p = (unsigned char *)curr_p;
+-		for (j = 0; j < tail_num; j++) {
+-			buf[j] = *curr_ch_p;
+-			curr_ch_p++;
+-		}
+-		for (; j < 16; j++)
+-			buf[j] = 0;
+-		curr_p = (unsigned int *)buf;
++		for (j = 0; j < 4; j++)
++			w[j] = (j * 4 < tail_num) ? READ_ONCE(curr_p[j]) : 0;
++		if (tail_num % 4)
++			w[tail_num / 4] &= (1U << ((tail_num % 4) * 8)) - 1;
+ 		ccci_dump_write(md_id, buf_type, 0,
+ 				"%03X: %08X %08X %08X %08X\n",
+-				i * 16, *curr_p, *(curr_p + 1),
+-				*(curr_p + 2), *(curr_p + 3));
++				i * 16, w[0], w[1], w[2], w[3]);
+ 	}
+ }
+ EXPORT_SYMBOL(ccci_util_mem_dump);
+@@ -1015,10 +1016,9 @@
+ 	void *start_addr, int len)
+ {
+ 	unsigned int *curr_p = (unsigned int *)start_addr;
+-	unsigned char *curr_ch_p = NULL;
+ 	int _64_fix_num = len / 64;
+ 	int tail_num = len % 64;
+-	char buf[64];
++	u32 buf[16];
+ 	int i, j;
+ 
+ 	if (curr_p == NULL) {
+@@ -1046,16 +1046,18 @@
+ 			curr_p += 64/4;
+ 	}
+ 
+-	/* Tail section */
++	/* Tail section. thunder: whole aligned words with READ_ONCE, like
++	 * ccci_util_mem_dump: a byte loop becomes a __memcpy that faults on
++	 * ioremapped memory.
++	 */
+ 	if (tail_num > 0) {
+-		curr_ch_p = (unsigned char *)curr_p;
+-		for (j = 0; j < tail_num; j++) {
+-			buf[j] = *curr_ch_p;
+-			curr_ch_p++;
+-		}
+-		for (; j < 64; j++)
+-			buf[j] = 0;
+-		curr_p = (unsigned int *)buf;
++		u32 *w = (u32 *)buf;
++
++		for (j = 0; j < 16; j++)
++			w[j] = (j * 4 < tail_num) ? READ_ONCE(curr_p[j]) : 0;
++		if (tail_num % 4)
++			w[tail_num / 4] &= (1U << ((tail_num % 4) * 8)) - 1;
++		curr_p = w;
+ 		ccci_dump_write(md_id, buf_type, 0,
+ 			"%03X: %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X %X\n",
+ 			i * 64,

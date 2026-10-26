@@ -202,7 +202,7 @@ systemctl enable "${units[@]}"
 nmwifi=/usr/lib/NetworkManager/conf.d/51-thunder-wifi.conf
 if [ -n "$WIFI_INTERFACE" ]; then
 	printf '%s\n' "# Gerado pelo rootfs/configure.sh (WIFI_INTERFACE do device.sh)." \
-		'[keyfile]' "unmanaged-devices=except:interface-name:$WIFI_INTERFACE" > "$nmwifi"
+		'[keyfile]' "unmanaged-devices=except:interface-name:$WIFI_INTERFACE;except:type:gsm;except:interface-name:ccmni*" > "$nmwifi"
 	systemctl enable NetworkManager.service
 	if [ -n "$THUNDER_WIFI_SSID" ]; then
 		rm -f /etc/NetworkManager/system-connections/thunder-*.nmconnection

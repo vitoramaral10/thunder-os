@@ -55,8 +55,15 @@ remote_session() {
 }
 
 audio_playing() {
-	local out o
-	grep -qs 'state: RUNNING' /proc/asound/card*/pcm*p/sub*/status && return 0
+	local out o d
+	# PCM "Hostless_*" (sem buffer; a da voz e a Hostless_Speech): ler o status dela com o
+	# stream rodando chama o pointer do AFE da MediaTek, que indexa afe->memif fora do vetor
+	# e derruba o kernel (thunder-speechd, VOICE-AUDIO.md). O info e seguro. A chamada ja
+	# segura a suspensao pelo inibidor do thunder-speechd.
+	for d in /proc/asound/card*/pcm*p; do
+		grep -qs '^id: Hostless_' "$d/info" && continue
+		grep -qs 'state: RUNNING' "$d"/sub*/status && return 0
+	done
 	# A2DP sai pelo BlueZ, sem PCM local. Sem o bluetoothd no barramento, nao ha A2DP.
 	timeout 5 busctl --system status org.bluez >/dev/null 2>&1 || return 1
 	out=$(timeout 5 busctl --system --list tree org.bluez) || return 2

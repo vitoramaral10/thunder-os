@@ -1,0 +1,59 @@
+thunder: aceitar o +CREG/+CEREG no modo 3 do 27.007 (modem MediaTek MT6833).
+
+O MD responde no modo 3 mesmo depois de AT+CEREG=2, com AcT de dois digitos (13) e
+cause_type,reject_cause no fim; nenhuma regex casava e o MM ficava em "unknown
+registration status": modem enabled sem registro e connect com Network timeout.
+
+--- a/src/mm-modem-helpers.c
++++ b/src/mm-modem-helpers.c
+@@ -879,6 +879,12 @@
+     [12] = "\\+(C5GREG):\\s*([0-9]+)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([0-9]+)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)",
+     /* +C5GREG: <n>,<stat>,<lac>,<ci>,<AcT>,<Allowed_NSSAI_length>,<Allowed_NSSAI> (ETSI 27.007 solicited) */
+     [13] = "\\+(C5GREG):\\s*([0-9]+)\\s*,\\s*([0-9+])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*([0-9]+)\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)",
++    /* +CEREG: <n>,<stat>,<lac>,<ci>,<AcT>,<cause_type>,<reject_cause> (27.007 CEREG=3 solicited).
++     * MediaTek modems keep answering in mode 3 even after AT+CEREG=2, with a two-digit AcT
++     * (13, E-UTRA-NR dual connectivity): '+CEREG: 3,1,"C80B","0C362C16",13,0,0' */
++    [14] = "\\+(CREG|CGREG|CEREG):\\s*0*([0-9]),\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9]+)\\s*,\\s*[0-9]*\\s*,\\s*[0-9]*",
++    /* +CEREG: <stat>,<lac>,<ci>,<AcT>,<cause_type>,<reject_cause> (27.007 CEREG=3 unsolicited) */
++    [15] = "\\+(CREG|CGREG|CEREG):\\s*0*([0-9])\\s*,\\s*([^,\\s]*)\\s*,\\s*([^,\\s]*)\\s*,\\s*0*([0-9]+)\\s*,\\s*[0-9]*\\s*,\\s*[0-9]*",
+ };
+ 
+ GPtrArray *
+--- a/src/tests/test-modem-helpers.c
++++ b/src/tests/test-modem-helpers.c
+@@ -1508,6 +1508,26 @@
+ }
+ 
+ static void
++test_cereg3_mtk_solicited (void *f, gpointer d)
++{
++    RegTestData *data = (RegTestData *) d;
++    const char *reply = "+CEREG: 3,1,\"C80B\",\"0C362C16\",13,0,0";
++    const CregResult result = { MM_MODEM_3GPP_REGISTRATION_STATE_HOME, 0xc80b, 0x0c362c16, (MM_MODEM_ACCESS_TECHNOLOGY_LTE | MM_MODEM_ACCESS_TECHNOLOGY_5GNR), 14, FALSE, TRUE, FALSE };
++
++    test_creg_match ("MediaTek MT6833 CEREG=3", TRUE, reply, data, &result);
++}
++
++static void
++test_cereg3_mtk_unsolicited (void *f, gpointer d)
++{
++    RegTestData *data = (RegTestData *) d;
++    const char *reply = "\r\n+CEREG: 1,\"C80B\",\"0C362C16\",13,0,0\r\n";
++    const CregResult result = { MM_MODEM_3GPP_REGISTRATION_STATE_HOME, 0xc80b, 0x0c362c16, (MM_MODEM_ACCESS_TECHNOLOGY_LTE | MM_MODEM_ACCESS_TECHNOLOGY_5GNR), 15, FALSE, TRUE, FALSE };
++
++    test_creg_match ("MediaTek MT6833 CEREG=3", FALSE, reply, data, &result);
++}
++
++static void
+ test_cereg2_solicited (void *f, gpointer d)
+ {
+     RegTestData *data = (RegTestData *) d;
+@@ -4996,6 +5016,8 @@
+     g_test_suite_add (suite, TESTCASE (test_cereg1_solicited, reg_data));
+     g_test_suite_add (suite, TESTCASE (test_cereg1_unsolicited, reg_data));
+     g_test_suite_add (suite, TESTCASE (test_cereg2_solicited, reg_data));
++    g_test_suite_add (suite, TESTCASE (test_cereg3_mtk_solicited, reg_data));
++    g_test_suite_add (suite, TESTCASE (test_cereg3_mtk_unsolicited, reg_data));
+     g_test_suite_add (suite, TESTCASE (test_cereg2_unsolicited, reg_data));
+     g_test_suite_add (suite, TESTCASE (test_cereg2_altair_lte_solicited, reg_data));
+     g_test_suite_add (suite, TESTCASE (test_cereg2_altair_lte_unsolicited, reg_data));

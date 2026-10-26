@@ -50,6 +50,7 @@ require_device() {
 	CMDLINE=
 	ROOT_PARTITION=userdata
 	INITRAMFS_FIRMWARE=()
+	MODEM_ROM_TREES=()
 	FASTBOOT_PRODUCTS=()
 	ANDROID_DEVICES=()
 	FASTBOOT_AB=1
@@ -104,6 +105,9 @@ require_device() {
 	WORK=${WORK:-$BUILD/$DEVICE}
 	ROOTFS=${ROOTFS:-$WORK/rootfs}
 	FIRMWARE=${FIRMWARE:-$WORK/firmware}
+	# Arvores so leitura do modem tiradas da ROM (MODEM_ROM_TREES): fora de $FIRMWARE, que
+	# vai inteiro para /usr/lib/firmware.
+	MODEM_RO=${MODEM_RO:-$WORK/modem-ro}
 	KERNEL_SRC=$WORK/kernel-src
 	KERNEL_OUT=${KERNEL:-$WORK/kernel}
 	OUT=$WORK/out

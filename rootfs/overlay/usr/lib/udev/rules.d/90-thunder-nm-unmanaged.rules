@@ -1,3 +1,4 @@
-# O NetworkManager nunca mexe no cabo USB (gadget RNDIS, 172.16.42.1) nem no modem.
-# Reforco do unmanaged-devices de /usr/lib/NetworkManager/conf.d/5*-thunder*.conf.
-SUBSYSTEM=="net", ACTION!="remove", KERNEL=="rndis*|usb*|ccmni*", ENV{NM_UNMANAGED}="1"
+# O NetworkManager nunca mexe no cabo USB (gadget RNDIS, 172.16.42.1). O modem (ttyC0,
+# ccmni*) e dele: dados moveis pelo ModemManager (plugin mtk-ccci). Reforco do
+# unmanaged-devices de /usr/lib/NetworkManager/conf.d/5*-thunder*.conf.
+SUBSYSTEM=="net", ACTION!="remove", KERNEL=="rndis*|usb*", ENV{NM_UNMANAGED}="1"

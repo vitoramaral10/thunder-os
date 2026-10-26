@@ -96,13 +96,21 @@ time zone mix-up; the cause is unknown.
     MD request bits (`0x077`). The modem is never booted here (no `ccci_mdinit`,
     `md_state = 0`), yet its clock request stays on. Rfkill on Wi-Fi and Bluetooth changed
     nothing.
+- **Fixed by powering MD1 off.** The probe powers the MD1 domain ("dummy md sys clk") and
+  only the first start by Android's `ccci_mdinit` turns it off again. Turning `PG_MD1` off
+  by hand (`echo "disable_unprepare PG_MD1" > /proc/clkdbg; cat /proc/clkdbg`) dropped the
+  MD bits of `SRC_REQ_STA_0` (SPM base `0x10006000` + `0x114`) from `0x077` to 0, and 3 of 3
+  cycles on battery with the panel off then gave **`26M_off_pct = 99`**, all woken by the
+  RTC. The kernel now does it at boot through the vendor `md_cd_power_off()`
+  (`fix-ccci-md1-power-off-unused.patch`); `thunder.md1=on` on the command line keeps MD1
+  powered, for modem work.
 - `charge_counter` stays at its full value (2851000) while discharging from 100 %: it is
   not a usable battery meter for the night test.
 
 ## Still open
 
-- Release the modem's clock request so the SPM can turn off the 26 MHz (see "Measured, on
-  battery"); without it suspend saves little.
+- Confirm the MD1 power-off from the kernel patch (26M_off_pct on battery, boot log
+  "MD1 powered off").
 - The early Type-C wake-ups without a cable.
 - Then each wake source, then a night on battery; `charge_counter` does not move, so
   measure with the voltage or the capacity over hours.

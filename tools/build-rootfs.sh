@@ -236,6 +236,7 @@ userns bash -c 'set -e
 		mkdir -p "$S/packages/$p"; cp "$dir"/*.pkg.tar.* "$S/packages/$p/"
 	done <<< "$LOCAL_DIRS"
 	if [ -d "$FIRMWARE" ]; then cp -a "$FIRMWARE/." "$S/firmware/"; fi
+	if [ -d "$MODEM_RO" ]; then cp -a "$MODEM_RO" "$S/modem-ro"; fi
 	if [ -n "$AUTHORIZED_KEYS" ]; then cp "$AUTHORIZED_KEYS" "$S/authorized_keys"; fi
 	printf "%s\n" "$stage_config" > "$S/config"
 	cp "$repo/rootfs/configure.sh" "$repo/rootfs/finalize.sh" "$S/"
