@@ -31,9 +31,9 @@ void main() {
     expect(parseGetvar('unlocked: yes\n', 'product'), '');
     expect(
       parseAdbDevices('List of devices attached\nabc123\tunauthorized\n\n'),
-      ('abc123', 'unauthorized'),
+      [('abc123', 'unauthorized')],
     );
-    expect(parseAdbDevices('List of devices attached\n\n'), isNull);
+    expect(parseAdbDevices('List of devices attached\n\n'), isEmpty);
     // adb sem fio (outro celular na rede) nao conta como aparelho no cabo.
     expect(
       parseAdbDevices(
@@ -42,7 +42,7 @@ void main() {
         '192.168.0.5:5555\tdevice\n'
         'USB1\tdevice\n',
       ),
-      ('USB1', 'device'),
+      [('USB1', 'device')],
     );
   });
 

@@ -311,7 +311,9 @@ class Backend {
     }
 
     final adb = PlatformTools.exe('adb');
-    final row = parseAdbDevices((await runTool(adb, ['devices'])).$2);
+    final row = parseAdbDevices(
+      (await runTool(adb, ['devices'])).$2,
+    ).firstOrNull;
     if (row != null) {
       final (s, state) = row;
       // unauthorized/offline: a depuracao USB precisa ser aceita no aparelho.
@@ -380,11 +382,21 @@ class Backend {
   /// tools/to-fastboot.sh). Devolve o log.
   Future<String> toFastboot() async {
     final adb = PlatformTools.exe('adb');
-    final row = parseAdbDevices((await runTool(adb, ['devices'])).$2);
-    if (row != null && row.$2 == 'device') {
+    // Com dois Android prontos no cabo nao da para saber qual vai receber o sistema.
+    final ready = [
+      for (final (s, state) in parseAdbDevices(
+        (await runTool(adb, ['devices'])).$2,
+      ))
+        if (state == 'device') s,
+    ];
+    if (ready.length > 1) {
+      throw 'mais de um aparelho no adb (${ready.join(', ')}): deixe so o que '
+          'vai receber o Thunder OS no cabo';
+    }
+    if (ready.isNotEmpty) {
       final (code, out) = await runTool(adb, [
         '-s',
-        row.$1,
+        ready.single,
         'reboot',
         'bootloader',
       ]);

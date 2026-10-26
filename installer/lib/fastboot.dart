@@ -51,18 +51,18 @@ String parseGetvar(String out, String name) {
   return '';
 }
 
-/// Primeiro aparelho USB de `adb devices`: (serial, estado), ou null. Os de rede
+/// Aparelhos USB de `adb devices`: (serial, estado). Os de rede
 /// (ip:porta, adb sem fio por mDNS) ficam de fora: nao estao no cabo, e reinicia-los
 /// no bootloader seria mexer em outro celular.
-(String, String)? parseAdbDevices(String out) {
-  for (final l in const LineSplitter().convert(out).skip(1)) {
-    final cols = l.trim().split(RegExp(r'\s+'));
-    if (cols.length < 2) continue;
-    if (cols[0].contains(':') || cols[0].contains('._adb-tls-')) continue;
-    return (cols[0], cols[1]);
-  }
-  return null;
-}
+List<(String, String)> parseAdbDevices(String out) => [
+  for (final l in const LineSplitter().convert(out).skip(1))
+    if (l.trim().split(RegExp(r'\s+')) case [
+      final s,
+      final state,
+      ...,
+    ] when !s.contains(':') && !s.contains('._adb-tls-'))
+      (s, state),
+];
 
 Future<String> getvar(String name, {String? serial}) async {
   final (_, out) = await runTool(PlatformTools.exe('fastboot'), [
@@ -158,14 +158,30 @@ Future<void> flash(
     if (cancelled?.call() ?? false) throw 'cancelado';
     log('fastboot ${args.join(' ')}');
     final p = await Process.start(fb, ['-s', serial, ...args]);
-    await Future.wait([
+    final drained = Future.wait([
       for (final s in [p.stdout, p.stderr])
         s
             .transform(const Utf8Decoder(allowMalformed: true))
             .transform(const LineSplitter())
             .forEach(log),
     ]);
-    final code = await p.exitCode;
+    // Cancelar ou travar mata o fastboot: a particao fica pela metade, mas o
+    // aparelho segue no fastboot e aceita gravar de novo. O limite cobre a raiz
+    // inteira pelo USB 2 com folga.
+    final deadline = DateTime.now().add(const Duration(minutes: 30));
+    int? code;
+    p.exitCode.then((c) => code = c);
+    while (code == null) {
+      final stop = cancelled?.call() ?? false;
+      if (stop || DateTime.now().isAfter(deadline)) {
+        p.kill();
+        throw stop
+            ? 'cancelado'
+            : 'fastboot ${args.first} nao terminou em 30 min';
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    await drained.timeout(const Duration(seconds: 5), onTimeout: () => []);
     if (code != 0) throw 'fastboot ${args.first} falhou (codigo $code)';
   }
 

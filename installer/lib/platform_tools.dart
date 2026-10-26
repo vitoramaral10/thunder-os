@@ -36,11 +36,14 @@ class PlatformTools {
     return name;
   }
 
-  /// Ja da para chamar o fastboot (baixado ou no PATH)?
+  /// Ja da para chamar o fastboot e o adb (baixados ou no PATH)?
   static Future<bool> available() async {
     try {
-      final r = await Process.run(exe('fastboot'), const ['--version']);
-      return r.exitCode == 0;
+      for (final tool in ['fastboot', 'adb']) {
+        final r = await Process.run(exe(tool), const ['--version']);
+        if (r.exitCode != 0) return false;
+      }
+      return true;
     } on ProcessException {
       return false;
     }
