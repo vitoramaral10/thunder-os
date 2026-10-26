@@ -86,7 +86,7 @@ locale and the timezone. Interface options and their state:
    the root partition (usually `userdata`) and disables verified boot.
 
 ```sh
-cp local.conf.example local.conf    # set DEVICE=<folder name>
+cp local.conf.example local.conf    # set DEVICE=<folder name> and THUNDER_PASSWORD=<password>
 tools/fetch-cross.sh
 tools/build-kernel.sh
 tools/extract-firmware.sh ~/Downloads/<factory-rom>.tgz

@@ -29,7 +29,9 @@ and MediaTek never published a newer BSP.
 | Suspend | works with the cable (test levels) | off | policy and guard in the image, `AllowSuspend=no` until tested on battery, see [docs/suspend.md](docs/suspend.md) |
 | Vibration | works | works | `regulator-haptic` on the PMIC's VIBR LDO: a force-feedback input that feedbackd (Phosh) uses |
 | Flashlight | works | works | rear LED (MT6360 FLED1) as `white:torch`, up to 200 mA; Phosh's torch button |
-| Modem, cameras, GPS | not started | | the vendor stacks are Android userspace |
+| Modem | experimental | | data, SMS and voice through ModemManager (`modemmanager-thunder`, `thunder-modemd`, `thunder-speechd`); not yet tested end to end |
+| GPS | experimental | | the ROM's mnld in a chroot (`thunder-mediatek-gnss`); no outdoor fix tested yet |
+| Cameras | not started | | the vendor stack is Android userspace |
 
 "Not wired" means the driver works, but the service that brings it up is not
 in the image yet.

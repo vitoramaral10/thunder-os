@@ -487,15 +487,15 @@ Bring-up of the userland side: [wifi-bringup.md](wifi-bringup.md),
 - **The initramfs must be gzip.** `CONFIG_RD_GZIP` is the only initramfs decompressor
   (bzip2, lzma, xz, lzo and lz4 are off). The LK bootloader also accepts only a compressed
   kernel (Image.gz).
-- **No systemd.** The kernel lacks `close_range()` (5.9) and `waitid(P_PIDFD)` (5.4), and
-  `CONFIG_FHANDLE` is off. Since systemd 260 (baseline 5.10) there is no fallback, so
-  systemd 262 cannot run here. Hence OpenRC as PID 1.
-- **`waitid(P_PIDFD)` is missing but `pidfd_open()` and `CLONE_PIDFD` exist** (backported
-  into the Android 4.19 tree). A pidfd can be created and polled, but cannot be reaped
-  with `waitid`: the call returns `EINVAL`. `kernel/fork.c` handles `CLONE_PIDFD` while
-  `include/uapi/linux/wait.h` defines only `P_ALL` and `P_PID`. glib's child watch needs a
-  fallback to the SIGCHLD path (see `rootfs/packages/glib/`); without it a caller gets
-  wait status `-1` and children stay zombies.
+- **systemd runs on backports.** The base 4.19 lacks `close_range()` (5.9),
+  `waitid(P_PIDFD)` (5.4) and `faccessat2()` (5.8), and systemd 260+ (baseline 5.10) has no
+  fallback. The tree backports them and turns on `CONFIG_FHANDLE`, so systemd 262 is PID 1
+  (see [Backports for Arch's systemd 262 userland](#backports-for-archs-systemd-262-userland)).
+- **Before the `waitid(P_PIDFD)` backport, only `pidfd_open()` and `CLONE_PIDFD` existed**
+  (backported into the Android 4.19 tree). A pidfd could be created and polled, but not
+  reaped with `waitid`: the call returned `EINVAL`. glib's child watch got a fallback to the SIGCHLD path
+  (see `rootfs/packages/glib/`); without it a caller got wait status `-1` and children
+  stayed zombies.
 - **Other syscalls missing for a 4.19 base:** `openat2()` (5.6) returns `ENOSYS`, so
   bubblewrap built with `-Dassume_kernel` at a newer kernel fails every bind mount.
   `faccessat()` with `AT_SYMLINK_NOFOLLOW` returns `EINVAL` (`faccessat2()` is 5.8), which
