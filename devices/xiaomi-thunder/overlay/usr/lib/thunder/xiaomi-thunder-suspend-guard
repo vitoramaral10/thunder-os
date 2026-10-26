@@ -1,0 +1,131 @@
+#!/bin/bash
+# Vigia de suspensao do thunder: segura um inibidor "sleep" do logind (systemd-inhibit,
+# modo block) por condicao ativa e solta quando ela some, como um wakelock do Android:
+# nem a suspensao por ociosidade (IdleAction) nem a manual passam enquanto houver um.
+# "systemd-inhibit --list" mostra o motivo. Escolhas e medidas: docs/suspend.md.
+#
+#   cabo de dados no PC (UDC configured)  o musb so salva registradores; o SSH de resgate
+#                                         cairia
+#   carregador ligado                     o carregador da MediaTek rearma um alarme a cada
+#                                         10-20 s; na tomada so a tela apaga
+#   SSH (conexao na porta 22 ou sessao remota do logind; pega tunel ssh -N tambem)
+#   audio tocando (PCM RUNNING, A2DP)     nem ALSA nem PipeWire inibem sozinhos
+#   pacman rodando (db.lck)
+#
+# Nao usa "idle": o swayidle (e o logind) leem "idle" como "nao apagar a tela", e o
+# painel ficaria aceso enquanto carrega ou com SSH aberto.
+#
+# Cada teste devolve 0 (vale), 1 (nao vale) ou 2 (nao deu para saber: D-Bus ou comando
+# travado); no 2 o estado fica como estava, em vez de soltar a protecao. A varredura
+# pega antes os inibidores novos e so depois solta os velhos.
+#
+# Nunca le /sys/power/wakeup_count: com o cabo, o "USB suspend lock" do musb fica ativo
+# e a leitura bloqueia ate ele soltar.
+set -u
+
+INTERVAL=10
+declare -A held=()	# condicao -> PID do systemd-inhibit
+
+udc_configured() {
+	local s
+	for s in /sys/class/udc/*/state; do
+		[ "$(cat "$s" 2>/dev/null)" = configured ] && return 0
+	done
+	return 1
+}
+
+charger_online() {
+	local o
+	for o in /sys/class/power_supply/{ac,usb}/online; do
+		[ "$(cat "$o" 2>/dev/null)" = 1 ] && return 0
+	done
+	return 1
+}
+
+# Conexao TCP estabelecida no sshd: cobre tambem o que nao abre sessao no logind.
+remote_session() {
+	local out s r rc=1
+	out=$(timeout 5 ss -Htn state established '( sport = :22 )') || return 2
+	[ -n "$out" ] && return 0
+	out=$(timeout 5 loginctl list-sessions --no-legend) || return 2
+	for s in $(awk '{print $1}' <<< "$out"); do
+		# Consulta que falhou nao e "nao remota": 2 mantem o inibidor como esta.
+		r=$(timeout 5 loginctl show-session "$s" -p Remote --value) || { rc=2; continue; }
+		[ "$r" = yes ] && return 0
+	done
+	return $rc
+}
+
+audio_playing() {
+	local out o d st rc=1
+	# PCM "Hostless_*" (sem buffer; a da voz e a Hostless_Speech): ler o status dela com o
+	# stream rodando chama o pointer do AFE da MediaTek, que indexa afe->memif fora do vetor
+	# e derruba o kernel (thunder-speechd, VOICE-AUDIO.md). O info e seguro. A chamada ja
+	# segura a suspensao pelo inibidor do thunder-speechd.
+	for d in /proc/asound/card*/pcm*p; do
+		grep -qs '^id: Hostless_' "$d/info" && continue
+		grep -qs 'state: RUNNING' "$d"/sub*/status && return 0
+	done
+	# A2DP sai pelo BlueZ, sem PCM local. Sem o bluetoothd no barramento, nao ha A2DP.
+	timeout 5 busctl --system status org.bluez >/dev/null 2>&1 || return 1
+	out=$(timeout 5 busctl --system --list tree org.bluez) || return 2
+	for o in $(grep -E '/fd[0-9]+$' <<< "$out"); do
+		st=$(timeout 5 busctl --system get-property org.bluez "$o" \
+			org.bluez.MediaTransport1 State 2>/dev/null) || { rc=2; continue; }
+		[[ $st == *'"active"'* ]] && return 0
+	done
+	return $rc
+}
+
+pacman_running() { [ -e /var/lib/pacman/db.lck ]; }
+
+# O systemd-inhibit e filho deste script: o PID dele so e reciclado depois do wait, entao
+# kill nunca acerta outro processo. Morto, ele fica zumbi ate o wait; kill -0 nao serve
+# para saber se ainda segura o inibidor, o estado em /proc sim.
+alive() { local st; st=$(awk '{print $3}' "/proc/$1/stat" 2>/dev/null) && [ "$st" != Z ]; }
+
+hold() {	# $1 condicao, $2 motivo
+	local p=${held[$1]:-}
+	if [ -n "$p" ]; then
+		alive "$p" && return
+		wait "$p" 2>/dev/null
+		echo "o inibidor de $1 morreu; pegando de novo"
+	fi
+	systemd-inhibit --mode=block --who=xiaomi-thunder-suspend-guard --what=sleep \
+		--why="$2" sleep infinity &
+	held[$1]=$!
+	echo "inibindo: $2"
+}
+
+release() {
+	[ -n "${held[$1]:-}" ] || return 0
+	kill "${held[$1]}" 2>/dev/null
+	wait "${held[$1]}" 2>/dev/null
+	unset "held[$1]"
+	echo "solto: $1"
+}
+
+declare -a drop=()
+check() {	# $1 condicao, $2 motivo, $3... teste
+	local c=$1 why=$2 r
+	shift 2
+	"$@"; r=$?
+	case $r in
+	0) hold "$c" "$why" ;;
+	1) drop+=("$c") ;;
+	esac
+}
+
+trap 'for c in "${!held[@]}"; do release "$c"; done; exit 0' TERM INT
+
+while :; do
+	check cabo "cabo de dados no PC (SSH de resgate)" udc_configured
+	check carga "carregando" charger_online
+	check ssh "sessao remota aberta" remote_session
+	check audio "audio tocando" audio_playing
+	check pacman "pacman rodando" pacman_running
+	for c in ${drop[@]+"${drop[@]}"}; do release "$c"; done
+	drop=()
+	sleep "$INTERVAL" &
+	wait $!
+done

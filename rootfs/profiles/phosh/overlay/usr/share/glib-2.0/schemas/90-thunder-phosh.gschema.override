@@ -1,0 +1,7 @@
+# A suspensao por ociosidade fica com o logind (IdleAction, onde o aparelho tem), nao com o
+# gsd-power: ele suspenderia tambem na tomada, nao volta a dormir depois de um wake sem
+# toque (Phosh #686) e nao reavalia inibidor solto. O Phosh continua apagando a tela pelo
+# idle-delay; o gnome-session marca o IdleHint da sessao no logind. docs/suspend.md (aparelho).
+[org.gnome.settings-daemon.plugins.power]
+sleep-inactive-battery-type='nothing'
+sleep-inactive-ac-type='nothing'

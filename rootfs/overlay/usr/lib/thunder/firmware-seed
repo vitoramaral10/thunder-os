@@ -1,0 +1,114 @@
+#!/bin/bash
+# Copia o que o aparelho precisa da ROM direto da super de fabrica, que a instalacao nunca
+# grava: firmware (FIRMWARE_FILES), arvores do modem (MODEM_ROM_TREES) e o chroot do mnld
+# (GNSS_ROM_FILES). Cada particao do slot ativo vira um dm-linear so leitura (extents do
+# lpdump) montado ro,noload; um APEX e um zip com uma imagem ext4 (apex_payload.img),
+# montada por loop. Tudo num namespace privado da unit (PrivateMounts=).
+# Mesmos arquivos e destinos do tools/extract-firmware.sh (que faz o mesmo de uma ROM no PC).
+# DESTDIR no ambiente copia para outra raiz (teste no aparelho sem tocar no sistema).
+set -euo pipefail
+FIRMWARE_ROM_PARTITION=vendor FIRMWARE_ROM_DIRS=() FIRMWARE_FILES=() FIRMWARE_REQUIRED=()
+MODEM_ROM_TREES=() GNSS_ROM_FILES=()
+. /usr/lib/thunder/firmware-seed.conf
+dest=${DESTDIR:-}
+super=/dev/disk/by-partlabel/super
+[ -e "$super" ] || { echo "<3>$super ausente: sem ROM de fabrica para copiar" >&2; exit 66; }
+
+suffix=$(sed -n 's/.*androidboot\.slot_suffix=\(_[ab]\).*/\1/p' /proc/cmdline)
+suffix=${suffix:-_a}
+case $suffix in _b) mslot=1 ;; *) mslot=0 ;; esac
+lp=$(lpdump --slot="$mslot" "$super")
+
+work=$(mktemp -d /run/thunder-fwseed.XXXXXX)
+dms=()
+cleanup() {
+	local m d
+	for m in $(findmnt -rn -o TARGET | grep "^$work/" | sort -r); do umount "$m" || true; done
+	for d in "${dms[@]}"; do dmsetup remove "$d" || true; done
+	rm -rf "$work"
+}
+trap cleanup EXIT
+
+# Monta (uma vez) a particao <nome> do slot ativo, ou o APEX <nome>:<caminho do .apex>,
+# e deixa o diretorio em $mounted.
+declare -A at=()
+mount_src() {
+	local src=$1 part=${1%%:*} apex= dir table name
+	[ "$src" = "$part" ] || apex=${src#*:}
+	if [ -n "${at[$src]-}" ]; then mounted=${at[$src]}; return; fi
+	if [ -z "${at[$part]-}" ]; then
+		# "  0 .. 1667199 linear super 14807040" (setores de 512 B)
+		table=$(awk -v p="$part$suffix" -v dev="$super" '
+			/Name:/ { on = ($2 == p); next }
+			on && $2 == ".." && $4 == "linear" { printf "%d %d linear %s %d\n", $1, $3 - $1 + 1, dev, $6 }' <<< "$lp")
+		[ -n "$table" ] || { echo "<3>$part$suffix nao esta na super" >&2; exit 65; }
+		name=thunder-fwseed-$$-$part; dms+=("$name")
+		dmsetup create "$name" --readonly --table "$table"
+		dir=$work/$part; mkdir -p "$dir"
+		# shortcut: so ext4 (e o desta ROM); EROFS pede fsck.erofs --extract como no
+		# extract-firmware.sh, o kernel 4.19 nao tem EROFS.
+		mount -t ext4 -o ro,noload,nodev,nosuid,noexec "/dev/mapper/$name" "$dir"
+		at[$part]=$(realpath -e "$dir")
+	fi
+	if [ -n "$apex" ]; then
+		local zip; zip=$(inside "${at[$part]}" "$apex") || { echo "<3>$apex ausente no $part" >&2; exit 65; }
+		dir=$work/apex-${apex##*/}; mkdir -p "$dir"
+		python3 -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extract("apex_payload.img", sys.argv[2])' "$zip" "$dir.d"
+		mount -t ext4 -o ro,loop,noload,nodev,nosuid,noexec "$dir.d/apex_payload.img" "$dir"
+		at[$src]=$(realpath -e "$dir")
+	fi
+	mounted=${at[$src]}
+}
+
+# Um link simbolico na ROM (absoluto ou com ..) leria um arquivo do proprio sistema: so
+# vale o que resolve dentro da montagem <raiz>.
+inside() { local f; f=$(realpath -e -- "$1$2" 2>/dev/null) || return 1
+	case $f in "$1"/*) [ -e "$f" ] && echo "$f" ;; *) return 1 ;; esac; }
+# Copia arquivo ou arvore (so arquivos regulares) para <destino>.
+put() { rm -rf -- "$2"; mkdir -p "${2%/*}"
+	if [ -d "$1" ]; then cp -r --no-dereference -- "$1" "$2"; find "$2" -type l -delete
+	else install -m644 -- "$1" "$2"; fi; }
+
+if [ ${#FIRMWARE_FILES[@]} -gt 0 ]; then
+	mount_src "$FIRMWARE_ROM_PARTITION"; root=$mounted
+	fw=$dest/usr/lib/firmware
+	missing=()
+	for f in "${FIRMWARE_FILES[@]}"; do
+		src=
+		for d in "${FIRMWARE_ROM_DIRS[@]}"; do src=$(inside "$root" "$d/$f") && [ -f "$src" ] && break; src=; done
+		if [ -n "$src" ]; then put "$src" "$fw/$f"; else missing+=("$f"); fi
+	done
+	for f in "${FIRMWARE_REQUIRED[@]}"; do
+		[ -s "$fw/$f" ] || { echo "<3>faltou $f na ROM: e a deste aparelho?" >&2; exit 1; }
+	done
+	[ ${#missing[@]} -eq 0 ] || echo "<4>nao achei na ROM: ${missing[*]}" >&2
+	echo "firmware: $(( ${#FIRMWARE_FILES[@]} - ${#missing[@]} )) de ${#FIRMWARE_FILES[@]} arquivos"
+
+	# Arvores so leitura do modem (thunder-modemd MODEM_RO_ROOT)
+	for t in "${MODEM_ROM_TREES[@]}"; do
+		src=${t%%:*}
+		[ -d "$root$src" ] && [ ! -L "$root$src" ] || { echo "<4>$src ausente na ROM" >&2; continue; }
+		put "$root$src" "$dest/usr/share/thunder-modem/vendor/${t#*:}"
+	done
+fi
+
+# Chroot do mnld: tudo ou nada (um chroot pela metade so falharia mais tarde, no GPS).
+if [ ${#GNSS_ROM_FILES[@]} -gt 0 ]; then
+	g=$dest/usr/lib/thunder/gnss/root
+	rm -rf -- "$g.new"
+	for e in "${GNSS_ROM_FILES[@]}"; do
+		read -r -d "" -a w <<< "$e" || true  # a entrada pode ter varias linhas
+		mount_src "${w[0]}"
+		for p in "${w[@]:2}"; do
+			src=$(inside "$mounted" "$p") || { echo "<3>GPS: $p ausente em ${w[0]}" >&2; exit 1; }
+			put "$src" "$g.new${w[1]}/${p##*/}"
+		done
+	done
+	chmod 755 "$g.new/system/bin/linker64" "$g.new/vendor/bin/mnld"
+	mkdir -p "$g.new"/{dev,proc,sys,run,tmp,data/vendor/gps}
+	rm -rf -- "$g"; mv "$g.new" "$g"
+	echo "GPS: $(find "$g" -type f | wc -l) arquivos no chroot"
+fi
+
+mkdir -p "$dest/var/lib/thunder"
+date -Is > "$dest/var/lib/thunder/firmware-seeded"

@@ -1,0 +1,3423 @@
+Subject: [PATCH] plugins: new mtk-ccci plugin (MediaTek SoC modem over CCCI, AT only)
+
+MediaTek SoC modems (MD1) on vendor kernels expose an AT channel on the CCCI
+tty (/dev/ttyC0) and the data path on ccmniN network devices, without USB or
+PCI ids and without MIPC. The plugin claims those ports by the udev tag
+ID_MM_MTK_CCCI and groups them by ID_MM_PHYSDEV_UID (77-mm-mtk-ccci.rules).
+
+- powers the MD up (+CFUN=1) before the SIM checks, sends AT+EDALLOW=1
+- swallows the proprietary URCs that otherwise break response parsing
+- data: +CGDCONT + +CGACT=1,<cid>; the "+EIF: <id>, ifup, <cid>, <ipv4>"
+  report selects ccmni<id % 100>; static IPv4 /32 without gateway, DNS from
+  +CGCONTRDP, address fallback from +CGPADDR; unexpected "ifdown" reports the
+  bearer disconnected, "ifchg" keeps it
+- voice: +ECPI call progress mapped to call states, +CLCC for the rest, ATH
+  for hangup all
+- unit tests for the +EIF, +ECPI, +CGCONTRDP, +CGPADDR parsers and +COPS AcT
+
+Adapted in part from the mtk-soc plugin of the MT6895-Mainline
+modemmanager-mtk-soc fork (GPL-2.0-or-later).
+---
+diff --git c/meson.build i/meson.build
+index d815ec3..8880579 100644
+--- c/meson.build
++++ i/meson.build
+@@ -346,6 +346,7 @@ plugins_options_reqs = {
+   'motorola': {'available': true, 'shared': []},
+   'mtk-legacy': {'available': true, 'shared': mtk_shared_reqs},
+   'mtk': {'available': true, 'shared': mtk_shared_reqs},
++  'mtk-ccci': {'available': true, 'shared': []},
+   'netprisma': {'available': true, 'shared': ['quectel']},
+   'nokia': {'available': true, 'shared': []},
+   'nokia-icera': {'available': true, 'shared': ['icera']},
+diff --git c/meson_options.txt i/meson_options.txt
+index c0609fe..75a1e34 100644
+--- c/meson_options.txt
++++ i/meson_options.txt
+@@ -47,6 +47,7 @@ option('plugin_mbm', type: 'feature', value: 'auto', description: 'enable mbm pl
+ option('plugin_motorola', type: 'feature', value: 'auto', description: 'enable motorola plugin support')
+ option('plugin_mtk_legacy', type: 'feature', value: 'auto', description: 'enable mtk legacy plugin support')
+ option('plugin_mtk', type: 'feature', value: 'auto', description: 'enable mtk plugin support')
++option('plugin_mtk_ccci', type: 'feature', value: 'auto', description: 'enable mtk ccci (MediaTek SoC over CCCI, AT only) plugin support')
+ option('plugin_netprisma', type: 'feature', value: 'auto', description: 'enable netprisma plugin support')
+ option('plugin_nokia', type: 'feature', value: 'auto', description: 'enable nokia plugin support')
+ option('plugin_nokia_icera', type: 'feature', value: 'auto', description: 'enable nokia icera plugin support')
+diff --git c/src/plugins/meson.build i/src/plugins/meson.build
+index b21b5e3..cc0b28c 100644
+--- c/src/plugins/meson.build
++++ i/src/plugins/meson.build
+@@ -734,6 +734,29 @@ if plugins_options['mtk']
+   }}
+ endif
+ 
++# plugin: mtk-ccci
++if plugins_options['mtk-ccci']
++  test_udev_rules_dir_c_args = ['-DTESTUDEVRULESDIR_MTK_CCCI="@0@"'.format(plugins_dir / 'mtk-ccci')]
++  plugins_test_udev_rules_dir_c_args += test_udev_rules_dir_c_args
++
++  common_c_args = ['-DMM_MODULE_NAME="mtk-ccci"']
++
++  sources = files(
++    'mtk-ccci/mm-broadband-bearer-mtk-ccci.c',
++    'mtk-ccci/mm-broadband-modem-mtk-ccci.c',
++    'mtk-ccci/mm-plugin-mtk-ccci.c',
++  )
++
++  plugins += {'plugin-mtk-ccci': {
++    'plugin': true,
++    'helper': {'sources': files('mtk-ccci/mm-modem-helpers-mtk-ccci.c'), 'include_directories': plugins_incs, 'c_args': common_c_args},
++    'module': {'sources': sources, 'include_directories': plugins_incs, 'c_args': test_udev_rules_dir_c_args + common_c_args},
++    'test': {'sources': files('mtk-ccci/tests/test-modem-helpers-mtk-ccci.c'), 'include_directories': include_directories('mtk-ccci'), 'dependencies': libhelpers_dep},
++  }}
++
++  plugins_udev_rules += files('mtk-ccci/77-mm-mtk-ccci.rules')
++endif
++
+ # plugin: nokia
+ if plugins_options['nokia']
+   sources = files(
+diff --git c/src/plugins/mm-builtin-plugins.c i/src/plugins/mm-builtin-plugins.c
+index c7f9163..bbe282c 100644
+--- c/src/plugins/mm-builtin-plugins.c
++++ i/src/plugins/mm-builtin-plugins.c
+@@ -79,6 +79,9 @@ MMPlugin *mm_plugin_create_motorola (void);
+ #if defined ENABLE_PLUGIN_MTK
+ MMPlugin *mm_plugin_create_mtk (void);
+ #endif
++#if defined ENABLE_PLUGIN_MTK_CCCI
++MMPlugin *mm_plugin_create_mtk_ccci (void);
++#endif
+ #if defined ENABLE_PLUGIN_NOKIA
+ MMPlugin *mm_plugin_create_nokia (void);
+ #endif
+@@ -217,6 +220,9 @@ mm_builtin_plugins_load (void)
+ #if defined ENABLE_PLUGIN_MTK
+     PREPEND_PLUGIN (mtk);
+ #endif
++#if defined ENABLE_PLUGIN_MTK_CCCI
++    PREPEND_PLUGIN (mtk_ccci);
++#endif
+ #if defined ENABLE_PLUGIN_NOKIA
+     PREPEND_PLUGIN (nokia);
+ #endif
+diff --git c/src/plugins/mtk-ccci/77-mm-mtk-ccci.rules i/src/plugins/mtk-ccci/77-mm-mtk-ccci.rules
+new file mode 100644
+index 0000000..f4e2231
+--- /dev/null
++++ i/src/plugins/mtk-ccci/77-mm-mtk-ccci.rules
+@@ -0,0 +1,24 @@
++# do not edit this file, it will be overwritten on update
++
++# MediaTek SoC modem (MD1) on vendor kernels: the CCCI AT channel (ttyC0, a
++# tty) and the ccmniN network devices carry no USB/PCI ids. Tag them for the
++# mtk-ccci plugin and give them a common physdev UID so that they all make up
++# one modem. ccmni-lan (tethering) does not match and is left alone.
++# Only one MD is handled; a SoC exposing more would need one UID per MD.
++
++ACTION!="add|change|move|bind", GOTO="mm_mtk_ccci_end"
++
++SUBSYSTEM=="tty", KERNEL=="ttyC0", GOTO="mm_mtk_ccci_at"
++SUBSYSTEM=="net", KERNEL=="ccmni[0-9]*", GOTO="mm_mtk_ccci_port"
++GOTO="mm_mtk_ccci_end"
++
++LABEL="mm_mtk_ccci_at"
++ENV{ID_MM_PORT_TYPE_AT_PRIMARY}="1"
++# fall through: the AT port gets the common tags too
++
++LABEL="mm_mtk_ccci_port"
++ENV{ID_MM_CANDIDATE}="1"
++ENV{ID_MM_MTK_CCCI}="1"
++ENV{ID_MM_PHYSDEV_UID}="mtk-ccci-md1"
++
++LABEL="mm_mtk_ccci_end"
+diff --git c/src/plugins/mtk-ccci/mm-broadband-bearer-mtk-ccci.c i/src/plugins/mtk-ccci/mm-broadband-bearer-mtk-ccci.c
+new file mode 100644
+index 0000000..5644463
+--- /dev/null
++++ i/src/plugins/mtk-ccci/mm-broadband-bearer-mtk-ccci.c
+@@ -0,0 +1,934 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Copyright (C) 2026 Thunder OS contributors
++ *
++ * Data bearer of MediaTek SoC modems over CCCI (AT only, no MIPC).
++ *
++ * The generic 3GPP sequence of MMBroadbandBearer (profile selection with
++ * +CGDCONT, then dial, then IP config) is kept; only dialing, IP config and
++ * disconnection are replaced:
++ *
++ *  - dial: if the cid is already active on a known interface it is reused;
++ *    otherwise +CGDCONT is written again for the cid (the MD activates an
++ *    undefined cid on an emergency APN) and +CGACT=1,<cid> sent. The MD then
++ *    reports "+EIF: <id>, ifup, <cid>, <ipv4>, ..." and the data interface is
++ *    ccmni<id % 100>, which must have been grabbed as a net port. Without the
++ *    report within 20 s the context is cycled once.
++ *  - IP config: static, from the +EIF report, +CGCONTRDP and +CGPADDR. The
++ *    ccmni devices are NOARP point-to-point links without DHCP: IPv4 is the
++ *    PDN address as /32 with no gateway.
++ *  - disconnect: +CGACT=0,<cid> (the MD then reports "ifdown").
++ *
++ * An "ifdown" not requested by us reports the bearer as disconnected; an
++ * "ifchg" (e.g. CS fallback during a voice call) keeps it.
++ */
++
++#include <config.h>
++
++#include <string.h>
++
++#include <ModemManager.h>
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "mm-base-modem-at.h"
++#include "mm-broadband-bearer-mtk-ccci.h"
++#include "mm-log-object.h"
++#include "mm-modem-helpers.h"
++#include "mm-modem-helpers-mtk-ccci.h"
++#include "mm-port-net.h"
++
++struct _MMBroadbandBearerMtkCcciPrivate {
++    /* +EIF ifup of the current connection, NULL when not connected */
++    MMMtkCcciEifInfo *connected;
++};
++
++G_DEFINE_TYPE_WITH_PRIVATE (MMBroadbandBearerMtkCcci, mm_broadband_bearer_mtk_ccci, MM_TYPE_BROADBAND_BEARER)
++
++/* Time to wait for the +EIF ifup after +CGACT=1 returned OK */
++#define EIF_IFUP_TIMEOUT_SECS 20
++#define CGACT_TIMEOUT_SECS    60
++
++/*****************************************************************************/
++/* Track the interface of the current connection */
++
++static void
++modem_eif_report (MMBroadbandModemMtkCcci  *modem,
++                  const MMMtkCcciEifInfo   *info,
++                  MMBroadbandBearerMtkCcci *self)
++{
++    if (!self->priv->connected || !mm_mtk_ccci_eif_same_interface (self->priv->connected, info))
++        return;
++
++    switch (info->event) {
++    case MM_MTK_CCCI_EIF_EVENT_IFDOWN:
++        mm_obj_info (self, "ccmni%u went down: connection lost", info->interface_index);
++        g_clear_pointer (&self->priv->connected, mm_mtk_ccci_eif_info_free);
++        mm_base_bearer_report_connection_status (MM_BASE_BEARER (self),
++                                                 MM_BEARER_CONNECTION_STATUS_DISCONNECTED);
++        break;
++    case MM_MTK_CCCI_EIF_EVENT_IFCHG:
++        mm_obj_info (self, "ccmni%u changed: connection kept", info->interface_index);
++        if (info->ipv4 && g_strcmp0 (info->ipv4, self->priv->connected->ipv4) != 0)
++            mm_obj_warn (self, "ccmni%u reports a new IPv4 address %s (was %s); reconnect to apply it",
++                         info->interface_index, info->ipv4,
++                         self->priv->connected->ipv4 ? self->priv->connected->ipv4 : "n/a");
++        break;
++    case MM_MTK_CCCI_EIF_EVENT_IFUP:
++    case MM_MTK_CCCI_EIF_EVENT_UNKNOWN:
++    default:
++        break;
++    }
++}
++
++/*****************************************************************************/
++/* 3GPP dialing (sub-step of the 3GPP connection sequence) */
++
++typedef struct {
++    MMBroadbandModemMtkCcci *modem;
++    MMPortSerialAt          *primary;
++    guint                    cid;
++    gulong                   eif_id;
++    guint                    timeout_id;
++    gboolean                 activated;  /* +CGACT=1 returned OK */
++    gboolean                 retried;
++    MMMtkCcciEifInfo        *ifup;
++} DialContext;
++
++static void
++dial_context_free (DialContext *ctx)
++{
++    if (ctx->eif_id)
++        g_signal_handler_disconnect (ctx->modem, ctx->eif_id);
++    if (ctx->timeout_id)
++        g_source_remove (ctx->timeout_id);
++    mm_mtk_ccci_eif_info_free (ctx->ifup);
++    g_object_unref (ctx->primary);
++    g_object_unref (ctx->modem);
++    g_slice_free (DialContext, ctx);
++}
++
++static MMPort *
++dial_3gpp_finish (MMBroadbandBearer  *self,
++                  GAsyncResult       *res,
++                  GError            **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void
++dial_stop_waiting (DialContext *ctx)
++{
++    if (ctx->eif_id) {
++        g_signal_handler_disconnect (ctx->modem, ctx->eif_id);
++        ctx->eif_id = 0;
++    }
++    if (ctx->timeout_id) {
++        g_source_remove (ctx->timeout_id);
++        ctx->timeout_id = 0;
++    }
++}
++
++static void
++dial_complete (GTask                  *task,
++               const MMMtkCcciEifInfo *ifup)
++{
++    MMBroadbandBearerMtkCcci *self;
++    DialContext              *ctx;
++    g_autofree gchar         *name = NULL;
++    MMPort                   *port;
++
++    self = g_task_get_source_object (task);
++    ctx  = g_task_get_task_data (task);
++
++    dial_stop_waiting (ctx);
++
++    name = mm_mtk_ccci_build_net_port_name (ifup->trans_intf_id);
++    port = mm_base_modem_get_port (MM_BASE_MODEM (ctx->modem), name);
++    if (!port || mm_port_get_port_type (port) != MM_PORT_TYPE_NET) {
++        g_clear_object (&port);
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
++                                 "PDP context %u is up on %s, which is not a net port of this modem",
++                                 ctx->cid, name);
++        g_object_unref (task);
++        return;
++    }
++
++    mm_obj_info (self, "PDP context %u connected on %s", ctx->cid, name);
++    g_clear_pointer (&self->priv->connected, mm_mtk_ccci_eif_info_free);
++    self->priv->connected = mm_mtk_ccci_eif_info_dup (ifup);
++
++    g_task_return_pointer (task, port, g_object_unref);
++    g_object_unref (task);
++}
++
++static void dial_activate            (GTask *task);
++static void dial_define_and_activate (GTask *task);
++
++static void
++dial_eif_report (MMBroadbandModemMtkCcci *modem,
++                 const MMMtkCcciEifInfo  *info,
++                 GTask                   *task)
++{
++    DialContext *ctx;
++
++    ctx = g_task_get_task_data (task);
++    if (info->event != MM_MTK_CCCI_EIF_EVENT_IFUP || !info->has_cid || info->cid != ctx->cid)
++        return;
++
++    mm_mtk_ccci_eif_info_free (ctx->ifup);
++    ctx->ifup = mm_mtk_ccci_eif_info_dup (info);
++
++    /* The report may come before the final OK of +CGACT */
++    if (ctx->activated)
++        dial_complete (task, ctx->ifup);
++}
++
++static void
++retry_cgact_deactivate_ready (MMBaseModem  *modem,
++                              GAsyncResult *res,
++                              GTask        *task)
++{
++    g_autoptr(GError) error = NULL;
++
++    if (!mm_base_modem_at_command_full_finish (modem, res, &error))
++        mm_obj_dbg (g_task_get_source_object (task), "PDP context deactivation before retry failed: %s",
++                    error->message);
++    if (g_task_return_error_if_cancelled (task)) {
++        g_object_unref (task);
++        return;
++    }
++    dial_define_and_activate (task);
++}
++
++static void
++dial_deactivate_and_activate (GTask *task)
++{
++    DialContext      *ctx;
++    g_autofree gchar *cmd = NULL;
++
++    ctx = g_task_get_task_data (task);
++    ctx->retried = TRUE;
++    cmd = g_strdup_printf ("+CGACT=0,%u", ctx->cid);
++    mm_base_modem_at_command_full (MM_BASE_MODEM (ctx->modem),
++                                   MM_IFACE_PORT_AT (ctx->primary),
++                                   cmd,
++                                   CGACT_TIMEOUT_SECS,
++                                   FALSE, FALSE, NULL,
++                                   (GAsyncReadyCallback) retry_cgact_deactivate_ready,
++                                   task);
++}
++
++static gboolean
++dial_ifup_timeout (GTask *task)
++{
++    DialContext *ctx;
++
++    ctx = g_task_get_task_data (task);
++    ctx->timeout_id = 0;
++
++    /* The task may outlive its return until the callback runs: never leave
++     * the +EIF handler connected to a returned task */
++    if (g_task_return_error_if_cancelled (task)) {
++        dial_stop_waiting (ctx);
++        g_object_unref (task);
++        return G_SOURCE_REMOVE;
++    }
++
++    if (!ctx->retried) {
++        mm_obj_info (g_task_get_source_object (task),
++                     "no +EIF ifup for PDP context %u after %us: deactivating and trying again",
++                     ctx->cid, EIF_IFUP_TIMEOUT_SECS);
++        dial_stop_waiting (ctx);
++        dial_deactivate_and_activate (task);
++        return G_SOURCE_REMOVE;
++    }
++
++    dial_stop_waiting (ctx);
++    g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_TIMEOUT,
++                             "PDP context %u activated but the modem never reported its interface (+EIF ifup)",
++                             ctx->cid);
++    g_object_unref (task);
++    return G_SOURCE_REMOVE;
++}
++
++static void
++cgact_activate_ready (MMBaseModem  *modem,
++                      GAsyncResult *res,
++                      GTask        *task)
++{
++    DialContext *ctx;
++    GError      *error = NULL;
++
++    ctx = g_task_get_task_data (task);
++
++    if (!mm_base_modem_at_command_full_finish (modem, res, &error)) {
++        dial_stop_waiting (ctx);
++        g_prefix_error (&error, "Couldn't activate PDP context %u: ", ctx->cid);
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    if (g_task_return_error_if_cancelled (task)) {
++        dial_stop_waiting (ctx);
++        g_object_unref (task);
++        return;
++    }
++
++    ctx->activated = TRUE;
++    if (ctx->ifup) {
++        dial_complete (task, ctx->ifup);
++        return;
++    }
++
++    ctx->timeout_id = g_timeout_add_seconds (EIF_IFUP_TIMEOUT_SECS, (GSourceFunc) dial_ifup_timeout, task);
++}
++
++static void
++dial_activate (GTask *task)
++{
++    DialContext      *ctx;
++    g_autofree gchar *cmd = NULL;
++
++    ctx = g_task_get_task_data (task);
++    ctx->activated = FALSE;
++    g_clear_pointer (&ctx->ifup, mm_mtk_ccci_eif_info_free);
++
++    /* Listen before sending: the ifup may arrive before the final OK */
++    g_assert (!ctx->eif_id);
++    ctx->eif_id = g_signal_connect (ctx->modem,
++                                    MM_BROADBAND_MODEM_MTK_CCCI_SIGNAL_EIF,
++                                    G_CALLBACK (dial_eif_report),
++                                    task);
++
++    cmd = g_strdup_printf ("+CGACT=1,%u", ctx->cid);
++    mm_base_modem_at_command_full (MM_BASE_MODEM (ctx->modem),
++                                   MM_IFACE_PORT_AT (ctx->primary),
++                                   cmd,
++                                   CGACT_TIMEOUT_SECS,
++                                   FALSE, FALSE,
++                                   g_task_get_cancellable (task),
++                                   (GAsyncReadyCallback) cgact_activate_ready,
++                                   task);
++}
++
++static void
++cgact_query_ready (MMBaseModem  *modem,
++                   GAsyncResult *res,
++                   GTask        *task)
++{
++    DialContext       *ctx;
++    const gchar       *response;
++    g_autoptr(GError)  error = NULL;
++    GList             *list = NULL;
++    GList             *l;
++    gboolean           active = FALSE;
++
++    ctx = g_task_get_task_data (task);
++
++    response = mm_base_modem_at_command_full_finish (modem, res, &error);
++    if (response)
++        list = mm_3gpp_parse_cgact_read_response (response, &error);
++    if (error)
++        mm_obj_dbg (g_task_get_source_object (task), "couldn't query active PDP contexts: %s", error->message);
++
++    if (g_task_return_error_if_cancelled (task)) {
++        mm_3gpp_pdp_context_active_list_free (list);
++        g_object_unref (task);
++        return;
++    }
++
++    for (l = list; l; l = g_list_next (l)) {
++        MM3gppPdpContextActive *pdp = l->data;
++
++        if (pdp->cid == ctx->cid) {
++            active = pdp->active;
++            break;
++        }
++    }
++    mm_3gpp_pdp_context_active_list_free (list);
++
++    if (!active) {
++        dial_define_and_activate (task);
++        return;
++    }
++
++    /* Already active (e.g. ModemManager restarted, or a previous disconnect
++     * failed): reuse it if its interface is known, otherwise cycle it to get
++     * a fresh +EIF ifup. */
++    {
++        const MMMtkCcciEifInfo *known;
++
++        known = mm_broadband_modem_mtk_ccci_peek_active_pdn (ctx->modem, ctx->cid);
++        if (known) {
++            mm_obj_dbg (g_task_get_source_object (task), "PDP context %u already active on ccmni%u",
++                        ctx->cid, known->interface_index);
++            dial_complete (task, known);
++            return;
++        }
++    }
++
++    mm_obj_dbg (g_task_get_source_object (task), "PDP context %u already active on an unknown interface", ctx->cid);
++    dial_deactivate_and_activate (task);
++}
++
++static void
++dial_check_active (GTask *task)
++{
++    DialContext *ctx;
++
++    ctx = g_task_get_task_data (task);
++    mm_base_modem_at_command_full (MM_BASE_MODEM (ctx->modem),
++                                   MM_IFACE_PORT_AT (ctx->primary),
++                                   "+CGACT?",
++                                   10,
++                                   FALSE, FALSE,
++                                   g_task_get_cancellable (task),
++                                   (GAsyncReadyCallback) cgact_query_ready,
++                                   task);
++}
++
++static void
++cgdcont_ready (MMBaseModem  *modem,
++               GAsyncResult *res,
++               GTask        *task)
++{
++    DialContext       *ctx;
++    g_autoptr(GError)  error = NULL;
++
++    ctx = g_task_get_task_data (task);
++
++    /* Not fatal: the profile manager already defined the context */
++    if (!mm_base_modem_at_command_full_finish (modem, res, &error))
++        mm_obj_warn (g_task_get_source_object (task), "couldn't define PDP context %u again: %s",
++                     ctx->cid, error->message);
++
++    if (g_task_return_error_if_cancelled (task)) {
++        g_object_unref (task);
++        return;
++    }
++
++    dial_activate (task);
++}
++
++/* The profile manager already selected (and usually defined) the cid; define
++ * it again right before activating it, as measured on the MD: activating a
++ * cid it does not consider defined brings up an emergency APN (IMS.SOS.SP)
++ * instead. Skipped when connecting by profile id only (no APN). The context
++ * is never active here: redefining an active context may be refused. */
++static void
++dial_define_and_activate (GTask *task)
++{
++    DialContext        *ctx;
++    MMBearerProperties *config;
++    const gchar        *apn;
++    MMBearerIpFamily    family;
++    g_autofree gchar   *quoted_apn = NULL;
++    g_autofree gchar   *cmd = NULL;
++
++    ctx = g_task_get_task_data (task);
++
++    config = mm_base_bearer_peek_config (MM_BASE_BEARER (g_task_get_source_object (task)));
++    apn = mm_bearer_properties_get_apn (config);
++    if (!apn) {
++        dial_activate (task);
++        return;
++    }
++
++    family = mm_bearer_properties_get_ip_type (config);
++    mm_3gpp_normalize_ip_family (&family, TRUE);
++    quoted_apn = mm_at_quote_string (apn);
++    cmd = g_strdup_printf ("+CGDCONT=%u,\"%s\",%s",
++                           ctx->cid, mm_3gpp_get_pdp_type_from_ip_family (family), quoted_apn);
++    mm_base_modem_at_command_full (MM_BASE_MODEM (ctx->modem),
++                                   MM_IFACE_PORT_AT (ctx->primary),
++                                   cmd,
++                                   10,
++                                   FALSE, FALSE,
++                                   g_task_get_cancellable (task),
++                                   (GAsyncReadyCallback) cgdcont_ready,
++                                   task);
++}
++
++static void
++dial_3gpp (MMBroadbandBearer   *_self,
++           MMBaseModem         *modem,
++           MMPortSerialAt      *primary,
++           guint                cid,
++           GCancellable        *cancellable,
++           GAsyncReadyCallback  callback,
++           gpointer             user_data)
++{
++    DialContext *ctx;
++    GTask       *task;
++
++    task = g_task_new (_self, cancellable, callback, user_data);
++
++    ctx = g_slice_new0 (DialContext);
++    ctx->modem   = MM_BROADBAND_MODEM_MTK_CCCI (g_object_ref (modem));
++    ctx->primary = g_object_ref (primary);
++    ctx->cid     = cid;
++    g_task_set_task_data (task, ctx, (GDestroyNotify) dial_context_free);
++
++    dial_check_active (task);
++}
++
++/*****************************************************************************/
++/* 3GPP IP config (sub-step of the 3GPP connection sequence) */
++
++typedef struct {
++    MMBroadbandModemMtkCcci *modem;
++    MMPortSerialAt          *primary;
++    guint                    cid;
++    MMBearerIpFamily         ip_family;
++    MMMtkCcciEifInfo        *ifup;
++    GList                   *pdp_list;
++    gchar                   *cgpaddr_ipv4;
++    gchar                   *cgpaddr_ipv6;
++} IpConfigContext;
++
++typedef struct {
++    MMBearerIpConfig *ipv4;
++    MMBearerIpConfig *ipv6;
++} IpConfigResult;
++
++static void
++ip_config_context_free (IpConfigContext *ctx)
++{
++    mm_mtk_ccci_eif_info_free (ctx->ifup);
++    mm_mtk_ccci_pdp_info_list_free (ctx->pdp_list);
++    g_free (ctx->cgpaddr_ipv4);
++    g_free (ctx->cgpaddr_ipv6);
++    g_object_unref (ctx->primary);
++    g_object_unref (ctx->modem);
++    g_slice_free (IpConfigContext, ctx);
++}
++
++static void
++ip_config_result_free (IpConfigResult *result)
++{
++    g_clear_object (&result->ipv4);
++    g_clear_object (&result->ipv6);
++    g_slice_free (IpConfigResult, result);
++}
++
++static gboolean
++get_ip_config_3gpp_finish (MMBroadbandBearer  *self,
++                           GAsyncResult       *res,
++                           MMBearerIpConfig  **ipv4_config,
++                           MMBearerIpConfig  **ipv6_config,
++                           GError            **error)
++{
++    IpConfigResult *result;
++
++    result = g_task_propagate_pointer (G_TASK (res), error);
++    if (!result)
++        return FALSE;
++
++    if (ipv4_config)
++        *ipv4_config = g_steal_pointer (&result->ipv4);
++    if (ipv6_config)
++        *ipv6_config = g_steal_pointer (&result->ipv6);
++    ip_config_result_free (result);
++    return TRUE;
++}
++
++static const MMMtkCcciPdpInfo *
++find_pdp_info (GList         *list,
++               GSocketFamily  family)
++{
++    GList *l;
++
++    for (l = list; l; l = g_list_next (l)) {
++        const MMMtkCcciPdpInfo *info = l->data;
++
++        if (info->family == family)
++            return info;
++    }
++    return NULL;
++}
++
++/* DNS servers of the given family, from every +CGCONTRDP line */
++static GPtrArray *
++collect_dns (GList         *list,
++             GSocketFamily  family)
++{
++    GPtrArray *dns;
++    GList     *l;
++
++    dns = g_ptr_array_new_with_free_func (g_free);
++    for (l = list; l; l = g_list_next (l)) {
++        const MMMtkCcciPdpInfo *info = l->data;
++        guint                   i;
++
++        for (i = 0; info->dns[i]; i++) {
++            GSocketFamily dns_family;
++            guint         j;
++            gboolean      dup = FALSE;
++
++            if (!mm_mtk_ccci_parse_ip_address (info->dns[i], &dns_family, NULL, NULL) || dns_family != family)
++                continue;
++            for (j = 0; j < dns->len && !dup; j++)
++                dup = g_str_equal (g_ptr_array_index (dns, j), info->dns[i]);
++            if (!dup)
++                g_ptr_array_add (dns, g_strdup (info->dns[i]));
++        }
++    }
++    g_ptr_array_add (dns, NULL);
++    return dns;
++}
++
++static void
++ip_config_complete (GTask *task)
++{
++    MMBroadbandBearerMtkCcci *self;
++    IpConfigContext          *ctx;
++    IpConfigResult           *result;
++    const MMMtkCcciPdpInfo   *pdp4;
++    const MMMtkCcciPdpInfo   *pdp6;
++    const gchar              *ipv4 = NULL;
++    const gchar              *ipv6 = NULL;
++    g_autoptr(GPtrArray)      dns4 = NULL;
++    g_autoptr(GPtrArray)      dns6 = NULL;
++
++    self = g_task_get_source_object (task);
++    ctx  = g_task_get_task_data (task);
++
++    pdp4 = find_pdp_info (ctx->pdp_list, G_SOCKET_FAMILY_IPV4);
++    pdp6 = find_pdp_info (ctx->pdp_list, G_SOCKET_FAMILY_IPV6);
++    dns4 = collect_dns (ctx->pdp_list, G_SOCKET_FAMILY_IPV4);
++    dns6 = collect_dns (ctx->pdp_list, G_SOCKET_FAMILY_IPV6);
++
++    /* Address preference: the +EIF report (what the MD configured on the
++     * interface), then +CGCONTRDP, then +CGPADDR */
++    if (ctx->ifup && ctx->ifup->ipv4)
++        ipv4 = ctx->ifup->ipv4;
++    else if (pdp4 && pdp4->address)
++        ipv4 = pdp4->address;
++    else
++        ipv4 = ctx->cgpaddr_ipv4;
++
++    if (ctx->ifup && ctx->ifup->ipv6)
++        ipv6 = ctx->ifup->ipv6;
++    else if (pdp6 && pdp6->address)
++        ipv6 = pdp6->address;
++    else
++        ipv6 = ctx->cgpaddr_ipv6;
++
++    result = g_slice_new0 (IpConfigResult);
++
++    if ((ctx->ip_family & (MM_BEARER_IP_FAMILY_IPV4 | MM_BEARER_IP_FAMILY_IPV4V6)) && ipv4) {
++        result->ipv4 = mm_bearer_ip_config_new ();
++        mm_bearer_ip_config_set_method (result->ipv4, MM_BEARER_IP_METHOD_STATIC);
++        mm_bearer_ip_config_set_address (result->ipv4, ipv4);
++        /* Point-to-point link: the PDN address alone, no gateway */
++        mm_bearer_ip_config_set_prefix (result->ipv4, 32);
++        if (dns4->len > 1)
++            mm_bearer_ip_config_set_dns (result->ipv4, (const gchar **) dns4->pdata);
++        if (pdp4 && pdp4->mtu)
++            mm_bearer_ip_config_set_mtu (result->ipv4, pdp4->mtu);
++        mm_obj_info (self, "IPv4: %s/32, %u DNS server(s)", ipv4, dns4->len - 1);
++    }
++
++    if ((ctx->ip_family & (MM_BEARER_IP_FAMILY_IPV6 | MM_BEARER_IP_FAMILY_IPV4V6)) &&
++        (ipv6 || pdp6 || dns6->len > 1)) {
++        g_autoptr(GInetAddress) addr = NULL;
++
++        if (ipv6)
++            addr = g_inet_address_new_from_string (ipv6);
++
++        result->ipv6 = mm_bearer_ip_config_new ();
++        if (addr && !g_inet_address_get_is_link_local (addr) && pdp6 && pdp6->gateway) {
++            mm_bearer_ip_config_set_method (result->ipv6, MM_BEARER_IP_METHOD_STATIC);
++            mm_bearer_ip_config_set_address (result->ipv6, ipv6);
++            mm_bearer_ip_config_set_prefix (result->ipv6, pdp6->prefix ? pdp6->prefix : 64);
++            mm_bearer_ip_config_set_gateway (result->ipv6, pdp6->gateway);
++        } else {
++            /* NetworkManager refuses static IPv6 without a gateway. The prefix
++             * comes in a router advertisement (SLAAC); a link-local address
++             * gives the interface identifier the network expects. */
++            mm_bearer_ip_config_set_method (result->ipv6, MM_BEARER_IP_METHOD_DHCP);
++            if (addr && g_inet_address_get_is_link_local (addr)) {
++                mm_bearer_ip_config_set_address (result->ipv6, ipv6);
++                mm_bearer_ip_config_set_prefix (result->ipv6, 64);
++            }
++        }
++        if (dns6->len > 1)
++            mm_bearer_ip_config_set_dns (result->ipv6, (const gchar **) dns6->pdata);
++        mm_obj_info (self, "IPv6: %s, %u DNS server(s)", ipv6 ? ipv6 : "SLAAC", dns6->len - 1);
++    }
++
++    if (!result->ipv4 && !result->ipv6) {
++        ip_config_result_free (result);
++        g_task_return_new_error (task, MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
++                                 "No IP address reported for PDP context %u", ctx->cid);
++        g_object_unref (task);
++        return;
++    }
++
++    g_task_return_pointer (task, result, (GDestroyNotify) ip_config_result_free);
++    g_object_unref (task);
++}
++
++static void
++cgpaddr_ready (MMBaseModem  *modem,
++               GAsyncResult *res,
++               GTask        *task)
++{
++    IpConfigContext   *ctx;
++    const gchar       *response;
++    g_autoptr(GError)  error = NULL;
++
++    ctx = g_task_get_task_data (task);
++    response = mm_base_modem_at_command_full_finish (modem, res, &error);
++    if (!response ||
++        !mm_mtk_ccci_parse_cgpaddr_response (response, ctx->cid, &ctx->cgpaddr_ipv4, &ctx->cgpaddr_ipv6, &error))
++        mm_obj_dbg (g_task_get_source_object (task), "couldn't load PDP addresses: %s", error->message);
++    ip_config_complete (task);
++}
++
++static void
++cgcontrdp_ready (MMBaseModem  *modem,
++                 GAsyncResult *res,
++                 GTask        *task)
++{
++    IpConfigContext        *ctx;
++    const gchar            *response;
++    g_autoptr(GError)       error = NULL;
++    g_autofree gchar       *cmd = NULL;
++    const MMMtkCcciPdpInfo *pdp4;
++    gboolean                have_ipv4;
++
++    ctx = g_task_get_task_data (task);
++    response = mm_base_modem_at_command_full_finish (modem, res, &error);
++    if (response)
++        ctx->pdp_list = mm_mtk_ccci_parse_cgcontrdp_response (response, ctx->cid, &error);
++    if (error)
++        mm_obj_dbg (g_task_get_source_object (task), "couldn't load PDP context parameters: %s", error->message);
++
++    /* +CGCONTRDP on this MD may leave the address empty; +CGPADDR has it */
++    pdp4 = find_pdp_info (ctx->pdp_list, G_SOCKET_FAMILY_IPV4);
++    have_ipv4 = (ctx->ifup && ctx->ifup->ipv4) || (pdp4 && pdp4->address);
++    if (have_ipv4 && !(ctx->ip_family & (MM_BEARER_IP_FAMILY_IPV6 | MM_BEARER_IP_FAMILY_IPV4V6))) {
++        ip_config_complete (task);
++        return;
++    }
++
++    cmd = g_strdup_printf ("+CGPADDR=%u", ctx->cid);
++    mm_base_modem_at_command_full (modem,
++                                   MM_IFACE_PORT_AT (ctx->primary),
++                                   cmd,
++                                   10,
++                                   FALSE, FALSE, NULL,
++                                   (GAsyncReadyCallback) cgpaddr_ready,
++                                   task);
++}
++
++static void
++get_ip_config_3gpp (MMBroadbandBearer   *_self,
++                    MMBroadbandModem    *modem,
++                    MMPortSerialAt      *primary,
++                    MMPortSerialAt      *secondary,
++                    MMPort              *data,
++                    guint                cid,
++                    MMBearerIpFamily     ip_family,
++                    GAsyncReadyCallback  callback,
++                    gpointer             user_data)
++{
++    MMBroadbandBearerMtkCcci *self = MM_BROADBAND_BEARER_MTK_CCCI (_self);
++    IpConfigContext          *ctx;
++    GTask                    *task;
++    g_autofree gchar         *cmd = NULL;
++
++    task = g_task_new (self, NULL, callback, user_data);
++
++    ctx = g_slice_new0 (IpConfigContext);
++    ctx->modem     = MM_BROADBAND_MODEM_MTK_CCCI (g_object_ref (modem));
++    ctx->primary   = g_object_ref (primary);
++    ctx->cid       = cid;
++    ctx->ip_family = ip_family;
++    if (self->priv->connected)
++        ctx->ifup = mm_mtk_ccci_eif_info_dup (self->priv->connected);
++    g_task_set_task_data (task, ctx, (GDestroyNotify) ip_config_context_free);
++
++    cmd = g_strdup_printf ("+CGCONTRDP=%u", cid);
++    mm_base_modem_at_command_full (MM_BASE_MODEM (modem),
++                                   MM_IFACE_PORT_AT (primary),
++                                   cmd,
++                                   10,
++                                   FALSE, FALSE, NULL,
++                                   (GAsyncReadyCallback) cgcontrdp_ready,
++                                   task);
++}
++
++/*****************************************************************************/
++/* 3GPP disconnection */
++
++static gboolean
++disconnect_3gpp_finish (MMBroadbandBearer  *self,
++                        GAsyncResult       *res,
++                        GError            **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++cgact_deactivate_ready (MMBaseModem  *modem,
++                        GAsyncResult *res,
++                        GTask        *task)
++{
++    g_autoptr(GError) error = NULL;
++
++    /* As in the generic implementation, not fatal: the connection is gone
++     * for ModemManager either way */
++    if (!mm_base_modem_at_command_full_finish (modem, res, &error))
++        mm_obj_warn (g_task_get_source_object (task), "PDP context deactivation failed: %s", error->message);
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++disconnect_3gpp (MMBroadbandBearer   *_self,
++                 MMBroadbandModem    *modem,
++                 MMPortSerialAt      *primary,
++                 MMPortSerialAt      *secondary,
++                 MMPort              *data,
++                 guint                cid,
++                 GAsyncReadyCallback  callback,
++                 gpointer             user_data)
++{
++    MMBroadbandBearerMtkCcci *self = MM_BROADBAND_BEARER_MTK_CCCI (_self);
++    GTask                    *task;
++    g_autofree gchar         *cmd = NULL;
++
++    task = g_task_new (self, NULL, callback, user_data);
++
++    /* The "ifdown" that follows is ours, not a network drop */
++    g_clear_pointer (&self->priv->connected, mm_mtk_ccci_eif_info_free);
++
++    cmd = (cid > 0 ? g_strdup_printf ("+CGACT=0,%u", cid) : g_strdup ("+CGACT=0"));
++    mm_base_modem_at_command_full (MM_BASE_MODEM (modem),
++                                   MM_IFACE_PORT_AT (primary),
++                                   cmd,
++                                   CGACT_TIMEOUT_SECS,
++                                   FALSE, FALSE, NULL,
++                                   (GAsyncReadyCallback) cgact_deactivate_ready,
++                                   task);
++}
++
++/*****************************************************************************/
++
++static void
++report_connection_status (MMBaseBearer             *self,
++                          MMBearerConnectionStatus  status,
++                          const GError             *connection_error)
++{
++    if (status == MM_BEARER_CONNECTION_STATUS_DISCONNECTED)
++        g_clear_pointer (&MM_BROADBAND_BEARER_MTK_CCCI (self)->priv->connected, mm_mtk_ccci_eif_info_free);
++
++    MM_BASE_BEARER_CLASS (mm_broadband_bearer_mtk_ccci_parent_class)->report_connection_status (
++        self, status, connection_error);
++}
++
++/*****************************************************************************/
++
++MMBaseBearer *
++mm_broadband_bearer_mtk_ccci_new_finish (GAsyncResult  *res,
++                                         GError       **error)
++{
++    GObject *bearer;
++    GObject *source;
++
++    source = g_async_result_get_source_object (res);
++    bearer = g_async_initable_new_finish (G_ASYNC_INITABLE (source), res, error);
++    g_object_unref (source);
++
++    if (!bearer)
++        return NULL;
++
++    /* Only export valid bearers */
++    mm_base_bearer_export (MM_BASE_BEARER (bearer));
++
++    return MM_BASE_BEARER (bearer);
++}
++
++void
++mm_broadband_bearer_mtk_ccci_new (MMBroadbandModemMtkCcci *modem,
++                                  MMBearerProperties      *config,
++                                  GCancellable            *cancellable,
++                                  GAsyncReadyCallback      callback,
++                                  gpointer                 user_data)
++{
++    g_async_initable_new_async (
++        MM_TYPE_BROADBAND_BEARER_MTK_CCCI,
++        G_PRIORITY_DEFAULT,
++        cancellable,
++        callback,
++        user_data,
++        MM_BASE_BEARER_MODEM,  modem,
++        MM_BASE_BEARER_CONFIG, config,
++        NULL);
++}
++
++static void
++constructed (GObject *object)
++{
++    g_autoptr(MMBaseModem) modem = NULL;
++
++    G_OBJECT_CLASS (mm_broadband_bearer_mtk_ccci_parent_class)->constructed (object);
++
++    g_object_get (object, MM_BASE_BEARER_MODEM, &modem, NULL);
++    if (modem)
++        g_signal_connect_object (modem,
++                                 MM_BROADBAND_MODEM_MTK_CCCI_SIGNAL_EIF,
++                                 G_CALLBACK (modem_eif_report),
++                                 object,
++                                 0);
++}
++
++static void
++finalize (GObject *object)
++{
++    MMBroadbandBearerMtkCcci *self = MM_BROADBAND_BEARER_MTK_CCCI (object);
++
++    g_clear_pointer (&self->priv->connected, mm_mtk_ccci_eif_info_free);
++
++    G_OBJECT_CLASS (mm_broadband_bearer_mtk_ccci_parent_class)->finalize (object);
++}
++
++static void
++mm_broadband_bearer_mtk_ccci_init (MMBroadbandBearerMtkCcci *self)
++{
++    self->priv = mm_broadband_bearer_mtk_ccci_get_instance_private (self);
++}
++
++static void
++mm_broadband_bearer_mtk_ccci_class_init (MMBroadbandBearerMtkCcciClass *klass)
++{
++    GObjectClass           *object_class           = G_OBJECT_CLASS (klass);
++    MMBaseBearerClass      *base_bearer_class      = MM_BASE_BEARER_CLASS (klass);
++    MMBroadbandBearerClass *broadband_bearer_class = MM_BROADBAND_BEARER_CLASS (klass);
++
++    object_class->constructed = constructed;
++    object_class->finalize    = finalize;
++
++    base_bearer_class->report_connection_status = report_connection_status;
++
++    broadband_bearer_class->dial_3gpp                 = dial_3gpp;
++    broadband_bearer_class->dial_3gpp_finish          = dial_3gpp_finish;
++    broadband_bearer_class->get_ip_config_3gpp        = get_ip_config_3gpp;
++    broadband_bearer_class->get_ip_config_3gpp_finish = get_ip_config_3gpp_finish;
++    broadband_bearer_class->disconnect_3gpp           = disconnect_3gpp;
++    broadband_bearer_class->disconnect_3gpp_finish    = disconnect_3gpp_finish;
++}
+diff --git c/src/plugins/mtk-ccci/mm-broadband-bearer-mtk-ccci.h i/src/plugins/mtk-ccci/mm-broadband-bearer-mtk-ccci.h
+new file mode 100644
+index 0000000..e3bd0f8
+--- /dev/null
++++ i/src/plugins/mtk-ccci/mm-broadband-bearer-mtk-ccci.h
+@@ -0,0 +1,59 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Copyright (C) 2026 Thunder OS contributors
++ */
++
++#ifndef MM_BROADBAND_BEARER_MTK_CCCI_H
++#define MM_BROADBAND_BEARER_MTK_CCCI_H
++
++#include <glib.h>
++#include <glib-object.h>
++
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "mm-broadband-bearer.h"
++#include "mm-broadband-modem-mtk-ccci.h"
++
++#define MM_TYPE_BROADBAND_BEARER_MTK_CCCI            (mm_broadband_bearer_mtk_ccci_get_type ())
++#define MM_BROADBAND_BEARER_MTK_CCCI(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_BROADBAND_BEARER_MTK_CCCI, MMBroadbandBearerMtkCcci))
++#define MM_BROADBAND_BEARER_MTK_CCCI_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  MM_TYPE_BROADBAND_BEARER_MTK_CCCI, MMBroadbandBearerMtkCcciClass))
++#define MM_IS_BROADBAND_BEARER_MTK_CCCI(obj)         (G_TYPE_CHECK_INSTANCE_TYPE ((obj), MM_TYPE_BROADBAND_BEARER_MTK_CCCI))
++#define MM_IS_BROADBAND_BEARER_MTK_CCCI_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass),  MM_TYPE_BROADBAND_BEARER_MTK_CCCI))
++#define MM_BROADBAND_BEARER_MTK_CCCI_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),  MM_TYPE_BROADBAND_BEARER_MTK_CCCI, MMBroadbandBearerMtkCcciClass))
++
++typedef struct _MMBroadbandBearerMtkCcci        MMBroadbandBearerMtkCcci;
++typedef struct _MMBroadbandBearerMtkCcciClass   MMBroadbandBearerMtkCcciClass;
++typedef struct _MMBroadbandBearerMtkCcciPrivate MMBroadbandBearerMtkCcciPrivate;
++
++struct _MMBroadbandBearerMtkCcci {
++    MMBroadbandBearer parent;
++    MMBroadbandBearerMtkCcciPrivate *priv;
++};
++
++struct _MMBroadbandBearerMtkCcciClass {
++    MMBroadbandBearerClass parent;
++};
++
++GType mm_broadband_bearer_mtk_ccci_get_type (void);
++G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMBroadbandBearerMtkCcci, g_object_unref)
++
++void          mm_broadband_bearer_mtk_ccci_new        (MMBroadbandModemMtkCcci *modem,
++                                                       MMBearerProperties      *config,
++                                                       GCancellable            *cancellable,
++                                                       GAsyncReadyCallback      callback,
++                                                       gpointer                 user_data);
++MMBaseBearer *mm_broadband_bearer_mtk_ccci_new_finish (GAsyncResult            *res,
++                                                       GError                 **error);
++
++#endif /* MM_BROADBAND_BEARER_MTK_CCCI_H */
+diff --git c/src/plugins/mtk-ccci/mm-broadband-modem-mtk-ccci.c i/src/plugins/mtk-ccci/mm-broadband-modem-mtk-ccci.c
+new file mode 100644
+index 0000000..470749c
+--- /dev/null
++++ i/src/plugins/mtk-ccci/mm-broadband-modem-mtk-ccci.c
+@@ -0,0 +1,806 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Copyright (C) 2026 Thunder OS contributors
++ *
++ * MediaTek SoC modem (MT6833 and relatives) on vendor kernels, driven only
++ * through the CCCI AT channel. There is no MIPC in these kernels, so data
++ * calls use +CGDCONT/+CGACT and the MediaTek +EIF interface reports.
++ *
++ * Parts adapted from the "mtk-soc" plugin of the MT6895-Mainline
++ * modemmanager-mtk-soc fork (GPL-2.0-or-later): the early CFUN=1 power-up
++ * and the list of proprietary URCs that must be swallowed.
++ */
++
++#include <config.h>
++
++#include <string.h>
++
++#include <ModemManager.h>
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "mm-base-modem-at.h"
++#include "mm-broadband-bearer-mtk-ccci.h"
++#include "mm-broadband-modem-mtk-ccci.h"
++#include "mm-iface-modem.h"
++#include "mm-iface-modem-voice.h"
++#include "mm-log-object.h"
++#include "mm-modem-helpers.h"
++#include "mm-modem-helpers-mtk-ccci.h"
++#include "mm-port-serial-at.h"
++
++static void iface_modem_init       (MMIfaceModemInterface      *iface);
++static void iface_modem_voice_init (MMIfaceModemVoiceInterface *iface);
++
++static MMIfaceModemInterface      *iface_modem_parent;
++static MMIfaceModemVoiceInterface *iface_modem_voice_parent;
++
++struct _MMBroadbandModemMtkCcciPrivate {
++    GRegex     *eif_regex;
++    GRegex     *ecpi_regex;
++    GPtrArray  *ignored_regexes;
++    /* cid -> MMMtkCcciEifInfo of the last "ifup" not yet followed by "ifdown" */
++    GHashTable *active_pdns;
++    guint       call_list_reload_id;
++};
++
++G_DEFINE_TYPE_EXTENDED (MMBroadbandModemMtkCcci, mm_broadband_modem_mtk_ccci, MM_TYPE_BROADBAND_MODEM, 0,
++                        G_ADD_PRIVATE (MMBroadbandModemMtkCcci)
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM, iface_modem_init)
++                        G_IMPLEMENT_INTERFACE (MM_TYPE_IFACE_MODEM_VOICE, iface_modem_voice_init))
++
++enum {
++    SIGNAL_EIF,
++    SIGNAL_LAST
++};
++
++static guint signals[SIGNAL_LAST];
++
++/*****************************************************************************/
++/* URC regexes
++ *
++ * The MD sends many proprietary reports at any time, also in the middle of a
++ * command and its final result. Without a handler they end up in the
++ * response buffer and break the parsing of whatever command is pending, so
++ * every one known is registered and swallowed.
++ *
++ * A handler removes the leading CRLF and the line, but leaves the trailing
++ * CRLF in place: a final result that follows the report without a blank line
++ * ("\r\n+EIND: 1\r\nOK\r\n") still parses as "\r\nOK\r\n". A report at the
++ * very start of the buffer (left there by another handler) matches too.
++ */
++
++#define MTK_CCCI_URC_REGEX(tag) "(?:\\r\\n|^)\\+" tag ":[ \\t]*([^\\r\\n]*)(?=\\r\\n)"
++
++static const gchar *mtk_ccci_ignored_urcs[] = {
++    /* Measured on MOLY.NR15.R3.MP.V48.6.P51 (Redmi 10 5G) */
++    MTK_CCCI_URC_REGEX ("EIND"),
++    MTK_CCCI_URC_REGEX ("EIMSGEO"),
++    MTK_CCCI_URC_REGEX ("EWIFIRSSITHRCFG"),
++    MTK_CCCI_URC_REGEX ("ESIMIND"),
++    MTK_CCCI_URC_REGEX ("EUSIM"),
++    MTK_CCCI_URC_REGEX ("ECEMODE"),
++    MTK_CCCI_URC_REGEX ("CIREPI"),
++    MTK_CCCI_URC_REGEX ("CNEMS1"),
++    MTK_CCCI_URC_REGEX ("CEN1"),
++    MTK_CCCI_URC_REGEX ("CEN2"),
++    MTK_CCCI_URC_REGEX ("EDSBP"),
++    MTK_CCCI_URC_REGEX ("ESBPID"),
++    MTK_CCCI_URC_REGEX ("ESMLSTATUS"),
++    MTK_CCCI_URC_REGEX ("ECAPABILITY"),
++    MTK_CCCI_URC_REGEX ("EPDN"),
++    MTK_CCCI_URC_REGEX ("EACMT"),
++    MTK_CCCI_URC_REGEX ("EXCAPRCN"),
++    /* IMS family, seen on other MediaTek MDs by the mtk-soc fork */
++    MTK_CCCI_URC_REGEX ("EDMFAPP"),
++    MTK_CCCI_URC_REGEX ("CIREGU"),
++    MTK_CCCI_URC_REGEX ("CIREP"),
++    MTK_CCCI_URC_REGEX ("EIREG"),
++    MTK_CCCI_URC_REGEX ("EIMSCFG"),
++    MTK_CCCI_URC_REGEX ("EIMSUI"),
++    MTK_CCCI_URC_REGEX ("EIMSXUI"),
++    MTK_CCCI_URC_REGEX ("EIMSREGURI"),
++    MTK_CCCI_URC_REGEX ("EIMSREGRESP"),
++    MTK_CCCI_URC_REGEX ("EIMSPDIS"),
++    MTK_CCCI_URC_REGEX ("ESIPREGINFO"),
++    MTK_CCCI_URC_REGEX ("ENAPTR"),
++};
++
++static GRegex *
++mtk_ccci_regex_new (const gchar *pattern)
++{
++    GRegex *regex;
++
++    regex = g_regex_new (pattern, G_REGEX_RAW | G_REGEX_OPTIMIZE, 0, NULL);
++    g_assert (regex);
++    return regex;
++}
++
++/*****************************************************************************/
++/* +EIF: PDN <-> ccmni interface reports */
++
++static gboolean
++active_pdn_matches_interface (gpointer key,
++                              gpointer value,
++                              gpointer user_data)
++{
++    return mm_mtk_ccci_eif_same_interface (value, user_data);
++}
++
++static void
++eif_received (MMPortSerialAt          *port,
++              GMatchInfo              *match_info,
++              MMBroadbandModemMtkCcci *self)
++{
++    g_autofree gchar  *str = NULL;
++    g_autoptr(GError)  error = NULL;
++    MMMtkCcciEifInfo   info = { 0 };
++
++    str = g_match_info_fetch (match_info, 1);
++    if (!mm_mtk_ccci_parse_eif (str, &info, &error)) {
++        mm_obj_warn (self, "couldn't parse +EIF report: %s", error->message);
++        return;
++    }
++
++    if (info.has_cid)
++        mm_obj_info (self, "PDN interface report '%s' on ccmni%u (id %u, cid %u, ipv4 %s, ipv6 %s)",
++                     info.event_str, info.interface_index, info.trans_intf_id, info.cid,
++                     info.ipv4 ? info.ipv4 : "n/a", info.ipv6 ? info.ipv6 : "n/a");
++    else
++        mm_obj_info (self, "PDN interface report '%s' on ccmni%u (id %u)",
++                     info.event_str, info.interface_index, info.trans_intf_id);
++
++    switch (info.event) {
++    case MM_MTK_CCCI_EIF_EVENT_IFUP:
++        if (info.has_cid)
++            g_hash_table_replace (self->priv->active_pdns,
++                                  GUINT_TO_POINTER (info.cid),
++                                  mm_mtk_ccci_eif_info_dup (&info));
++        break;
++    case MM_MTK_CCCI_EIF_EVENT_IFDOWN:
++        g_hash_table_foreach_remove (self->priv->active_pdns, active_pdn_matches_interface, &info);
++        break;
++    case MM_MTK_CCCI_EIF_EVENT_IFCHG:
++        /* Interface kept (e.g. CS fallback while in a call): nothing to do */
++        break;
++    case MM_MTK_CCCI_EIF_EVENT_UNKNOWN:
++    default:
++        break;
++    }
++
++    g_signal_emit (self, signals[SIGNAL_EIF], 0, &info);
++    mm_mtk_ccci_eif_info_clear (&info);
++}
++
++const MMMtkCcciEifInfo *
++mm_broadband_modem_mtk_ccci_peek_active_pdn (MMBroadbandModemMtkCcci *self,
++                                             guint                    cid)
++{
++    return g_hash_table_lookup (self->priv->active_pdns, GUINT_TO_POINTER (cid));
++}
++
++/*****************************************************************************/
++/* Setup ports (Broadband modem class) */
++
++static void
++setup_ports (MMBroadbandModem *_self)
++{
++    MMBroadbandModemMtkCcci *self = MM_BROADBAND_MODEM_MTK_CCCI (_self);
++    MMPortSerialAt          *primary;
++    g_autoptr(GRegex)        cgev_regex = NULL;
++    guint                    i;
++
++    /* Call parent's setup ports first always */
++    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_mtk_ccci_parent_class)->setup_ports (_self);
++
++    primary = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
++    if (!primary) {
++        mm_obj_warn (self, "no primary AT port: MediaTek URC handlers not set");
++        return;
++    }
++
++    /* CCCI is message based: every write() becomes one packet to the MD, so
++     * send each command in a single write, like the stock RIL does, instead
++     * of byte by byte. */
++    g_object_set (primary, MM_PORT_SERIAL_SEND_DELAY, (guint64) 0, NULL);
++
++    for (i = 0; i < self->priv->ignored_regexes->len; i++)
++        mm_port_serial_at_add_unsolicited_msg_handler (primary,
++                                                       g_ptr_array_index (self->priv->ignored_regexes, i),
++                                                       NULL, NULL, NULL);
++
++    /* +CGEV and +ECPI are swallowed until the generic 3GPP code and our voice
++     * support install their real handlers; both use the very same patterns
++     * so that those registrations replace these. */
++    cgev_regex = mm_3gpp_cgev_regex_get ();
++    mm_port_serial_at_add_unsolicited_msg_handler (primary, cgev_regex, NULL, NULL, NULL);
++    mm_port_serial_at_add_unsolicited_msg_handler (primary, self->priv->ecpi_regex, NULL, NULL, NULL);
++
++    /* +EIF is always tracked: it binds PDP contexts to ccmni interfaces */
++    mm_port_serial_at_add_unsolicited_msg_handler (primary,
++                                                   self->priv->eif_regex,
++                                                   (MMPortSerialAtUnsolicitedMsgFn) eif_received,
++                                                   self,
++                                                   NULL);
++
++    mm_obj_dbg (self, "registered %u MediaTek URC handlers in %s",
++                self->priv->ignored_regexes->len + 3,
++                mm_port_get_device (MM_PORT (primary)));
++}
++
++/*****************************************************************************/
++/* Initialization started (Broadband modem class)
++ *
++ * The MD comes up at +CFUN: 0, where the SIM is not powered and +CPIN?
++ * fails, which would leave the modem in the failed state. Power it up before
++ * the generic initialization looks at the SIM. Best effort: errors are only
++ * logged. The parent opens the primary port, so it runs first.
++ */
++
++static gpointer
++initialization_started_finish (MMBroadbandModem  *self,
++                               GAsyncResult      *res,
++                               GError           **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void
++initialization_complete (GTask *task)
++{
++    /* The task data is the parent's started context; ownership goes to the
++     * caller, which hands it back to initialization_stopped() */
++    g_task_return_pointer (task, g_task_get_task_data (task), NULL);
++    g_object_unref (task);
++}
++
++static void
++cfun_set_ready (MMBaseModem  *self,
++                GAsyncResult *res,
++                GTask        *task)
++{
++    g_autoptr(GError) error = NULL;
++
++    if (!mm_base_modem_at_command_finish (self, res, &error))
++        mm_obj_warn (self, "couldn't power up the MD with +CFUN=1: %s", error->message);
++    initialization_complete (task);
++}
++
++static void
++cfun_query_ready (MMBaseModem  *self,
++                  GAsyncResult *res,
++                  GTask        *task)
++{
++    g_autoptr(GError)  error = NULL;
++    const gchar       *response;
++    guint              state;
++
++    response = mm_base_modem_at_command_finish (self, res, &error);
++    if (!response) {
++        mm_obj_warn (self, "couldn't query +CFUN: %s", error->message);
++        initialization_complete (task);
++        return;
++    }
++
++    if (!mm_3gpp_parse_cfun_query_response (response, &state, &error)) {
++        mm_obj_warn (self, "couldn't parse +CFUN response: %s", error->message);
++        initialization_complete (task);
++        return;
++    }
++
++    if (state == 1) {
++        initialization_complete (task);
++        return;
++    }
++
++    mm_obj_info (self, "MD radio is off (+CFUN: %u); powering it up before initialization", state);
++    mm_base_modem_at_command (self, "+CFUN=1", 15, FALSE,
++                              (GAsyncReadyCallback) cfun_set_ready, task);
++}
++
++static void
++parent_initialization_started_ready (MMBroadbandModem *self,
++                                     GAsyncResult     *res,
++                                     GTask            *task)
++{
++    GError   *error = NULL;
++    gpointer  parent_ctx;
++
++    parent_ctx = MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_mtk_ccci_parent_class)->initialization_started_finish (self, res, &error);
++    if (error) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    g_task_set_task_data (task, parent_ctx, NULL);
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+CFUN?", 5, FALSE,
++                              (GAsyncReadyCallback) cfun_query_ready, task);
++}
++
++static void
++initialization_started (MMBroadbandModem    *self,
++                        GAsyncReadyCallback  callback,
++                        gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    MM_BROADBAND_MODEM_CLASS (mm_broadband_modem_mtk_ccci_parent_class)->initialization_started (
++        self,
++        (GAsyncReadyCallback) parent_initialization_started_ready,
++        task);
++}
++
++/*****************************************************************************/
++/* Power up (Modem interface)
++ *
++ * After the generic +CFUN=1, tell the MD that data is allowed on this SIM
++ * (AT+EDALLOW=1, what the stock RIL sends). Older MDs do not know it: any
++ * error is ignored.
++ */
++
++static gboolean
++modem_power_up_finish (MMIfaceModem  *self,
++                       GAsyncResult  *res,
++                       GError       **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++edallow_ready (MMBaseModem  *self,
++               GAsyncResult *res,
++               GTask        *task)
++{
++    g_autoptr(GError) error = NULL;
++
++    if (!mm_base_modem_at_command_finish (self, res, &error))
++        mm_obj_dbg (self, "AT+EDALLOW=1 not accepted (ignored): %s", error->message);
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++parent_modem_power_up_ready (MMIfaceModem *self,
++                             GAsyncResult *res,
++                             GTask        *task)
++{
++    GError *error = NULL;
++
++    if (!iface_modem_parent->modem_power_up_finish (self, res, &error)) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+EDALLOW=1", 5, FALSE,
++                              (GAsyncReadyCallback) edallow_ready, task);
++}
++
++static void
++modem_power_up (MMIfaceModem        *self,
++                GAsyncReadyCallback  callback,
++                gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    iface_modem_parent->modem_power_up (self,
++                                        (GAsyncReadyCallback) parent_modem_power_up_ready,
++                                        task);
++}
++
++/*****************************************************************************/
++/* Create bearer (Modem interface) */
++
++static MMBaseBearer *
++modem_create_bearer_finish (MMIfaceModem  *self,
++                            GAsyncResult  *res,
++                            GError       **error)
++{
++    return g_task_propagate_pointer (G_TASK (res), error);
++}
++
++static void
++broadband_bearer_mtk_ccci_new_ready (GObject      *source,
++                                     GAsyncResult *res,
++                                     GTask        *task)
++{
++    MMBaseBearer *bearer;
++    GError       *error = NULL;
++
++    bearer = mm_broadband_bearer_mtk_ccci_new_finish (res, &error);
++    if (!bearer)
++        g_task_return_error (task, error);
++    else
++        g_task_return_pointer (task, bearer, g_object_unref);
++    g_object_unref (task);
++}
++
++static void
++modem_create_bearer (MMIfaceModem        *self,
++                     MMBearerProperties  *properties,
++                     GAsyncReadyCallback  callback,
++                     gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    mm_broadband_bearer_mtk_ccci_new (MM_BROADBAND_MODEM_MTK_CCCI (self),
++                                      properties,
++                                      NULL, /* cancellable */
++                                      (GAsyncReadyCallback) broadband_bearer_mtk_ccci_new_ready,
++                                      task);
++}
++
++/*****************************************************************************/
++/* +ECPI: call progress (Voice interface) */
++
++static void
++reload_all_calls_ready (MMIfaceModemVoice *self,
++                        GAsyncResult      *res)
++{
++    g_autoptr(GError) error = NULL;
++
++    if (!mm_iface_modem_voice_reload_all_calls_finish (self, res, &error))
++        mm_obj_dbg (self, "couldn't reload call list after +ECPI: %s", error->message);
++}
++
++static gboolean
++call_list_reload_cb (MMBroadbandModemMtkCcci *self)
++{
++    self->priv->call_list_reload_id = 0;
++    mm_iface_modem_voice_reload_all_calls (MM_IFACE_MODEM_VOICE (self),
++                                           (GAsyncReadyCallback) reload_all_calls_ready,
++                                           NULL);
++    return G_SOURCE_REMOVE;
++}
++
++static void
++schedule_call_list_reload (MMBroadbandModemMtkCcci *self)
++{
++    /* Bursts of +ECPI (e.g. 133 + 129 on release) need one +CLCC only */
++    if (!self->priv->call_list_reload_id)
++        self->priv->call_list_reload_id = g_timeout_add (200, (GSourceFunc) call_list_reload_cb, self);
++}
++
++static void
++ecpi_received (MMPortSerialAt          *port,
++               GMatchInfo              *match_info,
++               MMBroadbandModemMtkCcci *self)
++{
++    g_autofree gchar   *str = NULL;
++    g_autoptr(GError)   error = NULL;
++    MMMtkCcciEcpiInfo   info = { 0 };
++    MMCallInfo          call_info = { 0 };
++
++    str = g_match_info_fetch (match_info, 1);
++    if (!mm_mtk_ccci_parse_ecpi (str, &info, &error)) {
++        mm_obj_warn (self, "couldn't parse +ECPI report: %s", error->message);
++        return;
++    }
++
++    mm_obj_dbg (self, "call %u progress: +ECPI message %u%s%s",
++                info.call_id, info.msg_type,
++                info.number ? ", number " : "",
++                info.number ? info.number : "");
++
++    call_info.state = mm_mtk_ccci_ecpi_msg_type_to_call_state (info.msg_type, &call_info.direction);
++    if (call_info.state == MM_CALL_STATE_UNKNOWN) {
++        /* 4 (sync) carries nothing for us; the rest is resolved by +CLCC */
++        if (info.msg_type != 4)
++            schedule_call_list_reload (self);
++        mm_mtk_ccci_ecpi_info_clear (&info);
++        return;
++    }
++
++    if (call_info.direction == MM_CALL_DIRECTION_UNKNOWN && info.has_dir)
++        call_info.direction = info.dir ? MM_CALL_DIRECTION_INCOMING : MM_CALL_DIRECTION_OUTGOING;
++    call_info.index  = info.call_id;
++    call_info.number = info.number;
++    mm_iface_modem_voice_report_call (MM_IFACE_MODEM_VOICE (self), &call_info);
++
++    mm_mtk_ccci_ecpi_info_clear (&info);
++}
++
++static void
++set_ecpi_handler (MMBroadbandModemMtkCcci *self,
++                  gboolean                 enable)
++{
++    MMPortSerialAt *primary;
++
++    primary = mm_base_modem_peek_port_primary (MM_BASE_MODEM (self));
++    if (!primary)
++        return;
++
++    mm_port_serial_at_add_unsolicited_msg_handler (primary,
++                                                   self->priv->ecpi_regex,
++                                                   enable ? (MMPortSerialAtUnsolicitedMsgFn) ecpi_received : NULL,
++                                                   enable ? self : NULL,
++                                                   NULL);
++    if (!enable && self->priv->call_list_reload_id) {
++        g_source_remove (self->priv->call_list_reload_id);
++        self->priv->call_list_reload_id = 0;
++    }
++}
++
++/* Setup unsolicited events (Voice interface) */
++
++static gboolean
++modem_voice_setup_unsolicited_events_finish (MMIfaceModemVoice  *self,
++                                             GAsyncResult       *res,
++                                             GError            **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++parent_voice_setup_unsolicited_events_ready (MMIfaceModemVoice *self,
++                                             GAsyncResult      *res,
++                                             GTask             *task)
++{
++    GError *error = NULL;
++
++    if (!iface_modem_voice_parent->setup_unsolicited_events_finish (self, res, &error)) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    set_ecpi_handler (MM_BROADBAND_MODEM_MTK_CCCI (self), TRUE);
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++modem_voice_setup_unsolicited_events (MMIfaceModemVoice   *self,
++                                      GAsyncReadyCallback  callback,
++                                      gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    iface_modem_voice_parent->setup_unsolicited_events (
++        self,
++        (GAsyncReadyCallback) parent_voice_setup_unsolicited_events_ready,
++        task);
++}
++
++/* Cleanup unsolicited events (Voice interface) */
++
++static gboolean
++modem_voice_cleanup_unsolicited_events_finish (MMIfaceModemVoice  *self,
++                                               GAsyncResult       *res,
++                                               GError            **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++parent_voice_cleanup_unsolicited_events_ready (MMIfaceModemVoice *self,
++                                               GAsyncResult      *res,
++                                               GTask             *task)
++{
++    GError *error = NULL;
++
++    if (!iface_modem_voice_parent->cleanup_unsolicited_events_finish (self, res, &error))
++        g_task_return_error (task, error);
++    else
++        g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++modem_voice_cleanup_unsolicited_events (MMIfaceModemVoice   *self,
++                                        GAsyncReadyCallback  callback,
++                                        gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    /* Keep swallowing +ECPI, just stop handling it */
++    set_ecpi_handler (MM_BROADBAND_MODEM_MTK_CCCI (self), FALSE);
++    iface_modem_voice_parent->cleanup_unsolicited_events (
++        self,
++        (GAsyncReadyCallback) parent_voice_cleanup_unsolicited_events_ready,
++        task);
++}
++
++/* Enable unsolicited events (Voice interface)
++ *
++ * The stock RIL enables every +ECPI message type with AT+ECPI=4294967295
++ * (bitmask, all bits). Not fatal: the MD already reports the common ones. */
++
++static gboolean
++modem_voice_enable_unsolicited_events_finish (MMIfaceModemVoice  *self,
++                                              GAsyncResult       *res,
++                                              GError            **error)
++{
++    return g_task_propagate_boolean (G_TASK (res), error);
++}
++
++static void
++ecpi_enable_ready (MMBaseModem  *self,
++                   GAsyncResult *res,
++                   GTask        *task)
++{
++    g_autoptr(GError) error = NULL;
++
++    if (!mm_base_modem_at_command_finish (self, res, &error))
++        mm_obj_dbg (self, "couldn't enable all +ECPI reports (ignored): %s", error->message);
++    g_task_return_boolean (task, TRUE);
++    g_object_unref (task);
++}
++
++static void
++parent_voice_enable_unsolicited_events_ready (MMIfaceModemVoice *self,
++                                              GAsyncResult      *res,
++                                              GTask             *task)
++{
++    GError *error = NULL;
++
++    if (!iface_modem_voice_parent->enable_unsolicited_events_finish (self, res, &error)) {
++        g_task_return_error (task, error);
++        g_object_unref (task);
++        return;
++    }
++
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "+ECPI=4294967295", 5, FALSE,
++                              (GAsyncReadyCallback) ecpi_enable_ready, task);
++}
++
++static void
++modem_voice_enable_unsolicited_events (MMIfaceModemVoice   *self,
++                                       GAsyncReadyCallback  callback,
++                                       gpointer             user_data)
++{
++    GTask *task;
++
++    task = g_task_new (self, NULL, callback, user_data);
++    iface_modem_voice_parent->enable_unsolicited_events (
++        self,
++        (GAsyncReadyCallback) parent_voice_enable_unsolicited_events_ready,
++        task);
++}
++
++/* Hangup all (Voice interface): the stock RIL uses ATH, not +CHUP */
++
++static gboolean
++modem_voice_hangup_all_finish (MMIfaceModemVoice  *self,
++                               GAsyncResult       *res,
++                               GError            **error)
++{
++    return !!mm_base_modem_at_command_finish (MM_BASE_MODEM (self), res, error);
++}
++
++static void
++modem_voice_hangup_all (MMIfaceModemVoice   *self,
++                        GAsyncReadyCallback  callback,
++                        gpointer             user_data)
++{
++    mm_base_modem_at_command (MM_BASE_MODEM (self), "H", 5, FALSE, callback, user_data);
++}
++
++/*****************************************************************************/
++
++MMBroadbandModemMtkCcci *
++mm_broadband_modem_mtk_ccci_new (const gchar  *device,
++                                 const gchar  *physdev,
++                                 const gchar **drivers,
++                                 const gchar  *plugin,
++                                 guint16       vendor_id,
++                                 guint16       product_id)
++{
++    return g_object_new (MM_TYPE_BROADBAND_MODEM_MTK_CCCI,
++                         MM_BASE_MODEM_DEVICE,     device,
++                         MM_BASE_MODEM_PHYSDEV,    physdev,
++                         MM_BASE_MODEM_DRIVERS,    drivers,
++                         MM_BASE_MODEM_PLUGIN,     plugin,
++                         MM_BASE_MODEM_VENDOR_ID,  vendor_id,
++                         MM_BASE_MODEM_PRODUCT_ID, product_id,
++                         /* Data only over the ccmni net ports, never PPP */
++                         MM_BASE_MODEM_DATA_NET_SUPPORTED, TRUE,
++                         MM_BASE_MODEM_DATA_TTY_SUPPORTED, FALSE,
++                         NULL);
++}
++
++static void
++mm_broadband_modem_mtk_ccci_init (MMBroadbandModemMtkCcci *self)
++{
++    guint i;
++
++    self->priv = mm_broadband_modem_mtk_ccci_get_instance_private (self);
++
++    self->priv->eif_regex  = mtk_ccci_regex_new (MTK_CCCI_URC_REGEX ("EIF"));
++    self->priv->ecpi_regex = mtk_ccci_regex_new (MTK_CCCI_URC_REGEX ("ECPI"));
++    self->priv->ignored_regexes = g_ptr_array_new_with_free_func ((GDestroyNotify) g_regex_unref);
++    for (i = 0; i < G_N_ELEMENTS (mtk_ccci_ignored_urcs); i++)
++        g_ptr_array_add (self->priv->ignored_regexes, mtk_ccci_regex_new (mtk_ccci_ignored_urcs[i]));
++    self->priv->active_pdns = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL,
++                                                     (GDestroyNotify) mm_mtk_ccci_eif_info_free);
++}
++
++static void
++dispose (GObject *object)
++{
++    MMBroadbandModemMtkCcci *self = MM_BROADBAND_MODEM_MTK_CCCI (object);
++
++    if (self->priv->call_list_reload_id) {
++        g_source_remove (self->priv->call_list_reload_id);
++        self->priv->call_list_reload_id = 0;
++    }
++
++    G_OBJECT_CLASS (mm_broadband_modem_mtk_ccci_parent_class)->dispose (object);
++}
++
++static void
++finalize (GObject *object)
++{
++    MMBroadbandModemMtkCcci *self = MM_BROADBAND_MODEM_MTK_CCCI (object);
++
++    g_regex_unref (self->priv->eif_regex);
++    g_regex_unref (self->priv->ecpi_regex);
++    g_ptr_array_unref (self->priv->ignored_regexes);
++    g_hash_table_unref (self->priv->active_pdns);
++
++    G_OBJECT_CLASS (mm_broadband_modem_mtk_ccci_parent_class)->finalize (object);
++}
++
++static void
++iface_modem_init (MMIfaceModemInterface *iface)
++{
++    iface_modem_parent = g_type_interface_peek_parent (iface);
++
++    iface->modem_power_up        = modem_power_up;
++    iface->modem_power_up_finish = modem_power_up_finish;
++    iface->create_bearer         = modem_create_bearer;
++    iface->create_bearer_finish  = modem_create_bearer_finish;
++}
++
++static void
++iface_modem_voice_init (MMIfaceModemVoiceInterface *iface)
++{
++    iface_modem_voice_parent = g_type_interface_peek_parent (iface);
++
++    iface->setup_unsolicited_events          = modem_voice_setup_unsolicited_events;
++    iface->setup_unsolicited_events_finish   = modem_voice_setup_unsolicited_events_finish;
++    iface->cleanup_unsolicited_events        = modem_voice_cleanup_unsolicited_events;
++    iface->cleanup_unsolicited_events_finish = modem_voice_cleanup_unsolicited_events_finish;
++    iface->enable_unsolicited_events         = modem_voice_enable_unsolicited_events;
++    iface->enable_unsolicited_events_finish  = modem_voice_enable_unsolicited_events_finish;
++    iface->hangup_all                        = modem_voice_hangup_all;
++    iface->hangup_all_finish                 = modem_voice_hangup_all_finish;
++}
++
++static void
++mm_broadband_modem_mtk_ccci_class_init (MMBroadbandModemMtkCcciClass *klass)
++{
++    GObjectClass          *object_class    = G_OBJECT_CLASS (klass);
++    MMBroadbandModemClass *broadband_class = MM_BROADBAND_MODEM_CLASS (klass);
++
++    object_class->dispose  = dispose;
++    object_class->finalize = finalize;
++
++    broadband_class->setup_ports                   = setup_ports;
++    broadband_class->initialization_started        = initialization_started;
++    broadband_class->initialization_started_finish = initialization_started_finish;
++
++    signals[SIGNAL_EIF] =
++        g_signal_new (MM_BROADBAND_MODEM_MTK_CCCI_SIGNAL_EIF,
++                      G_OBJECT_CLASS_TYPE (object_class),
++                      G_SIGNAL_RUN_LAST,
++                      0, NULL, NULL,
++                      g_cclosure_marshal_VOID__POINTER,
++                      G_TYPE_NONE, 1, G_TYPE_POINTER);
++}
+diff --git c/src/plugins/mtk-ccci/mm-broadband-modem-mtk-ccci.h i/src/plugins/mtk-ccci/mm-broadband-modem-mtk-ccci.h
+new file mode 100644
+index 0000000..c9b5ac2
+--- /dev/null
++++ i/src/plugins/mtk-ccci/mm-broadband-modem-mtk-ccci.h
+@@ -0,0 +1,59 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Copyright (C) 2026 Thunder OS contributors
++ */
++
++#ifndef MM_BROADBAND_MODEM_MTK_CCCI_H
++#define MM_BROADBAND_MODEM_MTK_CCCI_H
++
++#include "mm-broadband-modem.h"
++#include "mm-modem-helpers-mtk-ccci.h"
++
++#define MM_TYPE_BROADBAND_MODEM_MTK_CCCI            (mm_broadband_modem_mtk_ccci_get_type ())
++#define MM_BROADBAND_MODEM_MTK_CCCI(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), MM_TYPE_BROADBAND_MODEM_MTK_CCCI, MMBroadbandModemMtkCcci))
++#define MM_BROADBAND_MODEM_MTK_CCCI_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass),  MM_TYPE_BROADBAND_MODEM_MTK_CCCI, MMBroadbandModemMtkCcciClass))
++#define MM_IS_BROADBAND_MODEM_MTK_CCCI(obj)         (G_TYPE_CHECK_INSTANCE_TYPE ((obj), MM_TYPE_BROADBAND_MODEM_MTK_CCCI))
++#define MM_IS_BROADBAND_MODEM_MTK_CCCI_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass),  MM_TYPE_BROADBAND_MODEM_MTK_CCCI))
++#define MM_BROADBAND_MODEM_MTK_CCCI_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj),  MM_TYPE_BROADBAND_MODEM_MTK_CCCI, MMBroadbandModemMtkCcciClass))
++
++/* Emitted for every +EIF URC; the argument is a const MMMtkCcciEifInfo * */
++#define MM_BROADBAND_MODEM_MTK_CCCI_SIGNAL_EIF "mtk-ccci-eif"
++
++typedef struct _MMBroadbandModemMtkCcci        MMBroadbandModemMtkCcci;
++typedef struct _MMBroadbandModemMtkCcciClass   MMBroadbandModemMtkCcciClass;
++typedef struct _MMBroadbandModemMtkCcciPrivate MMBroadbandModemMtkCcciPrivate;
++
++struct _MMBroadbandModemMtkCcci {
++    MMBroadbandModem parent;
++    MMBroadbandModemMtkCcciPrivate *priv;
++};
++
++struct _MMBroadbandModemMtkCcciClass {
++    MMBroadbandModemClass parent;
++};
++
++GType mm_broadband_modem_mtk_ccci_get_type (void);
++G_DEFINE_AUTOPTR_CLEANUP_FUNC (MMBroadbandModemMtkCcci, g_object_unref)
++
++MMBroadbandModemMtkCcci *mm_broadband_modem_mtk_ccci_new (const gchar  *device,
++                                                          const gchar  *physdev,
++                                                          const gchar **drivers,
++                                                          const gchar  *plugin,
++                                                          guint16       vendor_id,
++                                                          guint16       product_id);
++
++/* Last "ifup" seen for a PDP context that has not gone down since, or NULL */
++const MMMtkCcciEifInfo *mm_broadband_modem_mtk_ccci_peek_active_pdn (MMBroadbandModemMtkCcci *self,
++                                                                     guint                    cid);
++
++#endif /* MM_BROADBAND_MODEM_MTK_CCCI_H */
+diff --git c/src/plugins/mtk-ccci/mm-modem-helpers-mtk-ccci.c i/src/plugins/mtk-ccci/mm-modem-helpers-mtk-ccci.c
+new file mode 100644
+index 0000000..c7f96fd
+--- /dev/null
++++ i/src/plugins/mtk-ccci/mm-modem-helpers-mtk-ccci.c
+@@ -0,0 +1,599 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Copyright (C) 2026 Thunder OS contributors
++ */
++
++#include <config.h>
++
++#include <string.h>
++
++#include <ModemManager.h>
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "mm-modem-helpers.h"
++#include "mm-modem-helpers-mtk-ccci.h"
++
++/*****************************************************************************/
++
++gchar **
++mm_mtk_ccci_split_fields (const gchar *str)
++{
++    GPtrArray *fields;
++    GString   *current;
++    gboolean   in_quotes = FALSE;
++    const gchar *p;
++
++    fields  = g_ptr_array_new ();
++    current = g_string_new (NULL);
++
++    for (p = str ? str : ""; *p; p++) {
++        if (*p == '"') {
++            in_quotes = !in_quotes;
++            continue;
++        }
++        if (*p == ',' && !in_quotes) {
++            g_ptr_array_add (fields, g_strstrip (g_string_free (current, FALSE)));
++            current = g_string_new (NULL);
++            continue;
++        }
++        if (*p == '\r' || *p == '\n')
++            continue;
++        g_string_append_c (current, *p);
++    }
++    g_ptr_array_add (fields, g_strstrip (g_string_free (current, FALSE)));
++    g_ptr_array_add (fields, NULL);
++
++    return (gchar **) g_ptr_array_free (fields, FALSE);
++}
++
++/*****************************************************************************/
++
++/* Number of leading one bits of a netmask; 0 if the mask is not contiguous */
++static guint
++mask_to_prefix (const guint8 *mask,
++                guint         len)
++{
++    guint    prefix = 0;
++    gboolean zero_seen = FALSE;
++    guint    i;
++    gint     bit;
++
++    for (i = 0; i < len; i++) {
++        for (bit = 7; bit >= 0; bit--) {
++            if (mask[i] & (1 << bit)) {
++                if (zero_seen)
++                    return 0;
++                prefix++;
++            } else
++                zero_seen = TRUE;
++        }
++    }
++    return prefix;
++}
++
++gboolean
++mm_mtk_ccci_parse_ip_address (const gchar    *str,
++                              GSocketFamily  *out_family,
++                              gchar         **out_address,
++                              guint          *out_prefix)
++{
++    g_autofree gchar        *copy = NULL;
++    g_autoptr(GInetAddress)  addr = NULL;
++    gchar                   *slash;
++    guint                    prefix = 0;
++    guint                    max_prefix;
++
++    if (!str)
++        return FALSE;
++
++    copy = g_strdup (str);
++    g_strstrip (copy);
++    g_strdelimit (copy, "\"", ' ');
++    g_strstrip (copy);
++    if (!copy[0])
++        return FALSE;
++
++    slash = strchr (copy, '/');
++    if (slash) {
++        *slash = '\0';
++        if (!mm_get_uint_from_str (slash + 1, &prefix))
++            return FALSE;
++        g_strstrip (copy);
++    }
++
++    if (strchr (copy, ':')) {
++        addr = g_inet_address_new_from_string (copy);
++        max_prefix = 128;
++    } else {
++        g_auto(GStrv) octets = NULL;
++        guint8        bytes[32];
++        guint         n;
++        guint         i;
++
++        octets = g_strsplit (copy, ".", -1);
++        n = g_strv_length (octets);
++        if (n != 4 && n != 8 && n != 16 && n != 32)
++            return FALSE;
++
++        for (i = 0; i < n; i++) {
++            guint value;
++
++            if (!mm_get_uint_from_str (octets[i], &value) || value > 255)
++                return FALSE;
++            bytes[i] = (guint8) value;
++        }
++
++        if (n == 4 || n == 8) {
++            addr = g_inet_address_new_from_bytes (bytes, G_SOCKET_FAMILY_IPV4);
++            max_prefix = 32;
++        } else {
++            addr = g_inet_address_new_from_bytes (bytes, G_SOCKET_FAMILY_IPV6);
++            max_prefix = 128;
++        }
++
++        /* Address followed by its mask */
++        if (!slash && (n == 8 || n == 32))
++            prefix = mask_to_prefix (&bytes[n / 2], n / 2);
++    }
++
++    if (!addr || g_inet_address_get_is_any (addr) || prefix > max_prefix)
++        return FALSE;
++
++    if (out_family)
++        *out_family = g_inet_address_get_family (addr);
++    if (out_address)
++        *out_address = g_inet_address_to_string (addr);
++    if (out_prefix)
++        *out_prefix = prefix;
++    return TRUE;
++}
++
++/*****************************************************************************/
++/* +EIF */
++
++void
++mm_mtk_ccci_eif_info_clear (MMMtkCcciEifInfo *info)
++{
++    g_clear_pointer (&info->event_str, g_free);
++    g_clear_pointer (&info->ipv4, g_free);
++    g_clear_pointer (&info->ipv6, g_free);
++}
++
++MMMtkCcciEifInfo *
++mm_mtk_ccci_eif_info_dup (const MMMtkCcciEifInfo *info)
++{
++    MMMtkCcciEifInfo *copy;
++
++    copy = g_new0 (MMMtkCcciEifInfo, 1);
++    *copy = *info;
++    copy->event_str = g_strdup (info->event_str);
++    copy->ipv4 = g_strdup (info->ipv4);
++    copy->ipv6 = g_strdup (info->ipv6);
++    return copy;
++}
++
++void
++mm_mtk_ccci_eif_info_free (MMMtkCcciEifInfo *info)
++{
++    if (!info)
++        return;
++    mm_mtk_ccci_eif_info_clear (info);
++    g_free (info);
++}
++
++gchar *
++mm_mtk_ccci_build_net_port_name (guint trans_intf_id)
++{
++    return g_strdup_printf ("ccmni%u", trans_intf_id % MM_MTK_CCCI_TRANS_INTF_ID_DIVISOR);
++}
++
++gboolean
++mm_mtk_ccci_eif_same_interface (const MMMtkCcciEifInfo *up,
++                                const MMMtkCcciEifInfo *report)
++{
++    if (up->trans_intf_id == report->trans_intf_id)
++        return TRUE;
++    return (report->trans_intf_id < MM_MTK_CCCI_TRANS_INTF_ID_DIVISOR &&
++            report->interface_index == up->interface_index);
++}
++
++static void
++eif_store_address (MMMtkCcciEifInfo *info,
++                   const gchar      *field)
++{
++    GSocketFamily     family;
++    g_autofree gchar *address = NULL;
++
++    if (!mm_mtk_ccci_parse_ip_address (field, &family, &address, NULL))
++        return;
++
++    if (family == G_SOCKET_FAMILY_IPV4 && !info->ipv4)
++        info->ipv4 = g_steal_pointer (&address);
++    else if (family == G_SOCKET_FAMILY_IPV6 && !info->ipv6)
++        info->ipv6 = g_steal_pointer (&address);
++}
++
++gboolean
++mm_mtk_ccci_parse_eif (const gchar       *str,
++                       MMMtkCcciEifInfo  *out_info,
++                       GError           **error)
++{
++    g_auto(GStrv)    fields = NULL;
++    MMMtkCcciEifInfo info = { 0 };
++    guint            n;
++    guint            i;
++
++    g_assert (out_info);
++
++    if (!str) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS, "Missing +EIF payload");
++        return FALSE;
++    }
++
++    fields = mm_mtk_ccci_split_fields (mm_strip_tag (str, "+EIF:"));
++    n = g_strv_length (fields);
++    if (n < 2 || !fields[1][0]) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                     "Couldn't parse +EIF: '%s': too few fields", str);
++        return FALSE;
++    }
++
++    if (!mm_get_uint_from_str (fields[0], &info.trans_intf_id)) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                     "Couldn't parse +EIF: '%s': invalid interface id", str);
++        return FALSE;
++    }
++    info.interface_index = info.trans_intf_id % MM_MTK_CCCI_TRANS_INTF_ID_DIVISOR;
++
++    info.event_str = g_ascii_strdown (fields[1], -1);
++    if (g_str_equal (info.event_str, "ifup"))
++        info.event = MM_MTK_CCCI_EIF_EVENT_IFUP;
++    else if (g_str_equal (info.event_str, "ifdown"))
++        info.event = MM_MTK_CCCI_EIF_EVENT_IFDOWN;
++    else if (g_str_equal (info.event_str, "ifchg") || g_str_equal (info.event_str, "ifchange"))
++        info.event = MM_MTK_CCCI_EIF_EVENT_IFCHG;
++    else
++        info.event = MM_MTK_CCCI_EIF_EVENT_UNKNOWN;
++
++    if (n > 2 && fields[2][0] && mm_get_uint_from_str (fields[2], &info.cid))
++        info.has_cid = TRUE;
++
++    for (i = 3; i < n && i < 5; i++)
++        eif_store_address (&info, fields[i]);
++
++    *out_info = info;
++    return TRUE;
++}
++
++/*****************************************************************************/
++/* +ECPI */
++
++void
++mm_mtk_ccci_ecpi_info_clear (MMMtkCcciEcpiInfo *info)
++{
++    g_clear_pointer (&info->number, g_free);
++}
++
++gboolean
++mm_mtk_ccci_parse_ecpi (const gchar        *str,
++                        MMMtkCcciEcpiInfo  *out_info,
++                        GError            **error)
++{
++    g_auto(GStrv)     fields = NULL;
++    MMMtkCcciEcpiInfo info = { 0 };
++    guint             n;
++
++    g_assert (out_info);
++
++    if (!str) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS, "Missing +ECPI payload");
++        return FALSE;
++    }
++
++    fields = mm_mtk_ccci_split_fields (mm_strip_tag (str, "+ECPI:"));
++    n = g_strv_length (fields);
++    if (n < 2 ||
++        !mm_get_uint_from_str (fields[0], &info.call_id) ||
++        !mm_get_uint_from_str (fields[1], &info.msg_type)) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS,
++                     "Couldn't parse +ECPI: '%s'", str);
++        return FALSE;
++    }
++
++    if (n > 4 && fields[4][0] && mm_get_uint_from_str (fields[4], &info.dir))
++        info.has_dir = TRUE;
++    if (n > 6 && fields[6][0])
++        info.number = g_strdup (fields[6]);
++    if (n > 9 && fields[9][0] && mm_get_uint_from_str (fields[9], &info.cause))
++        info.has_cause = TRUE;
++
++    *out_info = info;
++    return TRUE;
++}
++
++/*
++ * +ECPI message types, as documented in MediaTek's RIL (ril_cc.c, "CSMCC"
++ * messages) and confirmed by the strings of the stock libmtk-ril.so
++ * (handleECPI133Received, "notify ECPI 0" on incoming call ring):
++ *
++ *     0  SETUP                       MT call setup (ring)
++ *     1  DISCONNECT                  network disconnect indication
++ *     2  ALERT                       MO call alerting (remote ringing)
++ *     3  CALL_PROCESS                MO call proceeding
++ *     4  SYNC                        channel/codec synchronization
++ *     5  PROGRESS                    MO call progress (in-band tones)
++ *     6  CALL_CONNECTED              call connected
++ *   129  ALL_CALLS_DISC              all calls disconnected
++ *   130  MO_CALL_ID_ASSIGN           MO call id assigned (dialing)
++ *   131  STATE_CHANGE_HELD           call put on hold
++ *   132  STATE_CHANGE_ACTIVE         call active (retrieved/answered)
++ *   133  STATE_CHANGE_DISCONNECTED   call released
++ *   134  STATE_CHANGE_MO_DISCONNECTING  MO release in progress
++ *
++ * Only the messages that imply one definite state are mapped. Progress
++ * reports (3, 4, 5) may arrive after ALERT and must not move a call back to
++ * DIALING; 0, 1, 129 and 134 are resolved by reloading the +CLCC list, which
++ * also tells RINGING_IN apart from WAITING.
++ */
++MMCallState
++mm_mtk_ccci_ecpi_msg_type_to_call_state (guint            msg_type,
++                                         MMCallDirection *out_direction)
++{
++    MMCallDirection direction = MM_CALL_DIRECTION_UNKNOWN;
++    MMCallState     state;
++
++    switch (msg_type) {
++    case 130:
++        state = MM_CALL_STATE_DIALING;
++        direction = MM_CALL_DIRECTION_OUTGOING;
++        break;
++    case 2:
++        state = MM_CALL_STATE_RINGING_OUT;
++        direction = MM_CALL_DIRECTION_OUTGOING;
++        break;
++    case 6:
++    case 132:
++        state = MM_CALL_STATE_ACTIVE;
++        break;
++    case 131:
++        state = MM_CALL_STATE_HELD;
++        break;
++    case 133:
++        state = MM_CALL_STATE_TERMINATED;
++        break;
++    default:
++        state = MM_CALL_STATE_UNKNOWN;
++        break;
++    }
++
++    if (out_direction)
++        *out_direction = direction;
++    return state;
++}
++
++/*****************************************************************************/
++/* +CGCONTRDP */
++
++static void
++pdp_info_free (MMMtkCcciPdpInfo *info)
++{
++    guint i;
++
++    g_free (info->apn);
++    g_free (info->address);
++    g_free (info->gateway);
++    for (i = 0; i < G_N_ELEMENTS (info->dns); i++)
++        g_free (info->dns[i]);
++    g_free (info);
++}
++
++void
++mm_mtk_ccci_pdp_info_list_free (GList *list)
++{
++    g_list_free_full (list, (GDestroyNotify) pdp_info_free);
++}
++
++static gboolean
++field_is_plain_ipv4 (const gchar *field)
++{
++    g_auto(GStrv) octets = NULL;
++
++    if (!field || !field[0] || strchr (field, ':') || strchr (field, '/'))
++        return FALSE;
++    octets = g_strsplit (field, ".", -1);
++    return g_strv_length (octets) == 4;
++}
++
++/* Old (< 27.007 v9.4.0) format: "<addr>","<mask>" in two fields */
++static gboolean
++field_is_ipv4_netmask (const gchar *field)
++{
++    g_auto(GStrv) octets = NULL;
++    guint8        bytes[4];
++    guint         i;
++
++    if (!field_is_plain_ipv4 (field))
++        return FALSE;
++    octets = g_strsplit (field, ".", -1);
++    for (i = 0; i < 4; i++) {
++        guint value;
++
++        if (!mm_get_uint_from_str (octets[i], &value) || value > 255)
++            return FALSE;
++        bytes[i] = (guint8) value;
++    }
++    /* A netmask starts with 255 and is contiguous */
++    return (bytes[0] == 255 && mask_to_prefix (bytes, 4) > 0);
++}
++
++GList *
++mm_mtk_ccci_parse_cgcontrdp_response (const gchar  *response,
++                                      guint         cid,
++                                      GError      **error)
++{
++    g_auto(GStrv)  lines = NULL;
++    GList         *list = NULL;
++    guint          i;
++
++    if (!response) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS, "Missing +CGCONTRDP response");
++        return NULL;
++    }
++
++    lines = g_strsplit_set (response, "\r\n", -1);
++    for (i = 0; lines[i]; i++) {
++        g_auto(GStrv)     fields = NULL;
++        MMMtkCcciPdpInfo *info;
++        const gchar      *line;
++        guint             n;
++        guint             line_cid;
++        gboolean          old_format;
++        guint             gw_idx;
++        guint             dns_idx;
++        guint             n_dns = 0;
++        guint             j;
++
++        line = g_strstrip (lines[i]);
++        if (!g_str_has_prefix (line, "+CGCONTRDP:"))
++            continue;
++
++        fields = mm_mtk_ccci_split_fields (mm_strip_tag (line, "+CGCONTRDP:"));
++        n = g_strv_length (fields);
++        if (n < 1 || !mm_get_uint_from_str (fields[0], &line_cid) || line_cid != cid)
++            continue;
++
++        info = g_new0 (MMMtkCcciPdpInfo, 1);
++        info->cid = line_cid;
++        info->family = G_SOCKET_FAMILY_INVALID;
++        if (n > 1)
++            mm_get_uint_from_str (fields[1], &info->bearer_id);
++        if (n > 2 && fields[2][0])
++            info->apn = g_strdup (fields[2]);
++
++        old_format = (n > 4 && field_is_plain_ipv4 (fields[3]) && field_is_ipv4_netmask (fields[4]));
++        gw_idx  = old_format ? 5 : 4;
++        dns_idx = gw_idx + 1;
++
++        if (n > 3) {
++            GSocketFamily family;
++
++            if (mm_mtk_ccci_parse_ip_address (fields[3], &family, &info->address, &info->prefix)) {
++                info->family = family;
++                if (old_format) {
++                    g_autofree gchar *mask_with_addr = NULL;
++
++                    mask_with_addr = g_strdup_printf ("%s.%s", fields[3], fields[4]);
++                    mm_mtk_ccci_parse_ip_address (mask_with_addr, NULL, NULL, &info->prefix);
++                }
++            }
++        }
++
++        if (n > gw_idx) {
++            GSocketFamily family;
++
++            if (mm_mtk_ccci_parse_ip_address (fields[gw_idx], &family, &info->gateway, NULL) &&
++                info->family == G_SOCKET_FAMILY_INVALID)
++                info->family = family;
++        }
++
++        for (j = dns_idx; j < n && j < dns_idx + 2; j++) {
++            GSocketFamily family;
++            gchar        *dns = NULL;
++
++            if (!mm_mtk_ccci_parse_ip_address (fields[j], &family, &dns, NULL))
++                continue;
++            info->dns[n_dns++] = dns;
++            if (info->family == G_SOCKET_FAMILY_INVALID)
++                info->family = family;
++        }
++
++        /* <IPv4_MTU> is the 12th field in the current format */
++        if (!old_format && n > 11 && fields[11][0]) {
++            guint mtu;
++
++            if (mm_get_uint_from_str (fields[11], &mtu) && mtu > 0 && mtu <= 65535)
++                info->mtu = mtu;
++        }
++
++        list = g_list_append (list, info);
++    }
++
++    if (!list)
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
++                     "No +CGCONTRDP information for cid %u", cid);
++    return list;
++}
++
++/*****************************************************************************/
++/* +CGPADDR */
++
++gboolean
++mm_mtk_ccci_parse_cgpaddr_response (const gchar  *response,
++                                    guint         cid,
++                                    gchar       **out_ipv4,
++                                    gchar       **out_ipv6,
++                                    GError      **error)
++{
++    g_auto(GStrv)     lines = NULL;
++    g_autofree gchar *ipv4 = NULL;
++    g_autofree gchar *ipv6 = NULL;
++    gboolean          found = FALSE;
++    guint             i;
++
++    if (!response) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS, "Missing +CGPADDR response");
++        return FALSE;
++    }
++
++    lines = g_strsplit_set (response, "\r\n", -1);
++    for (i = 0; lines[i] && !found; i++) {
++        g_auto(GStrv)  fields = NULL;
++        const gchar   *line;
++        guint          line_cid;
++        guint          j;
++
++        line = g_strstrip (lines[i]);
++        if (!g_str_has_prefix (line, "+CGPADDR:"))
++            continue;
++
++        fields = mm_mtk_ccci_split_fields (mm_strip_tag (line, "+CGPADDR:"));
++        if (!fields[0] || !mm_get_uint_from_str (fields[0], &line_cid) || line_cid != cid)
++            continue;
++
++        found = TRUE;
++        for (j = 1; fields[j] && j < 3; j++) {
++            GSocketFamily     family;
++            g_autofree gchar *address = NULL;
++
++            if (!mm_mtk_ccci_parse_ip_address (fields[j], &family, &address, NULL))
++                continue;
++            if (family == G_SOCKET_FAMILY_IPV4 && !ipv4)
++                ipv4 = g_steal_pointer (&address);
++            else if (family == G_SOCKET_FAMILY_IPV6 && !ipv6)
++                ipv6 = g_steal_pointer (&address);
++        }
++    }
++
++    if (!found) {
++        g_set_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND,
++                     "No +CGPADDR information for cid %u", cid);
++        return FALSE;
++    }
++
++    if (out_ipv4)
++        *out_ipv4 = g_steal_pointer (&ipv4);
++    if (out_ipv6)
++        *out_ipv6 = g_steal_pointer (&ipv6);
++    return TRUE;
++}
+diff --git c/src/plugins/mtk-ccci/mm-modem-helpers-mtk-ccci.h i/src/plugins/mtk-ccci/mm-modem-helpers-mtk-ccci.h
+new file mode 100644
+index 0000000..ebcc554
+--- /dev/null
++++ i/src/plugins/mtk-ccci/mm-modem-helpers-mtk-ccci.h
+@@ -0,0 +1,138 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Copyright (C) 2026 Thunder OS contributors
++ *
++ * Response and URC parsers for MediaTek SoC modems driven over the CCCI
++ * AT channel (vendor kernels: /dev/ttyC0 + ccmniN network devices).
++ */
++
++#ifndef MM_MODEM_HELPERS_MTK_CCCI_H
++#define MM_MODEM_HELPERS_MTK_CCCI_H
++
++#include <glib.h>
++#include <gio/gio.h>
++
++#include <ModemManager.h>
++
++/* ccmniN network interfaces are addressed by the low two decimal digits of
++ * the "transaction interface id" reported in +EIF (e.g. 100 -> ccmni0,
++ * 201 -> ccmni1); the upper digits are a transaction counter. */
++#define MM_MTK_CCCI_TRANS_INTF_ID_DIVISOR 100
++
++/* Split a comma separated AT response/URC payload into fields. Quotes are
++ * honoured (commas inside quotes do not split) and removed; leading and
++ * trailing whitespace is stripped from every field. Never returns NULL. */
++gchar **mm_mtk_ccci_split_fields (const gchar *str);
++
++/* Parse an IPv4/IPv6 address in any of the forms used by 3GPP TS 27.007:
++ *   "a.b.c.d", "a.b.c.d.m1.m2.m3.m4" (address + mask), 16 dotted decimal
++ *   octets (IPv6, +CGPIAF=0 style), 32 dotted decimal octets (IPv6 + mask),
++ *   RFC 5952 colon notation, optionally followed by "/<prefix>".
++ * Unspecified addresses (0.0.0.0, ::) and empty strings return FALSE.
++ * On success the address is returned in canonical text form; the prefix is
++ * 0 when the input did not carry a mask. */
++gboolean mm_mtk_ccci_parse_ip_address (const gchar     *str,
++                                       GSocketFamily   *out_family,
++                                       gchar          **out_address,
++                                       guint           *out_prefix);
++
++/*****************************************************************************/
++/* +EIF: <trans_intf_id>, <event>[, <cid>[, <ipv4>[, <ipv6 or 0>...]]] */
++
++typedef enum {
++    MM_MTK_CCCI_EIF_EVENT_UNKNOWN = 0,
++    MM_MTK_CCCI_EIF_EVENT_IFUP,
++    MM_MTK_CCCI_EIF_EVENT_IFDOWN,
++    MM_MTK_CCCI_EIF_EVENT_IFCHG,
++} MMMtkCcciEifEvent;
++
++typedef struct {
++    guint              trans_intf_id;
++    guint              interface_index;   /* ccmni<interface_index> */
++    MMMtkCcciEifEvent  event;
++    gchar             *event_str;
++    gboolean           has_cid;
++    guint              cid;
++    gchar             *ipv4;              /* NULL if absent or 0.0.0.0 */
++    gchar             *ipv6;              /* NULL if absent */
++} MMMtkCcciEifInfo;
++
++gboolean          mm_mtk_ccci_parse_eif      (const gchar       *str,
++                                              MMMtkCcciEifInfo  *out_info,
++                                              GError           **error);
++void              mm_mtk_ccci_eif_info_clear (MMMtkCcciEifInfo  *info);
++MMMtkCcciEifInfo *mm_mtk_ccci_eif_info_dup   (const MMMtkCcciEifInfo *info);
++void              mm_mtk_ccci_eif_info_free  (MMMtkCcciEifInfo  *info);
++gchar            *mm_mtk_ccci_build_net_port_name (guint trans_intf_id);
++
++/* TRUE if 'report' (e.g. an "ifdown") refers to the interface brought up by
++ * 'up'. The full transaction interface id must match; a report carrying only
++ * the interface index (id < 100) matches by index. */
++gboolean          mm_mtk_ccci_eif_same_interface (const MMMtkCcciEifInfo *up,
++                                                  const MMMtkCcciEifInfo *report);
++
++/*****************************************************************************/
++/* +ECPI: <call_id>,<msg_type>,<is_ibt>,<is_tch>,<dir>,<call_mode>,<number>,
++ *        <toa>,"<pau>"[,<cause>] */
++
++typedef struct {
++    guint     call_id;
++    guint     msg_type;
++    gboolean  has_dir;
++    guint     dir;      /* 0: mobile originated, 1: mobile terminated */
++    gchar    *number;   /* NULL if empty */
++    gboolean  has_cause;
++    guint     cause;
++} MMMtkCcciEcpiInfo;
++
++gboolean mm_mtk_ccci_parse_ecpi      (const gchar        *str,
++                                      MMMtkCcciEcpiInfo  *out_info,
++                                      GError            **error);
++void     mm_mtk_ccci_ecpi_info_clear (MMMtkCcciEcpiInfo  *info);
++
++/* Map an +ECPI message type to the MM call state it implies. Returns
++ * MM_CALL_STATE_UNKNOWN when the message carries no definite state and the
++ * call list must be reloaded (+CLCC) instead. *out_direction is set when the
++ * message type implies one. */
++MMCallState mm_mtk_ccci_ecpi_msg_type_to_call_state (guint             msg_type,
++                                                     MMCallDirection  *out_direction);
++
++/*****************************************************************************/
++/* +CGCONTRDP=<cid> and +CGPADDR=<cid> */
++
++typedef struct {
++    guint          cid;
++    guint          bearer_id;
++    gchar         *apn;
++    GSocketFamily  family;       /* G_SOCKET_FAMILY_INVALID if unknown */
++    gchar         *address;      /* NULL if not reported */
++    guint          prefix;       /* 0 if not reported */
++    gchar         *gateway;      /* NULL if not reported */
++    gchar         *dns[3];       /* NULL terminated, up to 2 entries */
++    guint          mtu;          /* 0 if not reported */
++} MMMtkCcciPdpInfo;
++
++/* Returns a list of MMMtkCcciPdpInfo, one per response line for the given
++ * cid (dual stack contexts report one IPv4 and one IPv6 line). */
++GList   *mm_mtk_ccci_parse_cgcontrdp_response (const gchar  *response,
++                                               guint         cid,
++                                               GError      **error);
++void     mm_mtk_ccci_pdp_info_list_free       (GList        *list);
++
++gboolean mm_mtk_ccci_parse_cgpaddr_response   (const gchar  *response,
++                                               guint         cid,
++                                               gchar       **out_ipv4,
++                                               gchar       **out_ipv6,
++                                               GError      **error);
++
++#endif /* MM_MODEM_HELPERS_MTK_CCCI_H */
+diff --git c/src/plugins/mtk-ccci/mm-plugin-mtk-ccci.c i/src/plugins/mtk-ccci/mm-plugin-mtk-ccci.c
+new file mode 100644
+index 0000000..a172d16
+--- /dev/null
++++ i/src/plugins/mtk-ccci/mm-plugin-mtk-ccci.c
+@@ -0,0 +1,100 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Copyright (C) 2026 Thunder OS contributors
++ *
++ * Plugin for the MediaTek SoC modem (MD1) of vendor kernels, reached through
++ * the CCCI AT tty and the ccmniN network devices. The ports carry no USB or
++ * PCI ids: they are claimed by the udev tag ID_MM_MTK_CCCI and grouped into
++ * one modem by ID_MM_PHYSDEV_UID (77-mm-mtk-ccci.rules), the same scheme as
++ * the qcom-soc plugin and the MT6895-Mainline mtk-soc fork.
++ */
++
++#include <gmodule.h>
++
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "mm-plugin-common.h"
++#include "mm-broadband-modem-mtk-ccci.h"
++#include "mm-log-object.h"
++
++#define MM_TYPE_PLUGIN_MTK_CCCI mm_plugin_mtk_ccci_get_type ()
++MM_DEFINE_PLUGIN (MTK_CCCI, mtk_ccci, MtkCcci)
++
++/*****************************************************************************/
++
++static MMBaseModem *
++create_modem (MMPlugin     *self,
++              const gchar  *uid,
++              const gchar  *physdev,
++              const gchar **drivers,
++              guint16       vendor,
++              guint16       product,
++              guint16       subsystem_vendor,
++              guint16       subsystem_device,
++              GList        *probes,
++              GError      **error)
++{
++    mm_obj_dbg (self, "MediaTek CCCI modem found...");
++    return MM_BASE_MODEM (mm_broadband_modem_mtk_ccci_new (uid,
++                                                           physdev,
++                                                           drivers,
++                                                           mm_plugin_get_name (self),
++                                                           vendor,
++                                                           product));
++}
++
++/*****************************************************************************/
++
++MM_PLUGIN_NAMED_CREATOR_SCOPE MMPlugin *
++mm_plugin_create_mtk_ccci (void)
++{
++    static const gchar *subsystems[] = { "tty", "net", NULL };
++    static const gchar *udev_tags[]  = { "ID_MM_MTK_CCCI", NULL };
++
++    return MM_PLUGIN (
++        g_object_new (MM_TYPE_PLUGIN_MTK_CCCI,
++                      MM_PLUGIN_NAME,               MM_MODULE_NAME,
++                      MM_PLUGIN_ALLOWED_SUBSYSTEMS, subsystems,
++                      MM_PLUGIN_ALLOWED_UDEV_TAGS,  udev_tags,
++                      MM_PLUGIN_ALLOWED_AT,         TRUE,
++                      /* Whole-line writes during probing too (CCCI is
++                       * message based), see setup_ports() in the modem */
++                      MM_PLUGIN_SEND_DELAY,         (guint64) 0,
++                      /* There is no QMI, MBIM or XMM RPC here. Allowing them
++                       * only disables the implicit "forbidden QMI/MBIM
++                       * driver" filter, which otherwise needs a kernel
++                       * driver name and drops the port when there is none:
++                       * the vendor ccmni devices have no parent device
++                       * (/sys/devices/virtual/net) and the CCCI tty may not
++                       * either. Nothing is probed for those protocols on tty
++                       * or net ports, and the udev tag still restricts the
++                       * plugin to the CCCI ports. */
++                      MM_PLUGIN_ALLOWED_QMI,        TRUE,
++                      MM_PLUGIN_ALLOWED_MBIM,       TRUE,
++                      MM_PLUGIN_ALLOWED_XMMRPC,     TRUE,
++                      NULL));
++}
++
++static void
++mm_plugin_mtk_ccci_init (MMPluginMtkCcci *self)
++{
++}
++
++static void
++mm_plugin_mtk_ccci_class_init (MMPluginMtkCcciClass *klass)
++{
++    MMPluginClass *plugin_class = MM_PLUGIN_CLASS (klass);
++
++    plugin_class->create_modem = create_modem;
++}
+diff --git c/src/plugins/mtk-ccci/tests/test-modem-helpers-mtk-ccci.c i/src/plugins/mtk-ccci/tests/test-modem-helpers-mtk-ccci.c
+new file mode 100644
+index 0000000..0c2ce3f
+--- /dev/null
++++ i/src/plugins/mtk-ccci/tests/test-modem-helpers-mtk-ccci.c
+@@ -0,0 +1,519 @@
++/* -*- Mode: C; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- */
++/*
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details:
++ *
++ * Copyright (C) 2026 Thunder OS contributors
++ */
++
++#include <stdio.h>
++#include <glib.h>
++#include <glib-object.h>
++#include <locale.h>
++
++#include <ModemManager.h>
++#define _LIBMM_INSIDE_MM
++#include <libmm-glib.h>
++
++#include "mm-modem-helpers.h"
++#include "mm-modem-helpers-mtk-ccci.h"
++#include "mm-log-test.h"
++
++/*****************************************************************************/
++/* Field splitting and addresses */
++
++static void
++test_split_fields (void)
++{
++    g_auto(GStrv) fields = NULL;
++
++    fields = mm_mtk_ccci_split_fields (" 1, \"a,b\" ,,\"\" , x ");
++    g_assert_cmpuint (g_strv_length (fields), ==, 5);
++    g_assert_cmpstr (fields[0], ==, "1");
++    g_assert_cmpstr (fields[1], ==, "a,b");
++    g_assert_cmpstr (fields[2], ==, "");
++    g_assert_cmpstr (fields[3], ==, "");
++    g_assert_cmpstr (fields[4], ==, "x");
++}
++
++typedef struct {
++    const gchar   *str;
++    gboolean       valid;
++    GSocketFamily  family;
++    const gchar   *address;
++    guint          prefix;
++} IpTest;
++
++static const IpTest ip_tests[] = {
++    { "10.144.22.7",                     TRUE,  G_SOCKET_FAMILY_IPV4, "10.144.22.7", 0  },
++    { "\"10.144.22.7\"",                 TRUE,  G_SOCKET_FAMILY_IPV4, "10.144.22.7", 0  },
++    { "10.1.2.3.255.255.255.0",          TRUE,  G_SOCKET_FAMILY_IPV4, "10.1.2.3",    24 },
++    { "10.1.2.3/30",                     TRUE,  G_SOCKET_FAMILY_IPV4, "10.1.2.3",    30 },
++    { "254.128.0.0.0.0.0.0.0.0.0.0.0.0.0.1", TRUE, G_SOCKET_FAMILY_IPV6, "fe80::1",  0  },
++    { "32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.1."
++      "255.255.255.255.255.255.255.255.0.0.0.0.0.0.0.0",
++                                         TRUE,  G_SOCKET_FAMILY_IPV6, "2001:db8::1", 64 },
++    { "2001:DB8::1",                     TRUE,  G_SOCKET_FAMILY_IPV6, "2001:db8::1", 0  },
++    { "2001:db8::1/64",                  TRUE,  G_SOCKET_FAMILY_IPV6, "2001:db8::1", 64 },
++    { "0.0.0.0",                         FALSE, 0, NULL, 0 },
++    { "::",                              FALSE, 0, NULL, 0 },
++    { "",                                FALSE, 0, NULL, 0 },
++    { "1.2.3",                           FALSE, 0, NULL, 0 },
++    { "256.1.1.1",                       FALSE, 0, NULL, 0 },
++    { "10.0.0.1/33",                     FALSE, 0, NULL, 0 },
++    { "ifup",                            FALSE, 0, NULL, 0 },
++};
++
++static void
++test_ip_address (void)
++{
++    guint i;
++
++    for (i = 0; i < G_N_ELEMENTS (ip_tests); i++) {
++        GSocketFamily     family = G_SOCKET_FAMILY_INVALID;
++        g_autofree gchar *address = NULL;
++        guint             prefix = 0;
++        gboolean          valid;
++
++        valid = mm_mtk_ccci_parse_ip_address (ip_tests[i].str, &family, &address, &prefix);
++        g_assert_cmpint (valid, ==, ip_tests[i].valid);
++        if (!valid)
++            continue;
++        g_assert_cmpint (family, ==, ip_tests[i].family);
++        g_assert_cmpstr (address, ==, ip_tests[i].address);
++        g_assert_cmpuint (prefix, ==, ip_tests[i].prefix);
++    }
++}
++
++/*****************************************************************************/
++/* +EIF */
++
++static void
++test_eif_ifup (void)
++{
++    MMMtkCcciEifInfo  info = { 0 };
++    g_autoptr(GError) error = NULL;
++    g_autofree gchar *name = NULL;
++
++    /* As measured on the Redmi 10 5G */
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 100, ifup, 1, 10.144.22.7, 0", &info, &error));
++    g_assert_no_error (error);
++    g_assert_cmpuint (info.trans_intf_id, ==, 100);
++    g_assert_cmpuint (info.interface_index, ==, 0);
++    g_assert_cmpint (info.event, ==, MM_MTK_CCCI_EIF_EVENT_IFUP);
++    g_assert (info.has_cid);
++    g_assert_cmpuint (info.cid, ==, 1);
++    g_assert_cmpstr (info.ipv4, ==, "10.144.22.7");
++    g_assert_null (info.ipv6);
++    name = mm_mtk_ccci_build_net_port_name (info.trans_intf_id);
++    g_assert_cmpstr (name, ==, "ccmni0");
++    mm_mtk_ccci_eif_info_clear (&info);
++
++    /* Second transaction lands on ccmni1; payload without the tag */
++    g_assert (mm_mtk_ccci_parse_eif ("201,ifup,2,\"100.64.1.2\",0", &info, &error));
++    g_assert_no_error (error);
++    g_assert_cmpuint (info.interface_index, ==, 1);
++    g_assert_cmpuint (info.cid, ==, 2);
++    g_assert_cmpstr (info.ipv4, ==, "100.64.1.2");
++    g_clear_pointer (&name, g_free);
++    name = mm_mtk_ccci_build_net_port_name (info.trans_intf_id);
++    g_assert_cmpstr (name, ==, "ccmni1");
++    mm_mtk_ccci_eif_info_clear (&info);
++
++    /* IPv6 interface identifier in the 5th field */
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 102, ifup, 3, 0.0.0.0, FE80::1:2", &info, &error));
++    g_assert_no_error (error);
++    g_assert_cmpuint (info.interface_index, ==, 2);
++    g_assert_null (info.ipv4);
++    g_assert_cmpstr (info.ipv6, ==, "fe80::1:2");
++    mm_mtk_ccci_eif_info_clear (&info);
++}
++
++static void
++test_eif_ifdown_ifchg (void)
++{
++    MMMtkCcciEifInfo  up = { 0 };
++    MMMtkCcciEifInfo  report = { 0 };
++    g_autoptr(GError) error = NULL;
++
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 100, ifup, 1, 10.144.22.7, 0", &up, &error));
++    g_assert_no_error (error);
++
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 100, ifdown", &report, &error));
++    g_assert_no_error (error);
++    g_assert_cmpint (report.event, ==, MM_MTK_CCCI_EIF_EVENT_IFDOWN);
++    g_assert (!report.has_cid);
++    g_assert (mm_mtk_ccci_eif_same_interface (&up, &report));
++    mm_mtk_ccci_eif_info_clear (&report);
++
++    /* A stale ifdown of an older transaction on the same ccmni must not
++     * tear down the new one */
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 200, ifdown", &report, &error));
++    g_assert (!mm_mtk_ccci_eif_same_interface (&up, &report));
++    mm_mtk_ccci_eif_info_clear (&report);
++
++    /* A report with only the interface index matches by index */
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 0, ifdown", &report, &error));
++    g_assert (mm_mtk_ccci_eif_same_interface (&up, &report));
++    mm_mtk_ccci_eif_info_clear (&report);
++
++    /* CS fallback during a call */
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 100, ifchg, 1", &report, &error));
++    g_assert_cmpint (report.event, ==, MM_MTK_CCCI_EIF_EVENT_IFCHG);
++    g_assert (mm_mtk_ccci_eif_same_interface (&up, &report));
++    mm_mtk_ccci_eif_info_clear (&report);
++
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 100, IFCHANGE", &report, &error));
++    g_assert_cmpint (report.event, ==, MM_MTK_CCCI_EIF_EVENT_IFCHG);
++    mm_mtk_ccci_eif_info_clear (&report);
++
++    /* Unknown events are reported, not rejected */
++    g_assert (mm_mtk_ccci_parse_eif ("+EIF: 100, ra", &report, &error));
++    g_assert_cmpint (report.event, ==, MM_MTK_CCCI_EIF_EVENT_UNKNOWN);
++    g_assert_cmpstr (report.event_str, ==, "ra");
++    mm_mtk_ccci_eif_info_clear (&report);
++
++    mm_mtk_ccci_eif_info_clear (&up);
++}
++
++static void
++test_eif_invalid (void)
++{
++    MMMtkCcciEifInfo info = { 0 };
++    GError          *error = NULL;
++
++    g_assert (!mm_mtk_ccci_parse_eif ("+EIF: abc, ifup", &info, &error));
++    g_assert_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS);
++    g_clear_error (&error);
++
++    g_assert (!mm_mtk_ccci_parse_eif ("+EIF: 100", &info, &error));
++    g_assert_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS);
++    g_clear_error (&error);
++
++    g_assert (!mm_mtk_ccci_parse_eif ("+EIF: 100,", &info, &error));
++    g_clear_error (&error);
++}
++
++/*****************************************************************************/
++/* +ECPI */
++
++static void
++test_ecpi_parse (void)
++{
++    MMMtkCcciEcpiInfo info = { 0 };
++    g_autoptr(GError) error = NULL;
++
++    g_assert (mm_mtk_ccci_parse_ecpi ("+ECPI: 1,130,0,0,0,0,\"+5511999998888\",145,\"\"", &info, &error));
++    g_assert_no_error (error);
++    g_assert_cmpuint (info.call_id, ==, 1);
++    g_assert_cmpuint (info.msg_type, ==, 130);
++    g_assert (info.has_dir);
++    g_assert_cmpuint (info.dir, ==, 0);
++    g_assert_cmpstr (info.number, ==, "+5511999998888");
++    g_assert (!info.has_cause);
++    mm_mtk_ccci_ecpi_info_clear (&info);
++
++    /* Release: "+ECPI:<call_id>,<msg_type>,<is_ibt>,<is_tch>,,,"",,"",<cause>" */
++    g_assert (mm_mtk_ccci_parse_ecpi ("+ECPI: 1,133,0,0,,,\"\",,\"\",16", &info, &error));
++    g_assert_no_error (error);
++    g_assert_cmpuint (info.msg_type, ==, 133);
++    g_assert (!info.has_dir);
++    g_assert_null (info.number);
++    g_assert (info.has_cause);
++    g_assert_cmpuint (info.cause, ==, 16);
++    mm_mtk_ccci_ecpi_info_clear (&info);
++
++    /* Incoming call setup */
++    g_assert (mm_mtk_ccci_parse_ecpi ("+ECPI: 2,0,0,0,1,0,\"11988887777\",129,\"\"", &info, &error));
++    g_assert_no_error (error);
++    g_assert_cmpuint (info.call_id, ==, 2);
++    g_assert (info.has_dir);
++    g_assert_cmpuint (info.dir, ==, 1);
++    mm_mtk_ccci_ecpi_info_clear (&info);
++
++    /* State change report with only the first two fields */
++    g_assert (mm_mtk_ccci_parse_ecpi ("+ECPI: 1,129", &info, &error));
++    g_assert_no_error (error);
++    g_assert_cmpuint (info.msg_type, ==, 129);
++    mm_mtk_ccci_ecpi_info_clear (&info);
++}
++
++static void
++test_ecpi_invalid (void)
++{
++    MMMtkCcciEcpiInfo info = { 0 };
++    GError           *error = NULL;
++
++    g_assert (!mm_mtk_ccci_parse_ecpi ("+ECPI: x,130", &info, &error));
++    g_assert_error (error, MM_CORE_ERROR, MM_CORE_ERROR_INVALID_ARGS);
++    g_clear_error (&error);
++
++    g_assert (!mm_mtk_ccci_parse_ecpi ("+ECPI: 1", &info, &error));
++    g_clear_error (&error);
++}
++
++static void
++test_ecpi_call_state (void)
++{
++    static const struct {
++        guint           msg_type;
++        MMCallState     state;
++        MMCallDirection direction;
++    } map[] = {
++        { 130, MM_CALL_STATE_DIALING,     MM_CALL_DIRECTION_OUTGOING },
++        { 2,   MM_CALL_STATE_RINGING_OUT, MM_CALL_DIRECTION_OUTGOING },
++        { 6,   MM_CALL_STATE_ACTIVE,      MM_CALL_DIRECTION_UNKNOWN  },
++        { 132, MM_CALL_STATE_ACTIVE,      MM_CALL_DIRECTION_UNKNOWN  },
++        { 131, MM_CALL_STATE_HELD,        MM_CALL_DIRECTION_UNKNOWN  },
++        { 133, MM_CALL_STATE_TERMINATED,  MM_CALL_DIRECTION_UNKNOWN  },
++        /* resolved by +CLCC */
++        { 0,   MM_CALL_STATE_UNKNOWN,     MM_CALL_DIRECTION_UNKNOWN  },
++        { 1,   MM_CALL_STATE_UNKNOWN,     MM_CALL_DIRECTION_UNKNOWN  },
++        { 3,   MM_CALL_STATE_UNKNOWN,     MM_CALL_DIRECTION_UNKNOWN  },
++        { 4,   MM_CALL_STATE_UNKNOWN,     MM_CALL_DIRECTION_UNKNOWN  },
++        { 5,   MM_CALL_STATE_UNKNOWN,     MM_CALL_DIRECTION_UNKNOWN  },
++        { 129, MM_CALL_STATE_UNKNOWN,     MM_CALL_DIRECTION_UNKNOWN  },
++        { 134, MM_CALL_STATE_UNKNOWN,     MM_CALL_DIRECTION_UNKNOWN  },
++        { 999, MM_CALL_STATE_UNKNOWN,     MM_CALL_DIRECTION_UNKNOWN  },
++    };
++    guint i;
++
++    for (i = 0; i < G_N_ELEMENTS (map); i++) {
++        MMCallDirection direction = MM_CALL_DIRECTION_INCOMING;
++
++        g_assert_cmpint (mm_mtk_ccci_ecpi_msg_type_to_call_state (map[i].msg_type, &direction), ==, map[i].state);
++        g_assert_cmpint (direction, ==, map[i].direction);
++    }
++}
++
++/*****************************************************************************/
++/* +CGCONTRDP */
++
++static void
++test_cgcontrdp_measured (void)
++{
++    GList                  *list;
++    const MMMtkCcciPdpInfo *info;
++    g_autoptr(GError)       error = NULL;
++
++    /* Empty local address, DNS servers in fields 6 and 7 */
++    list = mm_mtk_ccci_parse_cgcontrdp_response (
++        "+CGCONTRDP: 1,5,\"zap.vivo.com.br\",\"\",\"\",\"200.222.108.241\",\"200.222.108.240\",\"\",\"\",0,0\r\n",
++        1, &error);
++    g_assert_no_error (error);
++    g_assert_cmpuint (g_list_length (list), ==, 1);
++    info = list->data;
++    g_assert_cmpuint (info->cid, ==, 1);
++    g_assert_cmpuint (info->bearer_id, ==, 5);
++    g_assert_cmpstr (info->apn, ==, "zap.vivo.com.br");
++    g_assert_cmpint (info->family, ==, G_SOCKET_FAMILY_IPV4);
++    g_assert_null (info->address);
++    g_assert_null (info->gateway);
++    g_assert_cmpstr (info->dns[0], ==, "200.222.108.241");
++    g_assert_cmpstr (info->dns[1], ==, "200.222.108.240");
++    g_assert_null (info->dns[2]);
++    g_assert_cmpuint (info->mtu, ==, 0);
++    mm_mtk_ccci_pdp_info_list_free (list);
++}
++
++static void
++test_cgcontrdp_full (void)
++{
++    GList                  *list;
++    const MMMtkCcciPdpInfo *info;
++    g_autoptr(GError)       error = NULL;
++
++    list = mm_mtk_ccci_parse_cgcontrdp_response (
++        "+CGCONTRDP: 1,5,\"apn\",\"10.1.2.3.255.255.255.255\",\"10.1.2.1\",\"8.8.8.8\",\"8.8.4.4\","
++        "\"0.0.0.0\",\"0.0.0.0\",0,0,1400",
++        1, &error);
++    g_assert_no_error (error);
++    g_assert_cmpuint (g_list_length (list), ==, 1);
++    info = list->data;
++    g_assert_cmpstr (info->address, ==, "10.1.2.3");
++    g_assert_cmpuint (info->prefix, ==, 32);
++    g_assert_cmpstr (info->gateway, ==, "10.1.2.1");
++    g_assert_cmpstr (info->dns[0], ==, "8.8.8.8");
++    g_assert_cmpstr (info->dns[1], ==, "8.8.4.4");
++    g_assert_cmpuint (info->mtu, ==, 1400);
++    mm_mtk_ccci_pdp_info_list_free (list);
++}
++
++static void
++test_cgcontrdp_old_format (void)
++{
++    GList                  *list;
++    const MMMtkCcciPdpInfo *info;
++    g_autoptr(GError)       error = NULL;
++
++    /* Before 27.007 v9.4.0 the mask had its own field */
++    list = mm_mtk_ccci_parse_cgcontrdp_response (
++        "+CGCONTRDP: 4,5,\"ibox.tim.it\",\"2.197.17.49\",\"255.255.255.0\",\"2.197.17.1\","
++        "\"10.207.43.46\",\"10.206.56.132\"",
++        4, &error);
++    g_assert_no_error (error);
++    info = list->data;
++    g_assert_cmpstr (info->address, ==, "2.197.17.49");
++    g_assert_cmpuint (info->prefix, ==, 24);
++    g_assert_cmpstr (info->gateway, ==, "2.197.17.1");
++    g_assert_cmpstr (info->dns[0], ==, "10.207.43.46");
++    g_assert_cmpstr (info->dns[1], ==, "10.206.56.132");
++    mm_mtk_ccci_pdp_info_list_free (list);
++}
++
++static void
++test_cgcontrdp_dual_stack (void)
++{
++    GList                  *list;
++    const MMMtkCcciPdpInfo *info;
++    g_autoptr(GError)       error = NULL;
++
++    list = mm_mtk_ccci_parse_cgcontrdp_response (
++        "+CGCONTRDP: 2,6,\"other\",\"10.9.9.9\",\"\",\"1.1.1.1\"\r\n"
++        "+CGCONTRDP: 1,5,\"zap.vivo.com.br\",\"10.1.2.3\",\"\",\"8.8.8.8\",\"8.8.4.4\"\r\n"
++        "+CGCONTRDP: 1,5,\"zap.vivo.com.br\","
++        "\"254.128.0.0.0.0.0.0.0.0.0.0.0.0.0.1.255.255.255.255.255.255.255.255.0.0.0.0.0.0.0.0\","
++        "\"\",\"32.1.72.96.72.96.0.0.0.0.0.0.0.0.136.136\",\"\"\r\n"
++        "\r\nOK\r\n",
++        1, &error);
++    g_assert_no_error (error);
++    g_assert_cmpuint (g_list_length (list), ==, 2);
++
++    info = list->data;
++    g_assert_cmpint (info->family, ==, G_SOCKET_FAMILY_IPV4);
++    g_assert_cmpstr (info->address, ==, "10.1.2.3");
++    g_assert_cmpuint (info->prefix, ==, 0);
++    g_assert_cmpstr (info->dns[0], ==, "8.8.8.8");
++
++    info = list->next->data;
++    g_assert_cmpint (info->family, ==, G_SOCKET_FAMILY_IPV6);
++    g_assert_cmpstr (info->address, ==, "fe80::1");
++    g_assert_cmpuint (info->prefix, ==, 64);
++    g_assert_cmpstr (info->dns[0], ==, "2001:4860:4860::8888");
++    g_assert_null (info->dns[1]);
++    mm_mtk_ccci_pdp_info_list_free (list);
++}
++
++static void
++test_cgcontrdp_other_cid (void)
++{
++    GError *error = NULL;
++    GList  *list;
++
++    list = mm_mtk_ccci_parse_cgcontrdp_response ("+CGCONTRDP: 2,6,\"other\",\"10.9.9.9\"", 1, &error);
++    g_assert_null (list);
++    g_assert_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND);
++    g_clear_error (&error);
++}
++
++/*****************************************************************************/
++/* +CGPADDR */
++
++static void
++test_cgpaddr (void)
++{
++    g_autoptr(GError) error = NULL;
++    gchar            *ipv4 = NULL;
++    gchar            *ipv6 = NULL;
++
++    g_assert (mm_mtk_ccci_parse_cgpaddr_response (
++                  "+CGPADDR: 2,\"10.9.9.9\"\r\n"
++                  "+CGPADDR: 1,\"10.144.22.7\",\"254.128.0.0.0.0.0.0.0.0.0.0.0.0.0.1\"\r\n",
++                  1, &ipv4, &ipv6, &error));
++    g_assert_no_error (error);
++    g_assert_cmpstr (ipv4, ==, "10.144.22.7");
++    g_assert_cmpstr (ipv6, ==, "fe80::1");
++    g_clear_pointer (&ipv4, g_free);
++    g_clear_pointer (&ipv6, g_free);
++
++    g_assert (mm_mtk_ccci_parse_cgpaddr_response ("+CGPADDR: 1,10.0.0.5", 1, &ipv4, &ipv6, &error));
++    g_assert_cmpstr (ipv4, ==, "10.0.0.5");
++    g_assert_null (ipv6);
++    g_clear_pointer (&ipv4, g_free);
++
++    /* Context known but without address yet */
++    g_assert (mm_mtk_ccci_parse_cgpaddr_response ("+CGPADDR: 1", 1, &ipv4, &ipv6, &error));
++    g_assert_null (ipv4);
++    g_assert_null (ipv6);
++}
++
++static void
++test_cgpaddr_other_cid (void)
++{
++    GError *error = NULL;
++
++    g_assert (!mm_mtk_ccci_parse_cgpaddr_response ("+CGPADDR: 3,\"10.0.0.5\"", 1, NULL, NULL, &error));
++    g_assert_error (error, MM_CORE_ERROR, MM_CORE_ERROR_NOT_FOUND);
++    g_clear_error (&error);
++}
++
++/*****************************************************************************/
++/* +COPS AcT: the generic parser handles the values this MD reports */
++
++static void
++test_cops_act (void)
++{
++    static const struct {
++        const gchar             *response;
++        MMModemAccessTechnology  act;
++    } tests[] = {
++        /* As measured: VIVO 4G with an NR anchor */
++        { "+COPS: 0,0,\"VIVO\",13", MM_MODEM_ACCESS_TECHNOLOGY_LTE | MM_MODEM_ACCESS_TECHNOLOGY_5GNR },
++        { "+COPS: 0,0,\"VIVO\",7",  MM_MODEM_ACCESS_TECHNOLOGY_LTE },
++        { "+COPS: 0,0,\"VIVO\",10", MM_MODEM_ACCESS_TECHNOLOGY_LTE },
++        { "+COPS: 0,0,\"VIVO\",11", MM_MODEM_ACCESS_TECHNOLOGY_5GNR },
++        { "+COPS: 0,0,\"VIVO\",2",  MM_MODEM_ACCESS_TECHNOLOGY_UMTS },
++        { "+COPS: 0,0,\"VIVO\",0",  MM_MODEM_ACCESS_TECHNOLOGY_GSM },
++    };
++    guint i;
++
++    for (i = 0; i < G_N_ELEMENTS (tests); i++) {
++        g_autoptr(GError)        error = NULL;
++        g_autofree gchar        *operator = NULL;
++        guint                    mode = G_MAXUINT;
++        guint                    format = G_MAXUINT;
++        MMModemAccessTechnology  act = MM_MODEM_ACCESS_TECHNOLOGY_UNKNOWN;
++
++        g_assert (mm_3gpp_parse_cops_read_response (tests[i].response, &mode, &format, &operator, &act, NULL, &error));
++        g_assert_no_error (error);
++        g_assert_cmpuint (mode, ==, 0);
++        g_assert_cmpuint (format, ==, 0);
++        g_assert_cmpstr (operator, ==, "VIVO");
++        g_assert_cmpuint (act, ==, tests[i].act);
++    }
++}
++
++/*****************************************************************************/
++
++int main (int argc, char **argv)
++{
++    setlocale (LC_ALL, "");
++
++    g_test_init (&argc, &argv, NULL);
++
++    g_test_add_func ("/MM/mtk-ccci/split-fields",         test_split_fields);
++    g_test_add_func ("/MM/mtk-ccci/ip-address",           test_ip_address);
++    g_test_add_func ("/MM/mtk-ccci/eif/ifup",             test_eif_ifup);
++    g_test_add_func ("/MM/mtk-ccci/eif/ifdown-ifchg",     test_eif_ifdown_ifchg);
++    g_test_add_func ("/MM/mtk-ccci/eif/invalid",          test_eif_invalid);
++    g_test_add_func ("/MM/mtk-ccci/ecpi/parse",           test_ecpi_parse);
++    g_test_add_func ("/MM/mtk-ccci/ecpi/invalid",         test_ecpi_invalid);
++    g_test_add_func ("/MM/mtk-ccci/ecpi/call-state",      test_ecpi_call_state);
++    g_test_add_func ("/MM/mtk-ccci/cgcontrdp/measured",   test_cgcontrdp_measured);
++    g_test_add_func ("/MM/mtk-ccci/cgcontrdp/full",       test_cgcontrdp_full);
++    g_test_add_func ("/MM/mtk-ccci/cgcontrdp/old-format", test_cgcontrdp_old_format);
++    g_test_add_func ("/MM/mtk-ccci/cgcontrdp/dual-stack", test_cgcontrdp_dual_stack);
++    g_test_add_func ("/MM/mtk-ccci/cgcontrdp/other-cid",  test_cgcontrdp_other_cid);
++    g_test_add_func ("/MM/mtk-ccci/cgpaddr/parse",        test_cgpaddr);
++    g_test_add_func ("/MM/mtk-ccci/cgpaddr/other-cid",    test_cgpaddr_other_cid);
++    g_test_add_func ("/MM/mtk-ccci/cops/act",             test_cops_act);
++
++    return g_test_run ();
++}
+diff --git c/src/plugins/tests/test-udev-rules.c i/src/plugins/tests/test-udev-rules.c
+index 8f5ffd6..85c0ad8 100644
+--- c/src/plugins/tests/test-udev-rules.c
++++ i/src/plugins/tests/test-udev-rules.c
+@@ -192,6 +192,14 @@ test_qcom_soc (void)
+ }
+ #endif
+ 
++#if defined ENABLE_PLUGIN_MTK_CCCI
++static void
++test_mtk_ccci (void)
++{
++    common_test (TESTUDEVRULESDIR_MTK_CCCI);
++}
++#endif
++
+ #if defined ENABLE_PLUGIN_LINKTOP
+ static void
+ test_linktop (void)
+@@ -277,6 +285,9 @@ int main (int argc, char **argv)
+ #if defined ENABLE_PLUGIN_QCOM_SOC && defined WITH_QMI
+     g_test_add_func ("/MM/test-udev-rules/qcom-soc", test_qcom_soc);
+ #endif
++#if defined ENABLE_PLUGIN_MTK_CCCI
++    g_test_add_func ("/MM/test-udev-rules/mtk-ccci", test_mtk_ccci);
++#endif
+ #if defined ENABLE_PLUGIN_LINKTOP
+     g_test_add_func ("/MM/test-udev-rules/linktop", test_linktop);
+ #endif

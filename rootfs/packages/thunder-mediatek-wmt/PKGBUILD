@@ -8,7 +8,7 @@
 # integridade, por isso SKIP.
 pkgname=thunder-mediatek-wmt
 pkgver=1.0.0
-pkgrel=2
+pkgrel=3
 pkgdesc='Thunder OS: MediaTek WMT connectivity bring-up (loader, launcher, Wi-Fi NVRAM, Bluetooth)'
 arch=(any)
 url='https://github.com/vitoramaral10/thunder-os'
@@ -26,7 +26,8 @@ check() {
 }
 
 package() {
-	install -Dm755 "$srcdir/thunder_wmt.py" "$pkgdir/usr/lib/thunder/wmt/thunder-wmt"
+	# 0700: o script e tambem o lock do wifi-on/wifi-off; nenhum outro uid pode abri-lo.
+	install -Dm700 "$srcdir/thunder_wmt.py" "$pkgdir/usr/lib/thunder/wmt/thunder-wmt"
 	install -Dm644 -t "$pkgdir/usr/lib/systemd/system" \
 		"$srcdir/thunder-wmt-connsys.service" "$srcdir/thunder-wmt-wifi.service" \
 		"$srcdir/thunder-wmt-bt.service"

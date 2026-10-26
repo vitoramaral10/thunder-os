@@ -1,0 +1,22 @@
+# mnld (motor de navegacao da MediaTek, blob Bionic da particao vendor) num chroot Android
+# minimo: /system/bin/linker64 e as libs do fecho dele, /vendor/bin/mnld e /vendor/etc.
+# O que o init do Android daria vem da thunder-gnss: as propriedades (/dev/__properties__,
+# so leitura) e o logd (/dev/socket/logdw). /data/vendor/gps guarda efemerides e almanaque.
+# As montagens ficam no thunder-gnss-mnld (o motivo esta la).
+[Unit]
+Description=MediaTek GNSS (mnld from the factory ROM, Android chroot)
+Documentation=file:/usr/lib/thunder/gnss/thunder-gnss
+BindsTo=thunder-gnss.service
+After=thunder-gnss.service
+# Mesmo netns privado da ponte (ver thunder-gnss.service).
+JoinsNamespaceOf=thunder-gnss.service
+
+[Service]
+Type=simple
+PrivateNetwork=yes
+ExecStart=/usr/lib/thunder/gnss/thunder-gnss-mnld
+# CLOCK_BOOTTIME_ALARM (timer de suspensao do GPS) e wakelock; os demais so para montar.
+CapabilityBoundingSet=CAP_WAKE_ALARM CAP_BLOCK_SUSPEND CAP_SYS_ADMIN CAP_SYS_CHROOT CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=2

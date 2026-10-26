@@ -269,6 +269,96 @@ class WifiPowerTest(unittest.TestCase):
             sleep.assert_not_called()
 
 
+class WifiOffTest(unittest.TestCase):
+    def test_only_wireless_interfaces(self):
+        with tempfile.TemporaryDirectory() as d:
+            for name, wireless in (("wlan0", True), ("rndis0", False), ("p2p0", True)):
+                os.makedirs(os.path.join(d, name, "wireless" if wireless else "queues"))
+            self.assertEqual(t.wireless_interfaces(d), ["p2p0", "wlan0"])
+            self.assertEqual(t.wireless_interfaces(os.path.join(d, "none")), [])
+
+    def test_link_goes_down_before_the_radio(self):
+        # O oops de 2026-10-13: link down depois do func_off. A ordem e o que importa.
+        order = []
+        with tempfile.NamedTemporaryFile() as node, \
+                mock.patch.object(t, "DEV_WIFI", node.name), \
+                mock.patch.object(t, "wireless_interfaces", return_value=["wlan0"]), \
+                mock.patch.object(t, "interfaces_down",
+                                  side_effect=lambda i: order.append(("down", i)) or []), \
+                mock.patch.object(t, "wifi_power",
+                                  side_effect=lambda on: order.append(("power", on))), \
+                mock.patch.object(t, "log"):
+            self.assertEqual(t.cmd_wifi_off(None), t.EX_OK)
+        self.assertEqual(order, [("down", ["wlan0"]), ("power", False)])
+
+    def test_radio_stays_on_while_an_interface_is_stuck_up(self):
+        def ioctl(_fd, req, buf):
+            name, _ = t.IFREQ_FLAGS.unpack(buf)
+            if req == t.SIOCSIFFLAGS:
+                raise OSError(16, "busy")
+            return t.IFREQ_FLAGS.pack(name, 0x1203)
+
+        with mock.patch.object(t.fcntl, "ioctl", side_effect=ioctl), \
+                mock.patch.object(t, "log"):
+            self.assertEqual(t.interfaces_down(["wlan0"]), ["wlan0"])
+        power = []
+        with tempfile.NamedTemporaryFile() as node, \
+                mock.patch.object(t, "DEV_WIFI", node.name), \
+                mock.patch.object(t, "wireless_interfaces", return_value=["wlan0"]), \
+                mock.patch.object(t, "interfaces_down", return_value=["wlan0"]), \
+                mock.patch.object(t, "wifi_power", side_effect=power.append), \
+                mock.patch.object(t, "log"):
+            with self.assertRaises(t.Failure):
+                t.cmd_wifi_off(None)
+        self.assertEqual(power, [])
+
+    def test_radio_commands_hold_the_lock(self):
+        seen = []
+
+        def probe(_cfg):
+            # Outra descricao de arquivo (outro processo, na pratica) nao pega o lock.
+            with open(t.RADIO_LOCK, "rb") as f:
+                try:
+                    t.fcntl.flock(f.fileno(), t.fcntl.LOCK_EX | t.fcntl.LOCK_NB)
+                    seen.append("livre")
+                except BlockingIOError:
+                    seen.append("preso")
+            return t.EX_OK
+
+        self.assertEqual(t.radio_serialized(probe)(None), t.EX_OK)
+        self.assertEqual(seen, ["preso"])
+        for name in ("wifi-on", "wifi-off"):
+            self.assertIsNot(t.COMMANDS[name], {"wifi-on": t.cmd_wifi_on,
+                                                "wifi-off": t.cmd_wifi_off}[name])
+
+    def test_radio_lock_wait_is_bounded(self):
+        # Lock preso por outra descricao (outro processo): desiste no prazo, sem rodar o comando.
+        ran = []
+        with open(t.RADIO_LOCK, "rb") as holder:
+            t.fcntl.flock(holder.fileno(), t.fcntl.LOCK_EX)
+            with mock.patch.object(t, "RADIO_WAIT", 0.3), mock.patch.object(t, "log"):
+                rc = t.radio_serialized(lambda _cfg: ran.append(1) or t.EX_OK)(None)
+        self.assertEqual(rc, t.EX_UNAVAILABLE)
+        self.assertEqual(ran, [])
+
+    def test_down_clears_only_iff_up_and_skips_interfaces_already_down(self):
+        calls = []
+
+        def ioctl(_fd, req, buf):
+            name, flags = t.IFREQ_FLAGS.unpack(buf)
+            calls.append((req, name.rstrip(b"\0"), flags))
+            if req == t.SIOCGIFFLAGS:
+                up = name.startswith(b"wlan0")
+                return t.IFREQ_FLAGS.pack(name, 0x1203 if up else 0x1002)
+            return buf
+
+        with mock.patch.object(t.fcntl, "ioctl", side_effect=ioctl), \
+                mock.patch.object(t, "log"):
+            t.interfaces_down(["wlan0", "wlan1"])
+        sets = [c for c in calls if c[0] == t.SIOCSIFFLAGS]
+        self.assertEqual(sets, [(t.SIOCSIFFLAGS, b"wlan0", 0x1202)])
+
+
 class WifiOnTest(unittest.TestCase):
     def cfg(self, nvram=None):
         return t.Config(core_modules=("wmt_drv",), rom_patches=(), hif=0x23, firmware_dir="/x",
@@ -286,14 +376,32 @@ class WifiOnTest(unittest.TestCase):
                 mock.patch.object(t, "nvram_mac", return_value=b"\0" * 6), \
                 mock.patch.object(t, "verify_nvram") as verify, \
                 mock.patch.object(t, "wifi_power") as power, \
+                mock.patch.object(t, "interface_up") as up, \
                 mock.patch.object(t, "log") as log:
             rc = t.cmd_wifi_on(self.cfg(("nvdata", "/APCFG/APRDEB/WIFI")))
         self.assertEqual(rc, t.EX_OK)
+        # Religamento: o wifi-off derrubou o link; o wifi-on o devolve.
+        up.assert_called_once_with("lo")
         read.assert_called_once()
         push.assert_called_once()
         verify.assert_called_once()
         power.assert_called_once_with(True)
         self.assertTrue(any("already registered" in c.args[1] for c in log.call_args_list))
+
+    def test_first_probe_leaves_the_link_to_networkmanager(self):
+        cfg = t.Config(core_modules=("wmt_drv",), rom_patches=(), hif=0x23, firmware_dir="/x",
+                       wifi_modules=("wmt_chrdev_wifi",), wifi_interface="nosuchwlan9",
+                       wifi_nvram=None)
+        with tempfile.NamedTemporaryFile() as node, \
+                mock.patch.object(t, "DEV_WIFI", node.name), \
+                mock.patch.object(t, "READY_MARK", node.name), \
+                mock.patch.object(t, "modprobe"), \
+                mock.patch.object(t, "wifi_power"), \
+                mock.patch.object(t, "wait_for_path"), \
+                mock.patch.object(t, "interface_up") as up, \
+                mock.patch.object(t, "log"):
+            self.assertEqual(t.cmd_wifi_on(cfg), t.EX_OK)
+        up.assert_not_called()
 
     def test_ready_mark_is_written_before_ready_notification(self):
         with tempfile.TemporaryDirectory() as d:

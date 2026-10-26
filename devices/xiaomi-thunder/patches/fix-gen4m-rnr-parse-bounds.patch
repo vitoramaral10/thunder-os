@@ -1,0 +1,95 @@
+From: thunder
+Subject: [PATCH] gen4m: bound the RNR element walk during a scan
+
+scanParsingRnrElement() walks the Neighbor AP Information fields of a
+Reduced Neighbor Report element from any beacon or probe response seen
+during a scan (cfg80211 scans set fg6gOobRnrParseEn). The offset was a u8
+and each step is 4 + count * length, with count up to 16 and length up to
+255, both from the frame. A field with count 4 and length 63 makes the step
+256, the offset wraps to 0 and the loop never ends: one forged beacon in
+radio range hangs the RX path until the watchdog resets the phone, without
+any association.
+
+The offset is now a u16, and the walk stops when the 4-byte header or the
+TBTT Information fields would run past the element. The chip has no 6 GHz
+radio, so every field is skipped anyway; nothing else changes.
+
+---
+--- a/drivers/misc/mediatek/connectivity/wlan_drv_gen4m/mgmt/scan.c
++++ b/drivers/misc/mediatek/connectivity/wlan_drv_gen4m/mgmt/scan.c
+@@ -1523,7 +1523,8 @@
+ {
+ 	uint8_t *pucProfileIE, i = 0, j = 0, ucNewLink = FALSE;
+ 	uint8_t ucShortSsidOffset, ucBssParamOffset;
+-	uint8_t ucBssidNum = 0, ucCurrentLength = 0, ucShortSsidNum = 0;
++	uint8_t ucBssidNum = 0, ucShortSsidNum = 0;
++	uint16_t u2CurrentLength = 0;
+ 	uint8_t ucRnrChNum, ucHasBssid = FALSE, ucScanEnable = TRUE;
+ 	uint8_t aucNullAddr[] = NULL_MAC_ADDR;
+ 	uint16_t u2TbttInfoCount, u2TbttInfoLength;
+@@ -1542,8 +1543,11 @@
+ 		return;
+ 	}
+ 
+-	while (ucCurrentLength < IE_LEN(pucIE)) {
+-		pucProfileIE = &IE_ID_EXT(pucIE) + ucCurrentLength;
++	while (u2CurrentLength < IE_LEN(pucIE)) {
++		/* The 4-byte Neighbor AP Information header must fit */
++		if (u2CurrentLength + 4 > IE_LEN(pucIE))
++			break;
++		pucProfileIE = &IE_ID_EXT(pucIE) + u2CurrentLength;
+ 		prNeighborAPInfoField =
+ 			(struct NEIGHBOR_AP_INFO_FIELD *)pucProfileIE;
+ 
+@@ -1565,6 +1569,16 @@
+ 				u2TbttInfoLength);
+ 			return;
+ 		}
++		/* So must its TBTT Information fields. The step comes from the
++		 * frame: in a u8 counter 4 + 4 * 63 = 256 wrapped to 0 and a
++		 * forged beacon kept this loop running forever during a scan.
++		 */
++		if (u2CurrentLength + 4 +
++		    u2TbttInfoCount * u2TbttInfoLength > IE_LEN(pucIE)) {
++			DBGLOG(SCN, ERROR, "RNR truncated at %u/%u\n",
++				u2CurrentLength, IE_LEN(pucIE));
++			return;
++		}
+ 		/* If opClass is not 6G, no need to do extra scan
+ 		 * directly check next neighborAPInfo if exist
+ 		 */
+@@ -1573,14 +1587,14 @@
+ 				prNeighborAPInfoField->ucOpClass);
+ 
+ 			/* Calculate next NeighborAPInfo's index if exists */
+-			ucCurrentLength += 4 +
++			u2CurrentLength += 4 +
+ 				(u2TbttInfoCount * u2TbttInfoLength);
+ 			continue;
+ 		} else {
+ 			/* RNR bring 6G channel, but chip not support 6G */
+ 			/* Calculate next NeighborAPInfo's index if exists */
+ #if !(CFG_SUPPORT_WIFI_6G)
+-			ucCurrentLength += 4 +
++			u2CurrentLength += 4 +
+ 				(u2TbttInfoCount * u2TbttInfoLength);
+ 			continue;
+ #endif
+@@ -1660,7 +1674,7 @@
+ 			if (LINK_IS_EMPTY(&prAdapter->rNeighborAPInfoList))
+ 				cnmMemFree(prAdapter, prNeighborAPInfo);
+ 			/* Calculate next NeighborAPInfo's index if exists */
+-			ucCurrentLength += 4 +
++			u2CurrentLength += 4 +
+ 				(u2TbttInfoCount * u2TbttInfoLength);
+ 			continue;
+ 		}
+@@ -1783,7 +1797,7 @@
+ 						ucBssidNum);
+ 		}
+ 		/* Calculate next NeighborAPInfo's index if exists */
+-		ucCurrentLength += 4 + (u2TbttInfoCount * u2TbttInfoLength);
++		u2CurrentLength += 4 + (u2TbttInfoCount * u2TbttInfoLength);
+ 
+ 		/* Only handle RnR with BSSID */
+ 		if (ucHasBssid && ucScanEnable) {

@@ -1,0 +1,37 @@
+From: thunder
+Subject: [PATCH] dts: mt6833: drive the vibration motor with regulator-haptic
+
+The motor is powered by the VIBR LDO of the MT6359P. The vendor driver
+(mediatek,vibrator, its node comes from the factory dtbo) only switches the
+LDO and exposes Android's "vibrator" LED, which feedbackd does not use:
+feedbackd wants a force-feedback input device. regulator-haptic, the
+mainline driver for exactly this wiring, provides one (FF_RUMBLE, with
+FF_PERIODIC emulated by ff-memless), maps the strength to the LDO voltage
+and stops the motor on suspend. feedbackd's udev rules already know it by
+name.
+
+The voltage range is 2.4 to 3.0 V: 3.0 V is what the vendor driver uses;
+the lower bound keeps weak effects felt rather than mapping them to a
+voltage that may not spin the motor.
+
+---
+--- a/arch/arm64/boot/dts/mediatek/mt6833.dts
++++ b/arch/arm64/boot/dts/mediatek/mt6833.dts
+@@ -6343,6 +6343,17 @@
+ 			<0x52a940	0x2900		0x41>,
+ 			<0x5ea940	0x2900		0x41>;
+ 	};
++
++	/* thunder: the vibration motor sits on the PMIC's VIBR LDO. The vendor driver
++	 * (mediatek,vibrator, from the factory dtbo) only offers Android's LED interface;
++	 * regulator-haptic gives a force-feedback input device, which feedbackd uses,
++	 * with the strength mapped to the LDO voltage. */
++	haptic {
++		compatible = "regulator-haptic";
++		haptic-supply = <&mt_pmic_vibr_ldo_reg>;
++		min-microvolt = <2400000>;
++		max-microvolt = <3000000>;
++	};
+ };
+ 
+ #include "mediatek/mt6359p.dtsi"

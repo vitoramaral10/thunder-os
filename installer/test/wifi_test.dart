@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:thunder_installer/backend.dart';
 import 'package:thunder_installer/config.dart';
@@ -34,6 +36,13 @@ void main() {
     expect(s.ssid, 'Casa 5G');
     expect(s.ip, '192.168.0.7');
     expect(parseWifiStatus('wpa_state=DISCONNECTED\n').connected, isFalse);
+  });
+
+  test('nome de rede fora do UTF-8 nao derruba a decodificacao', () {
+    final bytes = [...utf8.encode('-50    2.4GHz Casa'), 0xff, 0xfe, 10];
+    final nets = parseWifiScan('SINAL FAIXA REDE\n${Backend.sshText.decode(bytes)}');
+    expect(nets, hasLength(1));
+    expect(nets.first.ssid, startsWith('Casa'));
   });
 
   test('shQuote protege aspas e espacos para o shell remoto', () {

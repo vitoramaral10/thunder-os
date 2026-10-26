@@ -162,3 +162,139 @@ diff --color -urN a/wmt_drv/common_main/platform/mtk_wcn_consys_hw.c b/wmt_drv/c
  
  UINT32 gps_lna_pin_num = 0xffffffff;
  
+--- a/wlan_drv_gen4m/os/linux/gl_wext.c
++++ b/wlan_drv_gen4m/os/linux/gl_wext.c
+@@ -254,32 +254,59 @@
+ 	"show_Channel"},
+ };
+ 
++/* thunder: os ioctls privados (0x8BE0-0x8BFF) chegam aqui pelo core de wext, que so exige
++ * CAP_NET_ADMIN para numeros pares; os impares (GET_DRIVER, IOC_AP_*, ATE...) mudam estado do
++ * driver e do firmware. No Android uma politica SELinux os fechava; aqui o gate e no driver.
++ */
++#define THUNDER_PRIV_GATED(fn) \
++static int fn##_gated(struct net_device *prNetDev, \
++		struct iw_request_info *prIwReqInfo, \
++		union iwreq_data *prIwReqData, char *pcExtra) \
++{ \
++	if (!capable(CAP_NET_ADMIN)) \
++		return -EPERM; \
++	return fn(prNetDev, prIwReqInfo, prIwReqData, pcExtra); \
++}
++THUNDER_PRIV_GATED(priv_set_int)
++THUNDER_PRIV_GATED(priv_get_int)
++THUNDER_PRIV_GATED(priv_get_string)
++THUNDER_PRIV_GATED(priv_set_struct)
++THUNDER_PRIV_GATED(priv_get_struct)
++THUNDER_PRIV_GATED(priv_set_ints)
++THUNDER_PRIV_GATED(priv_get_ints)
++THUNDER_PRIV_GATED(priv_set_driver)
++THUNDER_PRIV_GATED(priv_set_ap)
++#if CFG_SUPPORT_QA_TOOL
++THUNDER_PRIV_GATED(priv_qa_agent)
++THUNDER_PRIV_GATED(priv_ate_set)
++#endif
++
+ static const iw_handler rIwPrivHandler[] = {
+-	[IOCTL_SET_INT - SIOCIWFIRSTPRIV] = priv_set_int,
+-	[IOCTL_GET_INT - SIOCIWFIRSTPRIV] = priv_get_int,
++	[IOCTL_SET_INT - SIOCIWFIRSTPRIV] = priv_set_int_gated,
++	[IOCTL_GET_INT - SIOCIWFIRSTPRIV] = priv_get_int_gated,
+ 	[IOCTL_SET_ADDRESS - SIOCIWFIRSTPRIV] = NULL,
+ 	[IOCTL_GET_ADDRESS - SIOCIWFIRSTPRIV] = NULL,
+ 	[IOCTL_SET_STR - SIOCIWFIRSTPRIV] = NULL,
+-	[IOCTL_GET_STR - SIOCIWFIRSTPRIV] = priv_get_string,
++	[IOCTL_GET_STR - SIOCIWFIRSTPRIV] = priv_get_string_gated,
+ 	[IOCTL_SET_KEY - SIOCIWFIRSTPRIV] = NULL,
+ 	[IOCTL_GET_KEY - SIOCIWFIRSTPRIV] = NULL,
+-	[IOCTL_SET_STRUCT - SIOCIWFIRSTPRIV] = priv_set_struct,
+-	[IOCTL_GET_STRUCT - SIOCIWFIRSTPRIV] = priv_get_struct,
+-	[IOCTL_SET_STRUCT_FOR_EM - SIOCIWFIRSTPRIV] = priv_set_struct,
+-	[IOCTL_SET_INTS - SIOCIWFIRSTPRIV] = priv_set_ints,
+-	[IOCTL_GET_INTS - SIOCIWFIRSTPRIV] = priv_get_ints,
+-	[IOCTL_GET_DRIVER - SIOCIWFIRSTPRIV] = priv_set_driver,
++	[IOCTL_SET_STRUCT - SIOCIWFIRSTPRIV] = priv_set_struct_gated,
++	[IOCTL_GET_STRUCT - SIOCIWFIRSTPRIV] = priv_get_struct_gated,
++	[IOCTL_SET_STRUCT_FOR_EM - SIOCIWFIRSTPRIV] = priv_set_struct_gated,
++	[IOCTL_SET_INTS - SIOCIWFIRSTPRIV] = priv_set_ints_gated,
++	[IOCTL_GET_INTS - SIOCIWFIRSTPRIV] = priv_get_ints_gated,
++	[IOCTL_GET_DRIVER - SIOCIWFIRSTPRIV] = priv_set_driver_gated,
+ #if CFG_SUPPORT_NAN
+ 	[IOCTL_NAN_STRUCT - SIOCIWFIRSTPRIV] = priv_nan_struct,
+ #endif
+-	[IOC_AP_GET_STA_LIST - SIOCIWFIRSTPRIV] = priv_set_ap,
+-	[IOC_AP_SET_MAC_FLTR - SIOCIWFIRSTPRIV] = priv_set_ap,
+-	[IOC_AP_SET_CFG - SIOCIWFIRSTPRIV] = priv_set_ap,
+-	[IOC_AP_STA_DISASSOC - SIOCIWFIRSTPRIV] = priv_set_ap,
+-	[IOC_AP_SET_NSS - SIOCIWFIRSTPRIV] = priv_set_ap,
++	[IOC_AP_GET_STA_LIST - SIOCIWFIRSTPRIV] = priv_set_ap_gated,
++	[IOC_AP_SET_MAC_FLTR - SIOCIWFIRSTPRIV] = priv_set_ap_gated,
++	[IOC_AP_SET_CFG - SIOCIWFIRSTPRIV] = priv_set_ap_gated,
++	[IOC_AP_STA_DISASSOC - SIOCIWFIRSTPRIV] = priv_set_ap_gated,
++	[IOC_AP_SET_NSS - SIOCIWFIRSTPRIV] = priv_set_ap_gated,
+ #if CFG_SUPPORT_QA_TOOL
+-	[IOCTL_QA_TOOL_DAEMON - SIOCIWFIRSTPRIV] = priv_qa_agent,
+-	[IOCTL_IWPRIV_ATE - SIOCIWFIRSTPRIV] = priv_ate_set
++	[IOCTL_QA_TOOL_DAEMON - SIOCIWFIRSTPRIV] = priv_qa_agent_gated,
++	[IOCTL_IWPRIV_ATE - SIOCIWFIRSTPRIV] = priv_ate_set_gated
+ #endif
+ };
+ 
+--- a/wlan_drv_gen4m/os/linux/gl_wext_priv.c
++++ b/wlan_drv_gen4m/os/linux/gl_wext_priv.c
+@@ -3404,6 +3404,11 @@
+ 	/* Use GET type becauase large data by iwpriv. */
+ 
+ 	ASSERT(IW_IS_GET(u2Cmd));
++	/* thunder: pcExtra e o buffer de get_args (IW_PRIV_TYPE_CHAR | 2000 em gl_wext.c) e o
++	 * core nao confere o tamanho no caminho GET; sem isto a copia e o '\0' passam do fim.
++	 */
++	if (prIwReqData->data.length >= 2000)
++		return -EINVAL;
+ 	if (prIwReqData->data.length != 0) {
+ 		if (!kal_access_ok(VERIFY_READ, prIwReqData->data.pointer,
+ 			       prIwReqData->data.length)) {
+@@ -10521,6 +10526,11 @@
+ 		prIwReqData->data.length);
+ 
+ 	ASSERT(IW_IS_GET(u2Cmd));
++	/* thunder: aucOidBuf e estatico (CMD_OID_BUF_LENGTH); o core nao limita o tamanho no
++	 * caminho GET e o hardened usercopy nao cobre o .bss do modulo.
++	 */
++	if (prIwReqData->data.length > sizeof(aucOidBuf))
++		return -EINVAL;
+ 	if (prIwReqData->data.length != 0) {
+ 		if (!kal_access_ok(VERIFY_READ, prIwReqData->data.pointer,
+ 			prIwReqData->data.length)) {
+--- a/wlan_drv_gen4m/os/linux/gl_init.c
++++ b/wlan_drv_gen4m/os/linux/gl_init.c
+@@ -1749,6 +1749,13 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/* thunder: fora a faixa wext padrao (que o core ja confere), tudo aqui e comando
++	 * privado do driver (0x8BE0-0x8BFF, SIOCDEVPRIVATE+1/+2): so CAP_NET_ADMIN (ver gl_wext.c).
++	 */
++	if (!(i4Cmd >= SIOCIWFIRST && i4Cmd < SIOCIWFIRSTPRIV) &&
++	    !capable(CAP_NET_ADMIN))
++		return -EPERM;
++
+ 	if ((i4Cmd >= SIOCIWFIRST) && (i4Cmd < SIOCIWFIRSTPRIV)) {
+ 		/* 0x8B00 ~ 0x8BDF, wireless extension region */
+ 		ret = wext_support_ioctl(prDev, prIfReq, i4Cmd);
+--- a/wlan_drv_gen4m/os/linux/gl_p2p.c
++++ b/wlan_drv_gen4m/os/linux/gl_p2p.c
+@@ -2058,6 +2058,13 @@
+ 		return -EINVAL;
+ 	}
+ 
++	/* thunder: fora a faixa wext padrao (que o core ja confere), tudo aqui e comando
++	 * privado do driver (0x8BE0-0x8BFF, SIOCDEVPRIVATE+1/+2): so CAP_NET_ADMIN (ver gl_wext.c).
++	 */
++	if (!(i4Cmd >= SIOCIWFIRST && i4Cmd < SIOCIWFIRSTPRIV) &&
++	    !capable(CAP_NET_ADMIN))
++		return -EPERM;
++
+ 	if (i4Cmd == SIOCGIWPRIV) {
+ 		ret = wext_support_ioctl(prDev, prIfReq, i4Cmd);
+ 	} else if ((i4Cmd >= SIOCIWFIRSTPRIV) && (i4Cmd < SIOCIWLASTPRIV)) {

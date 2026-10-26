@@ -1,0 +1,14 @@
+# Sobe o thunder-telnet-usb so quando o SSH do cabo fica fora do ar (ver o script). Fica
+# no sysinit.target para cobrir tambem o boot que trava antes do multi-user.
+[Unit]
+Description=Start the USB telnet login when SSH stays down
+DefaultDependencies=no
+After=systemd-journald.socket
+IgnoreOnIsolate=yes
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/thunder/telnet-fallback
+
+[Install]
+WantedBy=sysinit.target

@@ -1,0 +1,19 @@
+# Copia o firmware proprietario da super de fabrica uma vez, antes de quem o usa.
+# A imagem distribuida nao traz firmware nenhum.
+[Unit]
+Description=Copy the device firmware from the factory super partition
+ConditionPathExists=!/var/lib/thunder/firmware-seeded
+ConditionPathExists=/usr/lib/thunder/firmware-seed.conf
+DefaultDependencies=no
+After=local-fs.target systemd-udevd.service
+Before=sysinit.target thunder-wmt-connsys.service thunder-modemd-nv-seed.service thunder-modemd.service thunder-gnss-mnld.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/thunder/firmware-seed
+# As montagens ro ficam so neste namespace e somem com ele.
+PrivateMounts=yes
+PrivateNetwork=yes
+
+[Install]
+WantedBy=sysinit.target

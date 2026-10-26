@@ -1,0 +1,151 @@
+From: thunder
+Subject: [PATCH] ccci: mt6833: power MD1 off when no modem userspace starts it
+
+The probe powers the MD1 domain ("dummy md sys clk") and only the first
+CCCI_COMMAND_START from Android's ccci_mdinit powers it off again, in
+md_start_platform(). Without that daemon MD1 stays powered and idle and
+keeps its SRCCLKENA/INFRA/APSRC/VRF18/DDREN requests to the SPM up: suspend
+never turns the 26 MHz clock off ("System LPM is blocked by md",
+26M_off_pct = 0). Turning PG_MD1 off by hand dropped SRC_REQ_STA_0 & 0xfff
+from 0x077 to 0 and gave 26M_off_pct = 99 on battery.
+
+After boot, wait for the MD BROM like md_start_platform() does and run the
+vendor md_cd_power_off() (MTCMOS, flight mode through ATF, topclkgen, PBM).
+md_start_platform() then skips its own first-boot power-off, so a later
+start by ccci_mdinit stays balanced. thunder.md1=on on the command line
+keeps the old behaviour, for modem work.
+
+A mutex serializes the work with the first start, the work only runs when
+the ccci driver is bound (a failed probe leaves stale devm handles), and a
+BROM failure seen at park time is still returned by that start.
+
+---
+--- a/drivers/misc/mediatek/eccci/mt6833/md_sys1_platform.c	2026-10-14 22:43:13.422800375 -0300
++++ b/drivers/misc/mediatek/eccci/mt6833/md_sys1_platform.c	2026-10-14 22:49:37.092262152 -0300
+@@ -4,6 +4,10 @@
+ */
+ 
+ #include <linux/delay.h>
++#include <linux/string.h>
++#include <linux/workqueue.h>
++#include <linux/mutex.h>
++#include <linux/device.h>
+ #include <linux/platform_device.h>
+ #include <linux/interrupt.h>
+ #include <linux/irq.h>
+@@ -98,6 +102,26 @@
+ };
+ static int s_md_start_completed;
+ 
++/* thunder: MD1 is powered at probe ("dummy md sys clk") and only the first
++ * CCCI_COMMAND_START from ccci_mdinit, which a plain Linux userspace never
++ * sends, turns it off again. A powered, idle modem asserts its SRCCLKENA,
++ * INFRA, APSRC, VRF18 and DDREN requests to the SPM, so suspend never drops
++ * the 26 MHz clock (SPM: "System LPM is blocked by md"). Unless the command
++ * line has thunder.md1=on, power MD1 off after boot the way the first start
++ * does. md_start_platform() knows not to do it twice.
++ */
++static DEFINE_MUTEX(md1_park_lock);	/* md1_parked, md1_park_ret, the first start */
++static bool md1_parked;
++static int md1_park_ret;		/* BROM check result, for the start that follows */
++static bool md1_keep;
++
++static int __init md1_keep_setup(char *str)
++{
++	md1_keep = str && !strcmp(str, "on");
++	return 1;
++}
++__setup("thunder.md1=", md1_keep_setup);
++
+ int ccif_read32(void *b, unsigned long a)
+ {
+ 	unsigned long flags;
+@@ -723,10 +747,29 @@
+ 	int timeout = 100; /* 100 * 20ms = 2s */
+ 	int ret = -1;
+ 
++	/* thunder: the park work and the first start are serialized; once this is
++	 * set the work leaves MD1 alone.
++	 */
++	mutex_lock(&md1_park_lock);
+ 	s_md_start_completed = 1;
+ 
+-	if ((md->per_md_data.config.setting&MD_SETTING_FIRST_BOOT) == 0)
++	if ((md->per_md_data.config.setting&MD_SETTING_FIRST_BOOT) == 0) {
++		mutex_unlock(&md1_park_lock);
+ 		return 0;
++	}
++
++	/* thunder: the park work already waited for the BROM and powered MD1 off; a
++	 * second md_cd_power_off would unprepare PG_MD1 once more than it was
++	 * prepared. Report its BROM result, as this function did before.
++	 */
++	if (md1_parked) {
++		md1_parked = false;
++		ret = md1_park_ret;
++		mutex_unlock(&md1_park_lock);
++		if (ret != 0)
++			CCCI_ERROR_LOG(md->index, TAG, "BROM Failed (at park)\n");
++		return ret;
++	}
+ 
+ 	while (timeout > 0) {
+ 		ret = mt_secure_call(MD_POWER_CONFIG, MD_CHECK_DONE,
+@@ -755,6 +798,7 @@
+ 		CCCI_ERROR_LOG(md->index, TAG, "BROM Failed\n");
+ 	}
+ 	md_cd_power_off(md, 0);
++	mutex_unlock(&md1_park_lock);
+ 	return ret;
+ }
+ 
+@@ -936,6 +980,49 @@
+ 	return ret;
+ }
+ 
++static void md1_park_work_fn(struct work_struct *work)
++{
++	struct ccci_modem *md = ccci_md_get_modem_by_id(MD_SYS1);
++	int timeout = 100; /* 100 * 20ms = 2s, as in md_start_platform() */
++	int ret = -1;
++
++	/* A probe that failed after publishing the modem leaves stale devm handles:
++	 * only touch MD1 when the ccci driver is really bound to it.
++	 */
++	if (!md || !md->plat_dev || !device_is_bound(&md->plat_dev->dev) ||
++	    !md->hw_info || IS_ERR_OR_NULL(clk_table[0].clk_ref))
++		return;
++
++	mutex_lock(&md1_park_lock);
++	if (s_md_start_completed || md1_parked)
++		goto out;
++	while (timeout-- > 0) {
++		ret = mt_secure_call(MD_POWER_CONFIG, MD_CHECK_DONE, 0, 0, 0, 0, 0);
++		if (!ret)
++			break;
++		msleep(20);
++	}
++	if (ret)
++		CCCI_ERROR_LOG(md->index, TAG, "park: BROM not done, powering off anyway\n");
++	md_cd_power_off(md, 0);
++	md1_park_ret = ret;
++	md1_parked = true;
++	CCCI_BOOTUP_LOG(md->index, TAG, "park: MD1 off until ccci_mdinit starts it\n");
++	pr_info("ccci: MD1 powered off (no modem userspace; thunder.md1=on keeps it)\n");
++out:
++	mutex_unlock(&md1_park_lock);
++}
++
++static DECLARE_WORK(md1_park_work, md1_park_work_fn);
++
++static int __init md1_park_init(void)
++{
++	if (!md1_keep)
++		schedule_work(&md1_park_work);
++	return 0;
++}
++late_initcall_sync(md1_park_init);
++
+ int ccci_modem_remove(struct platform_device *dev)
+ {
+ 	return 0;

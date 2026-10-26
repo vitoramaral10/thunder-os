@@ -1,0 +1,117 @@
+# ModemManager como o do Arch, mais o plugin mtk-ccci: o modem MediaTek do SoC (MD1) nos
+# kernels de vendor, falado so por AT no canal CCCI (/dev/ttyC0), com os dados nas
+# interfaces ccmniN. O 4.19 da Xiaomi nao tem MIPC, entao o plugin mtk-soc do fork
+# MT6895-Mainline (que faz os dados por MIPC) nao serve; partes dele foram aproveitadas.
+#
+# 0001-mtk-ccci-plugin.patch (contra o tarball 1.24.2):
+# - udev (77-mm-mtk-ccci.rules): ttyC0 (tty) e ccmni[0-9]* recebem ID_MM_MTK_CCCI e o
+#   mesmo ID_MM_PHYSDEV_UID, viram um modem so; ttyC0 e a porta AT primaria. Sem id USB
+#   nem PCI, o plugin pega as portas pela etiqueta do udev.
+# - modem: o MD sobe em +CFUN: 0 (sem SIM): +CFUN=1 antes da checagem do SIM;
+#   AT+EDALLOW=1 ao ligar; as URCs proprias da MediaTek sao engolidas para nao quebrar a
+#   leitura das respostas.
+# - dados: +CGDCONT de novo e +CGACT=1,<cid>; a URC "+EIF: <id>, ifup, <cid>, <ipv4>" diz
+#   a interface (ccmni<id % 100>). IPv4 estatico /32 sem gateway e DNS do +CGCONTRDP para
+#   o NetworkManager; "ifdown" inesperado derruba o bearer, "ifchg" (CSFB numa chamada)
+#   nao.
+# - voz: +ECPI vira estado de chamada, o resto pelo +CLCC; ATH para desligar todas.
+# - testes dos parsers (+EIF, +ECPI, +CGCONTRDP, +CGPADDR, AcT do +COPS), no check().
+#
+# Do PKGBUILD do Arch (modemmanager 1.24.2-1, tag 1.24.2-1 do repo de empacotamento):
+# as mesmas opcoes do meson e as mesmas dependencias do pacote modemmanager. Diferencas:
+# - so o daemon. A libmm-glib (e os headers, o .pc, GIR e VAPI dela) continua sendo o
+#   pacote libmm-glib do Arch, da mesma versao: o patch nao toca nela. Por isso
+#   gtk_doc, introspection e vapi desligados (so geram arquivos da libmm-glib e da
+#   doc) e o modemmanager-docs fica de fora.
+# - os dois git cherry-pick do Arch (1ec2b862 "docs: Fix gtk-doc build" e 018e4408
+#   "shared-fibocom: don't assume parent implements the firmware interface") ja estao
+#   na tag 1.24.2 (git apply -R --check confirma); no Arch sao no-op.
+# - depende de libmm-glib=$pkgver: o daemon usa a API interna dela, que muda entre
+#   versoes. Quando o Arch trouxer outra versao o pacman -Syu para e avisa; e a hora de
+#   subir este pacote.
+#
+# Nome proprio com provides/conflicts: satisfaz quem depende de modemmanager e um
+# pacman -Syu nao o troca de volta pelo do Arch.
+#
+# Fonte: o tarball que o GitLab gera da tag 1.24.2, fixado pelo sha256. A tag e assinada
+# por Dan Williams (3A948E16E8860C68CD68441D734614319E26A433, chave que o Arch aceita);
+# assinatura e commit (f2b9ab1ad78d322f32134a444b5b54c6e8160e19, o mesmo do
+# git get-tar-commit-id do tarball) conferidos no PC em 2026-10-15. Se o GitLab um dia
+# regenerar o arquivo com outros bytes, o sha256 falha: conferir a tag de novo e
+# atualizar o hash.
+pkgname=modemmanager-thunder
+_name=ModemManager
+pkgver=1.24.2
+pkgrel=4
+pkgdesc='Mobile broadband modem management service (Thunder OS: plugin mtk-ccci, modem MediaTek por CCCI)'
+url='https://www.freedesktop.org/wiki/Software/ModemManager/'
+arch=(aarch64)
+license=(GPL-2.0-or-later)
+depends=(
+	bash gcc-libs glib2 glibc hicolor-icon-theme libgudev libmbim libqmi libqrtr-glib
+	mobile-broadband-provider-info polkit ppp systemd-libs
+	"libmm-glib=$pkgver" libmm-glib.so libgudev-1.0.so libglib-2.0.so libgobject-2.0.so
+	libgio-2.0.so libgmodule-2.0.so libmbim-glib.so libqmi-glib.so libsystemd.so
+)
+makedepends=(bash-completion glib2-devel meson systemd)
+optdepends=('usb_modeswitch: install if your modem shows up as a storage drive')
+provides=("modemmanager=$pkgver")
+conflicts=(modemmanager)
+source=(
+	"https://gitlab.freedesktop.org/mobile-broadband/$_name/-/archive/$pkgver/$_name-$pkgver.tar.gz"
+	0001-mtk-ccci-plugin.patch
+	0002-creg-mode3-mediatek.patch
+	0003-mtk-ccci-data-cid.patch
+	0004-mtk-ccci-ciev-urc.patch
+	thunder-modemd.conf
+)
+sha256sums=('fbc75adcc0d7b0565f256e7ff4e8872b0a37c4413ff576665f7470932d9c1b68'
+            '94e35a0367ad6ea406f145529da23629ac7528a8e46ea2431a23db4b6da370e7'
+            'a6e961b1105d2833b2d0b6e9500a270079fac1da4197e45586a4ca5c459f1464'
+            'dd575ca6a6bb94d3f7fb44b1a6606e510a50deee87264a2e8e323931aca9f6c1'
+            '7ce7f1a9e33b102031c6b7b812839d482fecf7fd81bb1786587c9bd07d2dfdf0'
+            '94f1eb92ea9949ca4c994ceceea82009378058a8ebf3b06f6b072fc1d537e1a8')
+
+prepare() {
+	cd $_name-$pkgver
+	patch -Np1 -i "$srcdir/0001-mtk-ccci-plugin.patch"
+	# CEREG no modo 3 do MD MediaTek (responde assim mesmo depois de AT+CEREG=2)
+	patch -Np1 -i "$srcdir/0002-creg-mode3-mediatek.patch"
+	# Dados nunca no cid 0 (attach do LTE no MD MediaTek)
+	patch -Np1 -i "$srcdir/0003-mtk-ccci-data-cid.patch"
+	# "+CIEV: 5, 1" logo depois do OK do ATD virava a resposta e a chamada "falhava"
+	patch -Np1 -i "$srcdir/0004-mtk-ccci-ciev-urc.patch"
+}
+
+build() {
+	local meson_options=(
+		-D dbus_policy_dir=/usr/share/dbus-1/system.d
+		-D dist_version="\"$pkgver-$pkgrel\""
+		-D polkit=permissive
+		-D plugin_mtk_ccci=enabled
+		# a libmm-glib e a doc vem dos pacotes do Arch (ver acima)
+		-D gtk_doc=false
+		-D introspection=false
+		-D vapi=false
+	)
+	arch-meson $_name-$pkgver build "${meson_options[@]}"
+	meson compile -C build
+}
+
+check() {
+	# So os testes do plugin novo, dos parsers (CEREG modo 3) e das regras do udev: a
+	# suite inteira sobe o daemon num D-Bus de teste, lento e fragil no chroot emulado.
+	meson test -C build --print-errorlogs test-plugin-mtk-ccci test-modem-helpers test-udev-rules
+}
+
+package() {
+	meson install -C build --destdir "$pkgdir"
+
+	# Da libmm-glib do Arch (headers, .pc e a propria biblioteca)
+	rm -r "$pkgdir"/usr/include "$pkgdir"/usr/lib/pkgconfig
+	rm "$pkgdir"/usr/lib/libmm-glib.so*
+
+	# Ordem de partida com o dono do modem (ver o arquivo)
+	install -Dm644 "$srcdir/thunder-modemd.conf" \
+		"$pkgdir/usr/lib/systemd/system/ModemManager.service.d/thunder-modemd.conf"
+}

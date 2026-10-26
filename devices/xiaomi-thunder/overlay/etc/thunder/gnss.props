@@ -1,0 +1,11 @@
+# Propriedades do Android que o mnld le (thunder-gnss props): no Android quem as poe e o
+# wmt_loader (chipid, driver.ready) e o init (o resto, do vendor/build.prop).
+# SoC do CONNSYS: o mnld so aceita valor com mais de 5 caracteres ("0x6833").
+persist.vendor.connsys.chipid=0x6833
+vendor.connsys.driver.ready=yes
+# A-die de RF (o FM da ROM e mt6631_6635).
+vendor.connsys.adie.chipid=0x6631
+ro.vendor.mtk_gps_support=1
+ro.vendor.gps.chrdev=gps_drv
+ro.vendor.mtk_log_hide_gps=0
+ro.build.type=user

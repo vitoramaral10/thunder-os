@@ -36,7 +36,15 @@ erofs*|*EROFS*)
 	command -v fsck.erofs >/dev/null || { echo "particao EROFS: instale erofs-utils (fsck.erofs)" >&2; exit 1; }
 	mkdir -p "$tmp/tree"
 	fsck.erofs --extract="$tmp/tree" "$tmp/part.img" >/dev/null
-	get() { [ -s "$tmp/tree$1" ] && cp "$tmp/tree$1" "$2"; } ;;
+	# A ROM vem de fora: um link simbolico nela (absoluto, ou com ..) faria o cp ler um
+	# arquivo do PC e leva-lo para a imagem. So vale arquivo que resolve dentro da arvore.
+	tree=$(realpath -e -- "$tmp/tree")
+	get() {
+		local f
+		f=$(realpath -e -- "$tmp/tree$1" 2>/dev/null) || return 1
+		case $f in "$tree"/*) ;; *) return 1 ;; esac
+		[ -f "$f" ] && [ -s "$f" ] && cp -- "$f" "$2"
+	} ;;
 *)
 	echo "sistema de arquivos desconhecido na particao: $fs" >&2; exit 1 ;;
 esac
@@ -55,6 +63,29 @@ for f in "${FIRMWARE_REQUIRED[@]}" "${INITRAMFS_FIRMWARE[@]}"; do
 	[ -s "$FIRMWARE/$f" ] || { echo "faltou $f, obrigatorio para $DEVICE: a ROM e deste aparelho?" >&2; exit 1; }
 done
 [ ${#missing[@]} -eq 0 ] || echo "aviso: nao achei na ROM: ${missing[*]}" >&2
+
+# Arvores do modem (MODEM_ROM_TREES): so arquivos regulares; link simbolico vindo da ROM
+# e apagado depois da copia (nunca seguido), pelo mesmo motivo do get() acima.
+if [ ${#MODEM_ROM_TREES[@]} -gt 0 ]; then
+	rm -rf "$MODEM_RO"; mkdir -p "$MODEM_RO"
+	for t in "${MODEM_ROM_TREES[@]}"; do
+		src=${t%%:*} name=${t#*:}
+		case $fs in
+		ext*|*ext2*|*ext4*)
+			mkdir -p "$tmp/trees"
+			debugfs -R "rdump \"$src\" \"$tmp/trees\"" "$tmp/part.img" >/dev/null 2>&1 || true
+			got=$tmp/trees/$(basename "$src") ;;
+		*)
+			# Mesma contencao do get(): um componente do meio que e link nao sai da arvore.
+			got=$(realpath -e -- "$tmp/tree$src" 2>/dev/null) || got=
+			case $got in "$tree"/*) ;; *) got= ;; esac ;;
+		esac
+		[ -n "$got" ] && [ -d "$got" ] && [ ! -L "$got" ] || { echo "aviso: $src ausente na ROM" >&2; continue; }
+		cp -r --no-dereference -- "$got" "$MODEM_RO/$name"
+		find "$MODEM_RO/$name" -type l -delete
+		echo "  $src -> modem-ro/$name ($(find "$MODEM_RO/$name" -type f | wc -l) arquivos)"
+	done
+fi
 echo "firmware em $FIRMWARE: $(( ${#FIRMWARE_FILES[@]} - ${#missing[@]} )) de ${#FIRMWARE_FILES[@]} arquivos"
 exit
 }

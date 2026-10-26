@@ -1,0 +1,13 @@
+# Inibidores da suspensao por ociosidade: cabo, carregador, SSH, audio, pacman (ver o script).
+[Unit]
+Description=Hold suspend inhibitors while the phone is busy
+After=systemd-logind.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/thunder/xiaomi-thunder-suspend-guard
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

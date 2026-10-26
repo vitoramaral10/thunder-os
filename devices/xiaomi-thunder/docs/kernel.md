@@ -1,7 +1,8 @@
 # Kernel
 
 The kernel is Xiaomi's vendor 4.19.191 for the MT6833 (MiCode/Xiaomi_Kernel_OpenSource
-at commit `a40ceab8943703f33e935cb0b86d0f69aa2044dd`), built by `tools/build-kernel.sh`.
+at commit `a40ceab8943703f33e935cb0b86d0f69aa2044dd`), brought to **4.19.325** (the last
+4.19 release) by the first series entry, and built by `tools/build-kernel.sh`.
 This page catalogues what we change on top of it and why, and lists the kernel
 properties the userland has to live with. Revision numbers (`rNN`) are the kernel
 revisions in which a change first shipped.
@@ -10,12 +11,63 @@ Build steps, in order: fetch and verify the tarball (sha512), graft the MediaTek
 connectivity drop, apply `devices/xiaomi-thunder/patches/series` in order, strip `-Werror` from every
 Makefile/Kbuild, `oldconfig` from `devices/xiaomi-thunder/kernel-config`, cross-build with
 `aarch64-linux-gnu-`. Output goes to `build/xiaomi-thunder/kernel`: `boot/vmlinuz` (Image.gz),
-`boot/dtbs/mediatek/mt6833.dtb`, `lib/modules/4.19.191-perf`.
+`boot/dtbs/mediatek/mt6833.dtb`, `lib/modules/4.19.325-perf`.
 
 ## Patches, in series order
 
 All patches apply with `patch -p1` at the root of the Xiaomi source, after the
-connectivity graft.
+connectivity graft (`.xz` entries are decompressed first).
+
+### update-ack-4.19.325: 4.19.191 to 4.19.325
+
+Xiaomi's tree is Android's common kernel `android-4.19-stable` at its "Merge 4.19.191"
+commit (`011b73c99`; the two reverts that follow it are not in the tarball) plus the
+MediaTek BSP. Google kept merging the 4.19 LTS into that branch to the end
+(`deprecated/android-4.19-stable`, 4.19.325, last commit 2024-12-11), so merging that branch
+brings every stable fix with the LTS-versus-Android conflicts already solved. The patch is
+`git diff --no-renames` from the vendor tree to the merge: 6918 files, +108875/-82790, 2.9 MB
+as xz; applied with GNU patch to the vendor tarball it reproduces the merge exactly.
+
+**Recipe.** In a repo with the ACK branch: commit the vendor tarball on top of `011b73c99`,
+merge `deprecated/android-4.19-stable`, solve the conflicts, diff the vendor commit against
+the merge. 62 files conflicted (111 hunks). How they were solved:
+
+- **Not built here** (other SoCs' DTs, `xhci.c`, `huge_memory.c` with THP off, panels and
+  drivers we do not build): the vendor side.
+- **The vendor already had part of the same fix** (Spectre-BHB, `insn_emulation`, `fget`
+  races, aio pollfree, unix socket GC, the anon_vma `num_children` fix, the `do_wp_page` COW
+  simplification, `utp_task_req_desc` cleanup in UFS): the ACK side, which is the final
+  version, unless the vendor file adds MediaTek code around it, then the vendor version of
+  the region plus the ACK fixes that come after (UFS task management, `memory.c` with the
+  Android speculative fault's `vmf->vma_flags`, `rmap.h` with the MediaTek `private` field).
+- **Drivers MediaTek rewrote** (`mtk_dsi.c`, 8527 lines against 1206 upstream;
+  `pwm-mtk-disp.c`): the whole vendor file; the ACK commits there target the upstream driver.
+  `mtk_drm_drv.c` keeps the vendor file plus the bind error-path fix (9a48f99aa).
+- **Both, by hand**: binder (the vendor moved `struct binder_proc` to `binder_internal.h`;
+  the ACK changes went there), uclamp (the eight ACK uclamp commits on top of the MediaTek
+  schedtune hooks; `uclamp_update_active_tasks(css, clamps)` stays public for
+  `kernel/sched/tune.c`), RNDIS (ACK's `resp_lock` in the vendor's response queue), u_ether
+  (ACK's `addr_assign_type` with the vendor's host MAC), configfs (the ACK unbind fix in the
+  vendor's moved unbind), f2fs (the vendor's `f2fs_rwsem` wrappers with the ACK logic; the two
+  versions of the directory-xattr checkpoint fix both stay, see below), v4l2-mem2mem (the
+  vendor's request API with ACK's MMAP offset fix, as upstream 5.x has it).
+- **f2fs directory xattr.** The vendor has an earlier Android version of upstream
+  `aaf8c0b9ae04` (`CP_PARENT_XATTR_SET`), the ACK the final one (`CP_XATTR_DIR`). Both are
+  kept: each only forces extra checkpoints. f2fs is not used on this phone.
+- **sctp.** `from_addr_param` now returns `bool` (true is success); the vendor's test would
+  have rejected every valid address, so the ACK form.
+
+Then the series was checked on the updated tree: 52 patches apply as before, and three are
+already inside 4.19.325 and left the series: `backport-netfilter-4.19.325`,
+`backport-bluetooth-4.19.325` and `backport-cgroup-v1-release-agent-capable`.
+
+**Config.** `oldconfig` turns on what 4.19.191 did not have: `INIT_STACK_ALL_ZERO` (stack
+variables start zeroed), errata `ARM64_ERRATUM_1742098` and `3194386`,
+`RANDOM_TRUST_BOOTLOADER`; DECnet, `NET_CLS_RSVP*`, `NET_CLS_TCINDEX`, `NET_SCH_CBQ` and
+`NET_SCH_DSMARK` no longer exist (they were already off).
+
+**ABI.** `uname -r` is now `4.19.325-perf`, and with MODVERSIONS every module must come from
+the same build (the kernel package does that).
 
 **fix-selinux-host-includes.** `scripts/selinux/genheaders` and `scripts/selinux/mdp`
 are host programs that include kernel uapi headers. On a cross build they also need
@@ -229,15 +281,9 @@ the results are in `netfilter.md`.
 
 **What.** Nine series entries, appended after `fix-vendor-kthreads-idle-sleep`:
 
-- **backport-netfilter-4.19.325.** The netfilter code of the tree becomes that of
-  `v4.19.325`: 191 stable commits, 109 files, +2669/-1483 (`net/netfilter`,
-  `net/{ipv4,ipv6}/netfilter`, `net/bridge/netfilter`, `br_netfilter_*`, `include/net/netfilter`,
-  `include/net/netns/nftables.h`, `include/{linux,uapi/linux}/netfilter*`). Left out: the 23 generic
-  `net/netlink` commits (a later revision, rD) and the DECnet removal (the vendor still has
-  DECnet). `uname` keeps saying 4.19.191. The patch header carries the exact recipe, the
-  list of commits and the sha256 of the body. Invariant: tree + patch compared with `v4.19.325`
-  on those paths differs only in the vendor files (`xt_quota2`, `xt_IDLETIMER`, `rcu_read_lock` in
-  `nf_reinject`, a non-static `nf_nat_ipv4_fn`, Kconfig, Makefile) and DECnet.
+- **backport-netfilter-4.19.325** (left the series in 2026-10: netfilter at 4.19.325 now
+  comes with `update-ack-4.19.325`). It brought `net/netfilter` and the rest of the
+  netfilter paths from `v4.19.191` to `v4.19.325` alone, before the whole tree moved.
 - **add-netfilter-userns-restrict.** The gate, below.
 - **backport-nf-reject-ipv6-ll-max-header** (4ed234fe793f, CVE-2024-50256),
   **backport-nf-ct-tcp-rst-direction** (bed6e04be8e6, CVE-2026-63913) and
@@ -246,7 +292,8 @@ the results are in `netfilter.md`.
 - **fix-mtk-default-no-dccp-act-ipt.** Removes three `select` lines of
   `drivers/misc/mediatek/Kconfig.default` (`NF_CT_PROTO_DCCP`, `NF_NAT_PROTO_DCCP`,
   `NET_ACT_IPT`). A `select` beats `# CONFIG_X is not set`, so the config alone would not do.
-- **backport-cgroup-v1-release-agent-capable** (stable 4.19.229, CVE-2022-0492): see Risks.
+- **backport-cgroup-v1-release-agent-capable** (stable 4.19.229, CVE-2022-0492): see Risks;
+  now part of `update-ack-4.19.325`.
 - **backport-reboot-hw-protection-shutdown** (dfa19b11385d, 5.14) and
   **fix-mtk-charger-battery-missing-poweroff**: the forced fallback of the missing-battery
   shutdown, see Risks.
@@ -321,7 +368,7 @@ fails if the file is not in the package; the presence of the file in the package
   helper off the `release_agent` runs again (as root, in the initial namespaces). A user who mounts an
   existing v1 hierarchy inside `unshare -UrmC` could point it at a program of his. The image only mounts
   cgroup2, but LXC, Waydroid or any `mount -t cgroup` by root create a v1 hierarchy. Closed by
-  `backport-cgroup-v1-release-agent-capable.patch` (stable 4.19.229), part of rB.
+  the stable 4.19.229 fix, first as its own patch in rB, now inside `update-ack-4.19.325`.
 - `modprobe_path` and `core_pattern` are again final steps of an arbitrary kernel write. Accepted: whoever has that
   already owns the credentials.
 - Autoload is again reachable by unprivileged code where the kernel asks for no capability (about 14 modules plus
@@ -329,8 +376,60 @@ fails if the file is not in the package; the presence of the file in the package
 - The sysctl at 0 reopens everything. Only real root writes it (`CAP_SYS_ADMIN`).
 - `struct net` changes (`netns/nftables.h` shrinks), so every module's CRC changes: all modules must come from
   the same build as the boot image (they do through the kernel package).
-- The rest of the kernel stays at 4.19.191.
 - The gate was compiled but, as of this writing, never run on the device.
+
+### Bluetooth core at 4.19.325
+
+Until 2026-10 `backport-bluetooth-4.19.325` moved `net/bluetooth` and `include/net/bluetooth`
+alone from `v4.19.191` to `v4.19.325` (104 stable commits; the CVE map is in
+`build/research/bt/REPORT.md`). `update-ack-4.19.325` now brings them. The one difference from
+linux-stable is deliberate on Android's side: the ACK reverted the stable change that made
+`hci_dev->name` a `const char *` set with `dev_set_name` (KABI), so `name` stays `char[8]`.
+Nothing here needs more than `hci9999999`.
+
+- **Closes**, among others, the over-the-air L2CAP bugs CVE-2022-42896 (LE connect with an
+  invalid SPSM, use after free), CVE-2022-42895 (uninitialized EFS, kernel memory leak),
+  CVE-2022-45934 (CONF_REQ overflow), CVE-2022-3640 (A2MP, built because `BT_HS=y`) and
+  CVE-2021-47620 (advertising report out of bounds while scanning).
+- **Still open:** dozens of Bluetooth CVEs never fixed in 4.19.y (L2CAP, RFCOMM, SMP, HIDP).
+  With the radio not discoverable, not connectable and not pairable (the BlueZ default), a
+  stranger cannot open a connection; the exposure is while pairing or connected.
+
+### Vibration and flashlight
+
+- **add-thunder-regulator-haptic.** A `regulator-haptic` node in `mt6833.dts` on the
+  MT6359P VIBR LDO (2.4 to 3.0 V), with `CONFIG_INPUT_REGULATOR_HAPTIC`. The vendor
+  `mediatek,vibrator` driver (its node comes from the factory dtbo) only offers Android's
+  "vibrator" LED; feedbackd wants a force-feedback input, and its udev rules already know
+  `regulator-haptic`. Measured: a 1 s rumble enables the LDO at 2.8 V and turns it off at
+  the end. `CONFIG_MTK_VIBRATOR` is off: the vendor driver writes the LDO enable bit
+  straight to the PMIC (on suspend and overcurrent), behind the regulator's back.
+- **add-mt6360-torch-led-class.** The rear LED is FLED1 of the MT6360 PMIC (the
+  `ktd3137_flash` LED belongs to the backlight chip). The vendor reaches it only through the
+  camera HAL's `/dev/flashlight`; the patch adds a `white:torch` LED class device, which
+  Phosh's torch button finds. Brightness 1 to 15 is 25 to 200 mA in torch mode; the chip
+  goes to 400 mA, but torch mode has no hardware timeout. Flash (strobe) mode is not exposed. It shares
+  FLED1 with MediaTek's flashlight core without a common lock; harmless while nothing uses
+  the camera HAL.
+
+### gen4m: bounds on frames from the air
+
+Two fixes in the Wi-Fi driver, found by a review of what a stranger in radio range reaches
+without joining a network (2026-10-14; second opinion from another model family).
+
+- **fix-gen4m-rnr-parse-bounds.** The Reduced Neighbor Report walk in a scan kept its offset
+  in a u8. A beacon with one field of 4 TBTT entries of 63 bytes made the step 256, the
+  offset wrapped to 0 and the loop never ended: a remote hang without association. The
+  offset is now a u16 and the walk stops at the end of the element.
+- **fix-gen4m-he-cap-bounds.** The HE Capabilities element from the AP (association
+  response) was checked only for its fixed part; the MCS maps and PPE thresholds were read
+  past a short element. It is now ignored when shorter than what its PHY bits announce.
+- **Left as is:** an extension element (ID 255) of length 0 makes about 26 call sites read
+  the extension ID one byte past the element, still inside the RX buffer; the byte is only
+  compared, and the HE Capabilities path checks the length again.
+- MediaTek's 2024 bulletins list remote out-of-bounds writes in the WLAN driver and firmware
+  (CVE-2024-20101, CVE-2024-20103) without naming functions; this BSP predates them and no
+  newer one exists for MT6833.
 
 ## Connectivity graft
 
@@ -388,15 +487,15 @@ Bring-up of the userland side: [wifi-bringup.md](wifi-bringup.md),
 - **The initramfs must be gzip.** `CONFIG_RD_GZIP` is the only initramfs decompressor
   (bzip2, lzma, xz, lzo and lz4 are off). The LK bootloader also accepts only a compressed
   kernel (Image.gz).
-- **No systemd.** The kernel lacks `close_range()` (5.9) and `waitid(P_PIDFD)` (5.4), and
-  `CONFIG_FHANDLE` is off. Since systemd 260 (baseline 5.10) there is no fallback, so
-  systemd 262 cannot run here. Hence OpenRC as PID 1.
-- **`waitid(P_PIDFD)` is missing but `pidfd_open()` and `CLONE_PIDFD` exist** (backported
-  into the Android 4.19 tree). A pidfd can be created and polled, but cannot be reaped
-  with `waitid`: the call returns `EINVAL`. `kernel/fork.c` handles `CLONE_PIDFD` while
-  `include/uapi/linux/wait.h` defines only `P_ALL` and `P_PID`. glib's child watch needs a
-  fallback to the SIGCHLD path (see `rootfs/packages/glib/`); without it a caller gets
-  wait status `-1` and children stay zombies.
+- **systemd runs on backports.** The base 4.19 lacks `close_range()` (5.9),
+  `waitid(P_PIDFD)` (5.4) and `faccessat2()` (5.8), and systemd 260+ (baseline 5.10) has no
+  fallback. The tree backports them and turns on `CONFIG_FHANDLE`, so systemd 262 is PID 1
+  (see [Backports for Arch's systemd 262 userland](#backports-for-archs-systemd-262-userland)).
+- **Before the `waitid(P_PIDFD)` backport, only `pidfd_open()` and `CLONE_PIDFD` existed**
+  (backported into the Android 4.19 tree). A pidfd could be created and polled, but not
+  reaped with `waitid`: the call returned `EINVAL`. glib's child watch got a fallback to the SIGCHLD path
+  (see `rootfs/packages/glib/`); without it a caller got wait status `-1` and children
+  stayed zombies.
 - **Other syscalls missing for a 4.19 base:** `openat2()` (5.6) returns `ENOSYS`, so
   bubblewrap built with `-Dassume_kernel` at a newer kernel fails every bind mount.
   `faccessat()` with `AT_SYMLINK_NOFOLLOW` returns `EINVAL` (`faccessat2()` is 5.8), which

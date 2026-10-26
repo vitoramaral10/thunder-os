@@ -1,0 +1,70 @@
+# MD1 (modem) do MT6833: o thunder-modemd faz o papel do ccci_mdinit (partida, supervisao e
+# o servidor FS embutido "ccci_fsd") e do ccci_rpcd do Android. Pronto (notify) = o MD
+# chegou a READY (GET_MD_STATE 2) e recebeu a hora; dali em diante o /dev/ttyC0 (canal
+# AT) e de quem quiser (ModemManager, teste). A unit nao abre o ttyC0.
+# O MD le e grava a NVRAM dele (IMEI, calibracao de RF) por este servico: servimos a COPIA
+# em /var/lib/thunder-modem/nv (thunder-modemd nv-seed), nunca as particoes.
+# Nao habilitada por padrao: habilitar so depois de semear a copia e ver um boot a mao.
+[Unit]
+Description=MediaTek MD1 modem owner (boot, NVRAM file server, RPC)
+Documentation=file:/usr/lib/thunder/modem/thunder-modemd
+# Sem o no do eccci (kernel sem o modem) nao ha o que fazer; o no e do devtmpfs, criado
+# no probe do eccci (built-in), antes do sysinit.target.
+ConditionPathExists=/dev/ccci_monitor
+# Os cabos e o sshd primeiro: se o MD derrubar o aparelho (KE por violacao de EMI, ver
+# SPEC 5.3), o acesso para ler o dmesg ja esta de pe.
+After=thunder-usb-network.service sshd.service thunder-modemd-nv-seed.service
+# A copia da NVRAM vem do nv-seed no primeiro boot (pula sozinho quando ja existe).
+Wants=thunder-modemd-nv-seed.service
+# Fechar o /dev/ccci_monitor para o MD (force_md_stop): um laco de restart reiniciaria o
+# MD a cada volta. No maximo 3 partidas em 5 minutos (o limite conta tambem start manual).
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=notify
+ExecStart=/usr/lib/thunder/modem/thunder-modemd run
+Restart=on-failure
+# O kernel precisa de GATED para aceitar outro DO_START_MD e a parada leva ate ~20 s
+# em EXCEPTION; 10 s entre tentativas evita bater na transicao.
+RestartSec=10
+# 66 = copia da NVRAM nao semeada, 78 = configuracao: tentar de novo nao conserta.
+RestartPreventExitStatus=66 78
+# Ate 20 s esperando GATED de uma partida anterior + 40 s de boot (MODEM_BOOT_TIMEOUT)
+# + CCB e margem.
+TimeoutStartSec=90
+# A parada espera o MD chegar a GATED (ate 20 s) com o servidor FS ainda respondendo:
+# o MD grava a NVRAM no caminho de desligamento.
+TimeoutStopSec=40
+# SIGTERM so no processo principal (ele faz DO_STOP_MD e espera); SIGKILL em tudo so se
+# estourar o TimeoutStopSec. E um processo so, mas assim fica explicito.
+KillMode=mixed
+# Raiz da copia gravavel. StateDirectory cria /var/lib/thunder-modem (0700: tem o IMEI)
+# antes do namespace; o '-' nao derruba a unit se alguem mudou MODEM_NV_ROOT para fora
+# daqui (a copia entao precisa de outro ReadWritePaths= num drop-in).
+StateDirectory=thunder-modem
+StateDirectoryMode=0700
+ReadWritePaths=-/var/lib/thunder-modem
+# Endurecimento que ainda deixa /dev/ccci_* (PrivateDevices/DevicePolicy ficam no padrao:
+# os majors do eccci sao dinamicos e o servico abre ~6 nos diferentes). Sem ProtectClock=:
+# ele implica DeviceAllow=char-rtc, e qualquer DeviceAllow= fecha o resto dos /dev.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+# Somente leitura de /sys e /proc/sys: o servico so le /sys/kernel/ccci/* e /sys/kernel/md.
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+# AF_UNIX: o sd_notify. Nada de rede.
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# Sem CapabilityBoundingSet= por enquanto: no bring-up um EPERM inesperado num ioctl do
+# eccci seria confuso. Restringir depois de ver o servico rodando no aparelho.
+
+[Install]
+WantedBy=multi-user.target

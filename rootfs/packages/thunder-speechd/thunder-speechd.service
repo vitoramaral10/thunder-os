@@ -1,0 +1,68 @@
+# Audio de chamada do MD1: o thunder-speechd e o dono do /dev/ccci_aud (responde o MD
+# Alive e os outros avisos do modem, manda SPH_ON/SPH_OFF) e do PCM Hostless_Speech
+# (hw:0,N, so ioctls de controle). Liga a voz quando uma chamada do ModemManager fica
+# ACTIVE e desliga no fim; "thunder-speechd on|off|status" faz o mesmo a mao.
+# Pronto (notify) = ccci_aud aberto, PCM Hostless_Speech e as 4 chaves de rota achados,
+# socket de controle de pe.
+# Nao habilitada por padrao: primeiro a fase 0 (so o MD Alive) e uma chamada a mao.
+[Unit]
+Description=MediaTek MD1 voice call audio (speech control, PCM 2 path)
+Documentation=file:/usr/lib/thunder/modem/thunder-speechd
+# Sem o port do eccci (kernel sem o modem) nao ha o que fazer.
+ConditionPathExists=/dev/ccci_aud
+# Voz sem o dono do MD nao faz sentido: sobe depois do READY do thunder-modemd
+# (Type=notify) e para junto com ele (BindsTo). O MD reiniciado pelo modemd manda outro
+# MD Alive, que o servico responde sozinho.
+Wants=thunder-modemd.service
+BindsTo=thunder-modemd.service
+After=thunder-modemd.service
+# No maximo 5 partidas em 5 minutos.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=notify
+# /etc/thunder/speechd.conf (opcional): THUNDER_SPEECHD_OPTS="--early-media ..."
+EnvironmentFile=-/etc/thunder/speechd.conf
+ExecStart=/usr/lib/thunder/modem/thunder-speechd run $THUNDER_SPEECHD_OPTS
+Restart=on-failure
+RestartSec=5
+# 64 = linha de comando, 69 = sem /dev/ccci_aud, sem o PCM Hostless_Speech ou sem as
+# chaves de rota, 70 = ABI nao LP64, 77 = sem root: tentar de novo nao conserta.
+RestartPreventExitStatus=64 69 70 77
+# A parada desliga a voz: mudo (ack ate 2 s), DROP/close, rotas, SPH_OFF (ack ate 5 s).
+TimeoutStopSec=30
+KillMode=mixed
+# /run/thunder-speechd: socket de controle (ctl), trava (lock) e a marca de voz ligada.
+# 0700: o socket so atende root. Preserve=restart: a marca sobrevive ao Restart= e a
+# instancia nova manda SPH_OFF ao MD que ficou com a voz ligada.
+RuntimeDirectory=thunder-speechd
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=restart
+# Endurecimento que ainda deixa /dev/ccci_aud e /dev/snd/*: PrivateDevices/DevicePolicy
+# ficam no padrao (o major do eccci e dinamico). DeviceAllow=/dev/ccci_aud rw +
+# char-alsa rw fecharia o resto, mas o controle de dispositivo por BPF no 4.19 ainda nao
+# foi testado com este systemd: ligar depois de ver o servico rodando.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+# /proc/asound so e lido (pcm*/info); /sys nao e usado.
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+# AF_UNIX: sd_notify, o socket de controle e o D-Bus (busctl, systemd-inhibit). Sem rede.
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# Sem CapabilityBoundingSet= nem MemoryDenyWriteExecute= por enquanto: no bring-up um
+# EPERM inesperado num ioctl do eccci/ALSA seria confuso, e o ctypes pode precisar de
+# pagina W+X. Restringir depois de ver o servico rodando no aparelho.
+
+[Install]
+# Habilitado, sobe no boot e tambem junto com o thunder-modemd quando ele (re)inicia
+# (BindsTo derruba o speechd quando o modemd para; este Wants o traz de volta).
+WantedBy=multi-user.target thunder-modemd.service

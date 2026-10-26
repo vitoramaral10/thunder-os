@@ -100,6 +100,23 @@ echo "$THUNDER_HOSTNAME" > /etc/hostname
 # boot.img da imagem e montado no PC (tools/build-boot.sh).
 mkdir -p /usr/lib/firmware
 cp -a "$S/firmware/." /usr/lib/firmware/
+# O aparelho copia o firmware (e o chroot do GPS) da super de fabrica no 1o boot
+# (thunder-firmware-seed): a imagem sem firmware e distribuivel; numa feita com a ROM, a
+# copia do proprio aparelho substitui a do build.
+if [ ${#FIRMWARE_FILES[@]} -gt 0 ] || [ ${#GNSS_ROM_FILES[@]} -gt 0 ]; then
+	{
+		echo "# Gerado pelo rootfs/configure.sh (do device.sh). Lido pelo firmware-seed."
+		declare -p FIRMWARE_ROM_PARTITION FIRMWARE_ROM_DIRS FIRMWARE_FILES FIRMWARE_REQUIRED \
+			MODEM_ROM_TREES GNSS_ROM_FILES
+	} > /usr/lib/thunder/firmware-seed.conf
+	systemctl enable thunder-firmware-seed.service
+fi
+# Dados so leitura do modem da ROM (MODEM_ROM_TREES; thunder-modemd MODEM_RO_ROOT).
+if [ -d "$S/modem-ro" ]; then
+	mkdir -p /usr/share/thunder-modem/vendor
+	cp -a "$S/modem-ro/." /usr/share/thunder-modem/vendor/
+	chown -R root:root /usr/share/thunder-modem
+fi
 THUNDER_IMAGE_BUILD=1 pacman -U --noconfirm --disable-sandbox "$S"/packages/kernel/*.pkg.tar.*
 
 # Usuarios: root e $THUNDER_USER com a senha provisoria (trocar com passwd), chave SSH.
@@ -114,6 +131,11 @@ for g in ${PROFILE_GROUPS[@]+"${PROFILE_GROUPS[@]}"}; do
 done
 echo '%wheel ALL=(ALL:ALL) ALL' > /etc/sudoers.d/wheel
 chmod 440 /etc/sudoers.d/wheel
+# Senha errada no login (telnet do cabo, tela) tambem trava o root por um tempo: o
+# faillock do Arch so trava os outros usuarios (3 erros, 10 min). Root: 3 erros, 1 min.
+grep -q '^even_deny_root' /etc/security/faillock.conf ||
+	printf '%s\n' '' '# thunder: tambem o root (rootfs/configure.sh)' even_deny_root \
+		'root_unlock_time = 60' >> /etc/security/faillock.conf
 # Chave SSH opcional: sem ela, o login e por senha.
 if [ -s "$S/authorized_keys" ]; then
 	for h in /root "/home/$THUNDER_USER"; do
@@ -178,8 +200,9 @@ done
 # Units do nucleo, do aparelho (DEVICE_SERVICES) e do perfil (PROFILE_SERVICES): nomes
 # de unit com sufixo; "{user}" vira o THUNDER_USER (ex.: thunder-console@{user}.service).
 # PROFILE_SERVICES pode vir sem definicao se o config for de um build-rootfs.sh antigo.
-units=(thunder-usb-network.service thunder-telnet-usb.service thunder-sshd-rescue.service
-	sshd.service systemd-timesyncd.service thunder-rtc-sync.path systemd-pstore.service)
+units=(thunder-usb-network.service thunder-telnet-usb.service thunder-telnet-fallback.service
+	thunder-sshd-rescue.service sshd.service systemd-timesyncd.service thunder-rtc-sync.path
+	systemd-pstore.service)
 for s in ${DEVICE_SERVICES[@]+"${DEVICE_SERVICES[@]}"} ${PROFILE_SERVICES[@]+"${PROFILE_SERVICES[@]}"}; do
 	case $s in
 	*:*) echo "\"$s\": a forma servico:runlevel era do OpenRC; use o nome da unit" >&2; exit 1 ;;
@@ -196,7 +219,7 @@ systemctl enable "${units[@]}"
 nmwifi=/usr/lib/NetworkManager/conf.d/51-thunder-wifi.conf
 if [ -n "$WIFI_INTERFACE" ]; then
 	printf '%s\n' "# Gerado pelo rootfs/configure.sh (WIFI_INTERFACE do device.sh)." \
-		'[keyfile]' "unmanaged-devices=except:interface-name:$WIFI_INTERFACE" > "$nmwifi"
+		'[keyfile]' "unmanaged-devices=except:interface-name:$WIFI_INTERFACE;except:type:gsm;except:interface-name:ccmni*" > "$nmwifi"
 	systemctl enable NetworkManager.service
 	if [ -n "$THUNDER_WIFI_SSID" ]; then
 		rm -f /etc/NetworkManager/system-connections/thunder-*.nmconnection

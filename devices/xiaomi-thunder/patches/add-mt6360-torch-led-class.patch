@@ -1,0 +1,93 @@
+From: thunder
+Subject: [PATCH] mt6360: expose the rear torch as a "white:torch" LED
+
+The rear camera LED of this phone hangs off FLED1 of the MT6360 PMIC. The
+vendor stack only reaches it through MediaTek's flashlight core
+(/dev/flashlight ioctls for the camera HAL) and Richtek's private
+"flashlight" class, whose sysfs cannot switch the LED on. Desktop shells
+look for a torch in the LED class instead: Phosh enumerates the leds
+subsystem for "*:torch*" / "*:flash*" and sets the brightness through
+logind.
+
+Register a led_classdev named "white:torch" for FLED1 in the PMU FLED
+driver. Brightness N (1..15) programs the torch current to
+25 mA + (N - 1) * 12.5 mA and turns torch mode on; 0 turns it off. The
+range stops at 200 mA, half of the chip's 400 mA, because torch mode
+has no hardware timeout and a desktop button turns it on at full scale. Strobe (flash) mode is not exposed. The LED is
+switched off on suspend (LED_CORE_SUSPENDRESUME) and, as before, by the
+rt-flash-led shutdown hook.
+
+---
+--- a/drivers/misc/mediatek/pmic/mt6360/v1/pmu/mt6360_pmu_fled.c
++++ b/drivers/misc/mediatek/pmic/mt6360/v1/pmu/mt6360_pmu_fled.c
+@@ -9,6 +9,7 @@
+ #include <linux/platform_device.h>
+ #include <linux/pm.h>
+ #include <linux/delay.h>
++#include <linux/leds.h>
+ 
+ #include "../inc/mt6360_pmu.h"
+ #include "../inc/mt6360_pmu_fled.h"
+@@ -36,6 +37,7 @@ struct mt6360_pmu_fled_info {
+ 	u8 id;
+ 	struct platform_device *fled_dev[MT6360_FLED_NUM];
+ 	struct platform_device *mt_flash_dev;
++	struct led_classdev torch;
+ };
+ 
+ static const struct mt6360_fled_platform_data def_platform_data = {
+@@ -743,6 +745,45 @@ static struct rt_fled_hal mt6360_fled_ha
+ 	.rt_hal_fled_shutdown = mt6360_fled_shutdown,
+ };
+ 
++/*
++ * thunder: torch mode of FLED1 (the rear camera LED) as a plain LED class
++ * device, so desktops (e.g. Phosh, which looks for "*:torch" in the leds
++ * subsystem) and udev/logind can drive it with the usual brightness file.
++ * Brightness N selects the torch current 25 mA + (N - 1) * 12.5 mA; it is
++ * capped at 200 mA (the chip goes to 400), since torch mode has no timeout.
++ * Flash (strobe) mode stays reserved to the camera stack.
++ */
++#define MT6360_TORCH_MAX_BRIGHTNESS	15
++
++static int mt6360_fled_torch_set(struct led_classdev *cdev,
++				 enum led_brightness brightness)
++{
++	struct mt6360_pmu_fled_info *mpfi =
++		container_of(cdev, struct mt6360_pmu_fled_info, torch);
++	int ret;
++
++	if (brightness == LED_OFF)
++		return mt6360_fled_set_mode(&mpfi->base, FLASHLIGHT_MODE_OFF);
++
++	ret = mt6360_fled_set_torch_current_sel(&mpfi->base, brightness - 1);
++	if (ret < 0)
++		return ret;
++	return mt6360_fled_set_mode(&mpfi->base, FLASHLIGHT_MODE_TORCH);
++}
++
++static void mt6360_fled_torch_register(struct mt6360_pmu_fled_info *mpfi)
++{
++	int ret;
++
++	mpfi->torch.name = "white:torch";
++	mpfi->torch.max_brightness = MT6360_TORCH_MAX_BRIGHTNESS;
++	mpfi->torch.brightness_set_blocking = mt6360_fled_torch_set;
++	mpfi->torch.flags = LED_CORE_SUSPENDRESUME;
++	ret = devm_led_classdev_register(mpfi->dev, &mpfi->torch);
++	if (ret < 0)
++		dev_err(mpfi->dev, "failed to register torch LED: %d\n", ret);
++}
++
+ static int mt6360_pmu_fled_probe(struct platform_device *pdev)
+ {
+ 	struct mt6360_fled_platform_data *pdata = dev_get_platdata(&pdev->dev);
+@@ -817,6 +858,8 @@ static int mt6360_pmu_fled_probe(struct
+ 							  "rt-flash-led",
+ 							  mpfi->id, NULL, 0,
+ 							  NULL, 0);
++		if (mpfi->id == MT6360_FLED1)
++			mt6360_fled_torch_register(mpfi);
+ 	}
+ 	dev_info(&pdev->dev, "%s: successfully probed\n", __func__);
+ out:

@@ -9,7 +9,9 @@ PROFILE_TITLE="Console na tela"
 PROFILE_DESCRIPTION="Terminal em tela cheia com teclado virtual (phoc, squeekboard, foot), para usar o aparelho sem o cabo."
 PROFILE_STATUS=experimental
 PROFILE_BLOCKERS=""
-PROFILE_PACKAGES=(phoc squeekboard foot mesa libbsd)
+# swayidle + wlopm: apagam o painel por inatividade (console-session); sem eles a luz de
+# fundo fica no maximo o tempo todo (~330 mA a mais, medido 2026-10-14).
+PROFILE_PACKAGES=(phoc squeekboard foot mesa libbsd swayidle wlopm)
 # Units do systemd a habilitar (systemctl enable); {user} vira o usuario da imagem.
 PROFILE_SERVICES=('thunder-console@{user}.service')
 # Sem grupos extras: o logind da card0 e a entrada a sessao ativa (TakeDevice, uaccess).

@@ -1,5 +1,9 @@
 # Ordem de aplicacao (patch -p1 na raiz do fonte da Xiaomi, depois do enxerto da
 # conectividade). Linha com # e comentario.
+# thunder: a base vai de 4.19.191 a 4.19.325 pelo ACK android-4.19-stable (o ramo de que
+# a Xiaomi partiu), com os conflitos com a MediaTek resolvidos (docs/kernel.md). Primeiro:
+# os patches abaixo foram conferidos sobre a arvore ja atualizada.
+update-ack-4.19.325.patch.xz
 fix-selinux-host-includes.patch
 fix-external-inline-declarations.patch
 use-system-cpio.patch
@@ -33,14 +37,13 @@ backport-close-range.patch
 backport-utimensat-empty-path.patch
 backport-faccessat2.patch
 fix-vendor-kthreads-idle-sleep.patch
-# thunder rB: netfilter em 4.19.325, gate de userns, fixes sem 4.19.y (build/research/nft/DESIGN.md)
-backport-netfilter-4.19.325.patch
+# thunder rB: gate de userns, fixes sem 4.19.y (build/research/nft/DESIGN.md); o netfilter
+# em 4.19.325 vem do update-ack
 add-netfilter-userns-restrict.patch
 backport-nf-reject-ipv6-ll-max-header.patch
 backport-nf-ct-tcp-rst-direction.patch
 backport-nf-ct-reasm-mac-header.patch
 fix-mtk-default-no-dccp-act-ipt.patch
-backport-cgroup-v1-release-agent-capable.patch
 backport-reboot-hw-protection-shutdown.patch
 fix-mtk-charger-battery-missing-poweroff.patch
 # thunder audio: amplificador no DAPM, VOW preso, S32 falso, jack do fone (docs/audio.md)
@@ -48,9 +51,25 @@ fix-sia81xx-speaker-amp-dapm.patch
 fix-mt6359-vow-enable-stuck.patch
 fix-mt6833-afe-no-s32.patch
 add-accdet-alsa-jack.patch
-# thunder Bluetooth: driver HCI sobre o STP (docs/bluetooth-bringup.md)
+# thunder Bluetooth: driver HCI sobre o STP (docs/bluetooth-bringup.md); o nucleo em
+# 4.19.325 vem do update-ack
 add-btmtk-stp-hci-driver.patch
 # thunder Wi-Fi: WPA3/SAE no CONNECT (docs/wifi-bringup.md)
 backport-nl80211-wpa-version-3.patch
+# thunder Wi-Fi: limites no parse de quadros do ar (gen4m; docs/kernel.md)
+fix-gen4m-rnr-parse-bounds.patch
+fix-gen4m-he-cap-bounds.patch
+# thunder vibracao (feedbackd) e lanterna (Phosh): regulator-haptic e LED class do FLED1
+add-thunder-regulator-haptic.patch
+add-mt6360-torch-led-class.patch
 # thunder modem ausente: MDDP sem ruido no log
 fix-mddp-quiet-without-modem.patch
+# thunder modem ausente: MD1 desligado depois do boot (suspensao profunda; docs/suspend.md)
+fix-ccci-md1-power-off-unused.patch
+fix-ccci-mem-dump-iomem.patch
+# thunder modem: ttyC0 (canal AT) como TTY de verdade, para o ModemManager
+add-ccci-tty-at-port.patch
+# thunder seguranca (auditoria run 1): /proc/<pid>/reclaim so com acesso de ptrace
+fix-proc-reclaim-ptrace-check.patch
+# thunder seguranca (auditoria run 1): FE hostless sem acesso a memif fora do vetor
+fix-mtk-afe-hostless-memif-bounds.patch

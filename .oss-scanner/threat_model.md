@@ -25,8 +25,9 @@ On the phone:
   (`devices/xiaomi-thunder/patches/add-btmtk-stp-hci-driver.patch`) and the BlueZ stack.
   An attacker in radio range, before or without authentication, is the most important case.
 - **The USB cable network** (RNDIS gadget, phone 172.16.42.1, host 172.16.42.2): sshd,
-  a telnet login on 172.16.42.1:23 (`thunder-telnet-usb.service`), and udhcpd. Whoever
-  holds the cable reaches these.
+  a telnet login on 172.16.42.1:23 (`thunder-telnet-usb.service`, only in emergency and
+  rescue mode or after sshd has been down for 2 minutes), and udhcpd. Whoever holds the
+  cable reaches these. Wrong passwords lock root too (pam_faillock `even_deny_root`).
 - **Unprivileged local processes** reaching the kernel: our patches add syscall
   backports (`backport-statx-mount-id`, `backport-waitid-pidfd`, `backport-close-range`,
   `backport-utimensat-empty-path`, `backport-faccessat2`), an nf_tables user-namespace
@@ -90,10 +91,10 @@ On the PC:
 - **The USB cable is trusted as physical access.** The initramfs rescue shell on telnet
   172.16.42.1:23 has no password by design (it only runs when booting fails or with
   `thunder.debug=1`), and the diagnostic beacon sends pstore and dmesg to 172.16.42.2:9999.
-- **The provisional password** (`THUNDER_PASSWORD`, default `147147`, the same for root
+- **The password** (`THUNDER_PASSWORD`, required by the build, no default; the same for root
   and the user) is documented and meant to be changed with `passwd`.
-- **PMF is off by default on wlan0** (`60-xiaomi-thunder.conf`); the reason is documented
-  there.
+- **Physical possession**: the data partition is not encrypted and the bootloader is
+  unlocked, and the `console` profile has no lock screen (documented in the README).
 - Code under `build/` other than the kernel tree is generated. Firmware blobs are not in
   the repository and come from the user's phone.
 - Kernel 4.19 is end of life upstream and MediaTek published no newer BSP for this chip;

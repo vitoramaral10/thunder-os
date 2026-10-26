@@ -28,8 +28,8 @@ Want your phone here? Read [docs/porting.md](docs/porting.md) and open a pull re
   partition and switches to Arch. If anything fails it stays up with a rescue
   shell on the cable instead of rebooting.
 - The phone at `172.16.42.1` over the USB cable (RNDIS, DHCP gives the host
-  `172.16.42.2`), with SSH and a telnet login fallback. Both stay reachable in
-  emergency and rescue mode.
+  `172.16.42.2`), with SSH. A telnet login opens on the cable only in emergency
+  and rescue mode, or when SSH has been down for two minutes.
 - Arch Linux ARM, verified against its signing key, with systemd, your SSH key,
   your user and the device's firmware, modules and services.
 - `thunder-reboot bootloader` to get back to fastboot without buttons.
@@ -86,7 +86,7 @@ locale and the timezone. Interface options and their state:
    the root partition (usually `userdata`) and disables verified boot.
 
 ```sh
-cp local.conf.example local.conf    # set DEVICE=<folder name>
+cp local.conf.example local.conf    # set DEVICE=<folder name> and THUNDER_PASSWORD=<password>
 tools/fetch-cross.sh
 tools/build-kernel.sh
 tools/extract-firmware.sh ~/Downloads/<factory-rom>.tgz
@@ -104,9 +104,20 @@ tools/flash.sh                      # dry run; --sim writes
   filesystem, or `thunder.debug=1` is on the command line, it opens a root
   telnet shell on the USB link (`172.16.42.1`). It never listens on Wi-Fi, and
   it stops when the system boots.
-- **The image ships a provisional password** (`THUNDER_PASSWORD`, default
-  `147147`) for root and the user, used by the telnet login on the USB link.
-  Change it with `passwd` on first login.
+- **SSH accepts passwords on every network**, Wi-Fi included, as on any Arch
+  install with sshd on. There is no default password: the build stops without
+  `THUNDER_PASSWORD`, and the installer asks for one (and a separate root
+  password). Three wrong passwords lock the account for a while, root
+  included (1 minute; 10 minutes for the user).
+- **The data partition is not encrypted**, as on a default Arch install. With
+  the bootloader unlocked, whoever holds the phone can boot their own image
+  from fastboot and read it.
+- **The `console` profile has no lock screen.** A touch wakes the panel straight
+  into your terminal. `sudo` still asks for the password. The `phosh` profile
+  locks.
+- Kernel controls that Android leaves world-writable and closes with SELinux
+  (touch modes, UID statistics, sdcardfs) are root-only through
+  `systemd-tmpfiles`.
 
 ## Licensing
 

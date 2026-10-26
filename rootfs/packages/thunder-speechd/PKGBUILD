@@ -1,0 +1,32 @@
+# Audio de chamada (voz CS) do MD1 do MT6833: o thunder-speechd faz a parte de speech do
+# audio HAL do Android (dono do /dev/ccci_aud, SPH_ON/SPH_OFF, a FE Hostless_Speech e as
+# rotas MD1 <-> ADDA), com a unit do systemd. O verbo UCM "Voice Call" (saida analogica)
+# fica no overlay do aparelho.
+#
+# Fontes locais (esta pasta): o hash da receita no tools/build-rootfs.sh ja cobre a
+# integridade, por isso SKIP.
+pkgname=thunder-speechd
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Thunder OS: MediaTek MD1 voice call audio (speech control and PCM 2 path)'
+arch=(any)
+url='https://github.com/vitoramaral10/thunder-os'
+license=(GPL-3.0-or-later)
+# busctl e systemd-inhibit vem do systemd (o PID 1 da imagem).
+depends=(python systemd thunder-modemd)
+optdepends=('modemmanager: speech on/off following the calls')
+source=(thunder_speechd.py test_thunder_speechd.py thunder-speechd.service)
+sha256sums=(SKIP SKIP SKIP)
+
+check() {
+	cd "$srcdir"
+	python -m unittest -v test_thunder_speechd
+}
+
+package() {
+	install -Dm755 "$srcdir/thunder_speechd.py" "$pkgdir/usr/lib/thunder/modem/thunder-speechd"
+	# Cliente (on/off/status/mute/gain) no PATH; o socket e so do root.
+	install -d "$pkgdir/usr/bin"
+	ln -s ../lib/thunder/modem/thunder-speechd "$pkgdir/usr/bin/thunder-speechd"
+	install -Dm644 -t "$pkgdir/usr/lib/systemd/system" "$srcdir/thunder-speechd.service"
+}

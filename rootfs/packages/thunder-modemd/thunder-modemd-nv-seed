@@ -1,0 +1,21 @@
+#!/bin/bash
+# Primeira copia da NVRAM do modem (thunder-modemd nv-seed) a partir das particoes de
+# fabrica, montadas so leitura e sem replay do journal (ro,noload): o IMEI e a calibracao
+# de RF ficam la e nunca sao escritos. Roda num namespace de montagem privado da unit
+# (PrivateMounts=), entao nada fica montado depois. Nomes das particoes: os do MediaTek.
+set -euo pipefail
+src=/run/thunder-modemd-seed
+for p in nvdata protect1 protect2 nvcfg; do
+	dev=/dev/disk/by-partlabel/$p
+	mkdir -p "$src/$p"
+	# No primeiro boot o udev pode nao ter criado o link ainda; o nvcfg e opcional.
+	[ "$p" = nvcfg ] || udevadm wait --timeout=30 "$dev" || true
+	if [ -e "$dev" ]; then
+		mount -t ext4 -o ro,noload,nodev,nosuid,noexec "$dev" "$src/$p"
+	elif [ "$p" != nvcfg ]; then
+		echo "<3>$dev ausente: sem NVRAM de fabrica para semear" >&2
+		exit 66
+	fi
+done
+exec /usr/lib/thunder/modem/thunder-modemd nv-seed "$src/nvdata" "$src/protect1" \
+	"$src/protect2" "$src/nvcfg"

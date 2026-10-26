@@ -1,0 +1,14 @@
+--- a/src/plugins/mtk-ccci/mm-broadband-modem-mtk-ccci.c
++++ b/src/plugins/mtk-ccci/mm-broadband-modem-mtk-ccci.c
+@@ -114,6 +114,11 @@
+     MTK_CCCI_URC_REGEX ("EIMSPDIS"),
+     MTK_CCCI_URC_REGEX ("ESIPREGINFO"),
+     MTK_CCCI_URC_REGEX ("ENAPTR"),
++    /* The MD sends "+CIEV: 5, 1" (call indicator) right after the OK of ATD, with
++     * a space that the generic +CIEV pattern ("...,(\\d)") does not accept: left
++     * unmatched, it became the ATD response and MM failed a call that the network
++     * went on dialing. The generic pattern never matched this format anyway. */
++    MTK_CCCI_URC_REGEX ("CIEV"),
+ };
+ 
+ static GRegex *

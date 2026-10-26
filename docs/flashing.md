@@ -63,7 +63,9 @@ kernel or the initramfs. The script reboots the device when it finishes.
 - `ssh root@172.16.42.1` with the key that was staged into the image.
 - Fallback: `telnet 172.16.42.1`, which asks for a login (root or
   `THUNDER_USER`, password `THUNDER_PASSWORD`, see [building.md](building.md)).
-  It is a second way in if sshd does not start. In emergency and rescue mode
+  It is closed while SSH works: `thunder-telnet-fallback` opens it once
+  sshd has been down for 2 minutes (also when boot hangs before
+  `multi-user.target`). In emergency and rescue mode
   `thunder-sshd-rescue` keeps ssh on `172.16.42.1` too.
 - The first boot grows the root filesystem to fill its partition, so it takes
   longer than later boots.

@@ -24,6 +24,12 @@ ExecStartPre=-/usr/bin/ssh-keygen -A
 ExecStart=/usr/bin/sshd -D -e -o ListenAddress=172.16.42.1
 Restart=always
 RestartSec=3
+# So o cabo: o bind em 172.16.42.1 nao basta (o Linux entrega pacote para qualquer endereco
+# local vindo de qualquer interface, e um host da LAN do Wi-Fi alcancaria a porta com uma
+# rota para 172.16.42.1). O filtro BPF por cgroup (CONFIG_CGROUP_BPF) aceita so pares do
+# cabo; para TCP isso basta, porque a resposta a um endereco forjado sai pelo cabo.
+IPAddressDeny=any
+IPAddressAllow=172.16.42.0/24
 
 [Install]
 WantedBy=emergency.target rescue.target

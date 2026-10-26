@@ -1,0 +1,69 @@
+From: thunder
+Subject: [PATCH] ASoC: mediatek: no memif access for hostless front-ends
+
+mtk_afe_pcm_pointer(), mtk_afe_pcm_ack() and mtk_afe_pcm_copy_user() index
+afe->memif[] by the FE cpu_dai id, but the hostless front-ends (Hostless_Speech
+and the other Hostless_* DAIs) share mtk_afe_pcm_ops and have ids past
+memif_size (MT6833: 21 entries, Hostless_Speech is 40). With such a stream
+running, anything that calls pointer() reads past the array: the world-readable
+/proc/asound/card0/pcm*/sub*/status of the call PCM, PCM STATUS/DELAY/HWSYNC,
+read/write/poll. thunder-speechd and the suspend guard only avoided it
+themselves (security audit run 1).
+
+mtk_afe_pcm_new() already treats id >= memif_size as "no memif"; do the same in
+the three callbacks: pointer 0, ack no-op, copy_user -EINVAL.
+
+--- a/sound/soc/mediatek/common/mtk-afe-platform-driver.c
++++ b/sound/soc/mediatek/common/mtk-afe-platform-driver.c
+@@ -93,15 +93,22 @@
+ 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+ 	struct snd_soc_component *component = snd_soc_rtdcom_lookup(rtd, AFE_PCM_NAME);
+ 	struct mtk_base_afe *afe = snd_soc_component_get_drvdata(component);
+-	struct mtk_base_afe_memif *memif = &afe->memif[rtd->cpu_dai->id];
+-	const struct mtk_base_memif_data *memif_data = memif->data;
++	struct mtk_base_afe_memif *memif;
++	const struct mtk_base_memif_data *memif_data;
+ 	struct regmap *regmap = afe->regmap;
+ 	struct device *dev = afe->dev;
+-	int reg_ofs_base = memif_data->reg_ofs_base;
+-	int reg_ofs_cur = memif_data->reg_ofs_cur;
++	int reg_ofs_base, reg_ofs_cur;
+ 	unsigned int hw_ptr = 0, hw_base = 0;
+ 	int ret, pcm_ptr_bytes;
+ 
++	/* FE hostless (id >= memif_size) nao tem memif nem buffer: sem ponteiro. */
++	if (rtd->cpu_dai->id >= afe->memif_size)
++		return 0;
++	memif = &afe->memif[rtd->cpu_dai->id];
++	memif_data = memif->data;
++	reg_ofs_base = memif_data->reg_ofs_base;
++	reg_ofs_cur = memif_data->reg_ofs_cur;
++
+ 	ret = regmap_read(regmap, reg_ofs_cur, &hw_ptr);
+ 	if (ret || hw_ptr == 0) {
+ 		dev_err(dev, "%s hw_ptr err\n", __func__);
+@@ -129,8 +136,12 @@
+ 	struct snd_soc_component *component =
+ 		snd_soc_rtdcom_lookup(rtd, AFE_PCM_NAME);
+ 	struct mtk_base_afe *afe = snd_soc_component_get_drvdata(component);
+-	struct mtk_base_afe_memif *memif = &afe->memif[rtd->cpu_dai->id];
++	struct mtk_base_afe_memif *memif;
+ 
++	/* FE hostless (id >= memif_size): nada a confirmar. */
++	if (rtd->cpu_dai->id >= afe->memif_size)
++		return 0;
++	memif = &afe->memif[rtd->cpu_dai->id];
+ 	if (!memif->ack_enable)
+ 		return 0;
+ 
+@@ -186,6 +197,10 @@
+ 	mtk_sp_copy_f sp_copy;
+ 	int ret;
+ 
++	/* FE hostless (id >= memif_size) nao tem buffer de DMA para copiar. */
++	if (rtd->cpu_dai->id >= afe->memif_size)
++		return -EINVAL;
++
+ 	sp_copy = is_playback ? default_write_copy : default_read_copy;
+ 
+ 	if (afe->copy) {

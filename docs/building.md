@@ -159,7 +159,7 @@ Environment variables (or `local.conf`):
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `THUNDER_USER` | current user (`id -un`) | Login account created on the device |
-| `THUNDER_PASSWORD` | `147147` | Password of that user, also used by the telnet login fallback (`thunder-telnet-usb.service`). Provisional: change it on the device. The initramfs rescue shell asks for no password |
+| `THUNDER_PASSWORD` | required | Password of that user, also used by SSH and by the telnet login fallback (`thunder-telnet-usb.service`, open only when SSH is down or in rescue mode). The build stops without it: sshd is on by default and accepts passwords on any network. The initramfs rescue shell asks for no password |
 | `THUNDER_ROOT_PASSWORD` | `THUNDER_PASSWORD` | Password of root |
 | `THUNDER_PROFILE` | `none` | Interface profile from `rootfs/profiles/`. Profiles marked `planned` are refused (set `THUNDER_ALLOW_PLANNED=1` to build one anyway while porting) |
 | `THUNDER_EXTRA_PACKAGES` | empty | Extra Arch packages, separated by spaces |
@@ -173,7 +173,7 @@ Environment variables (or `local.conf`):
 Example:
 
 ```sh
-THUNDER_USER=me THUNDER_LOCALE=pt_BR.UTF-8 tools/build-rootfs.sh
+THUNDER_USER=me THUNDER_PASSWORD='...' THUNDER_LOCALE=pt_BR.UTF-8 tools/build-rootfs.sh
 ```
 
 The script re-extracts the tarball and replaces the device's rootfs on each run.
