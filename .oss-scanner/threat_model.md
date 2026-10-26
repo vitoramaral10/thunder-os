@@ -42,7 +42,8 @@ On the PC:
   `.tgz`, Android sparse images and the logical-partition (super) layout without
   external tools. Treat the archive as untrusted.
 - **Output of the phone** (fastboot `getvar`, adb, the USB network, the diagnostic UDP
-  beacon on port 9999): `tools/detect-device.py`, `tools/install.sh`, the installer.
+  beacon on port 9999): `tools/install.sh` and the installer (`installer/lib/fastboot.dart`,
+  `installer/lib/backend.dart`).
 - **What the user types in the installer** (user name, passwords, hostname, Wi-Fi name and
   password), passed to the shell tools through the environment. Shell or keyfile injection
   from these fields is in scope.

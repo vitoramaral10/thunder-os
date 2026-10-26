@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../wizard.dart';
@@ -135,17 +137,19 @@ class SummaryStep extends StatelessWidget {
           style: t.bodySmall,
         ),
         const SizedBox(height: 16),
-        SwitchListTile(
-          contentPadding: EdgeInsets.zero,
-          title: const Text('Gravar no aparelho ao terminar'),
-          subtitle: Text(
-            cfg.flash
-                ? 'Leva o aparelho ao fastboot e grava boot e ${d.rootPartition}.'
-                : 'So monta as imagens em build/${d.id}/out/, sem tocar no aparelho.',
+        // No Windows o app ainda nao monta imagens, so grava: nao ha o que desligar.
+        if (!Platform.isWindows)
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Gravar no aparelho ao terminar'),
+            subtitle: Text(
+              cfg.flash
+                  ? 'Leva o aparelho ao fastboot e grava boot e ${d.rootPartition}.'
+                  : 'So monta as imagens em build/${d.id}/out/, sem tocar no aparelho.',
+            ),
+            value: cfg.flash,
+            onChanged: (v) => cfg.update(() => cfg.flash = v),
           ),
-          value: cfg.flash,
-          onChanged: (v) => cfg.update(() => cfg.flash = v),
-        ),
         if (cfg.flash)
           Notice(
             error: true,

@@ -18,7 +18,8 @@ class InstallConfig extends ChangeNotifier {
       sshKey = Backend.defaultSshKey();
 
   static String _hostUser() {
-    final u = Platform.environment['USER'] ?? '';
+    final u =
+        Platform.environment['USER'] ?? Platform.environment['USERNAME'] ?? '';
     return userPattern.hasMatch(u) && u != 'root' ? u : '';
   }
 
