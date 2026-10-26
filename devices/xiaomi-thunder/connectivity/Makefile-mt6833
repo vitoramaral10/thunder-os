@@ -251,6 +251,11 @@ endif
     # de chip. Aqui o modulo e carregado normalmente pelo modprobe.
     obj-y += bt_drv/
 
+    # thunder: gps/ -- driver de caractere do GPS (/dev/stpgps, /dev/gps_emi), do
+    # mtk-gps-stp-mt6833.tar.gz. Sai como gps_drv.ko (CONFIG_MTK_EXTRA_CONN_DRV_BUILD_IN
+    # desligado); o thunder-gnss carrega depois do CONNSYS pronto.
+    obj-y += gps/
+
 # Otherwise we were called directly from the command line;
 # invoke the kernel build system.
 else

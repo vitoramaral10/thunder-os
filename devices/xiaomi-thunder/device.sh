@@ -77,7 +77,10 @@ FIRMWARE_REQUIRED=(
 # Dados so leitura que o modem le pelo CCCI FS (thunder-modemd: drive T: = perfis de
 # operadora, R: = certificados), tirados da particao vendor da ROM: <dir na ROM>:<nome>.
 MODEM_ROM_TREES=(/etc/mdota:mdota /etc/md:etc_md)
-DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt thunder-modemd)
+# GPS: thunder-mediatek-gnss (mnld da ROM num chroot, NMEA para gpsd e GeoClue). Fora de
+# DEVICE_SERVICES de proposito: o radio fica ligado enquanto a unit roda, entao liga sob
+# demanda (systemctl start thunder-gnss). Propriedades em overlay/etc/thunder/gnss.props.
+DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt thunder-modemd thunder-mediatek-gnss)
 # Audio: o UCM do cartao (overlay/usr/share/alsa/ucm2/conf.d/mt6833-mt6359) e as regras
 # do WirePlumber (overlay/usr/share/wireplumber). alsa-utils: a regra do udev roda o
 # alsactl no boot, que aplica a FixedBootSequence do UCM (amplificador desligado, ganhos
@@ -137,6 +140,10 @@ device_kernel_prepare() {
 		cp -a "$drop/$c/$d" "$conn/$d"
 	done
 	cp -f "$drop/$c"/wmt_drv/{connectivity_build_in_adapter,wmt_build_in_adapter}.{c,h} "$conn/common/"
+	# GPS (gps_drv.ko): nao vem no drop gen4m; fonte e origem em mtk-gps-stp-mt6833.tar.gz.
+	bsdtar -xf "$DEVICE_DIR/connectivity/mtk-gps-stp-mt6833.tar.gz" -C "$drop"
+	rm -rf "${conn:?}/gps"
+	cp -a "$drop/mtk-gps-stp-mt6833/gps" "$conn/gps"
 	cp -f "$DEVICE_DIR/connectivity/Makefile-mt6833" "$conn/Makefile"
 	patch -p1 -d "$conn" < "$DEVICE_DIR/connectivity/gen4m-mt6833-kernel419.diff"
 	rm -rf "$drop"

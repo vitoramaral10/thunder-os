@@ -1,0 +1,24 @@
+#!/bin/sh
+# Sobe o mnld no chroot Android. Montagens feitas aqui, num namespace proprio (unshare -m),
+# e nao pelo RootDirectory=/BindPaths= do systemd: o systemd 262 monta o namespace com a
+# API nova (open_tree/move_mount, 5.2+) e falha com ENOSYS no 4.19.
+set -eu
+ROOT=/usr/lib/thunder/gnss/root
+RUN=/run/thunder-gnss
+STATE=/var/lib/thunder-gnss
+[ "${1:-}" = inside ] || exec unshare -m --propagation private "$0" inside
+mount -t tmpfs -o mode=0755,nosuid tmpfs "$ROOT/dev"
+for n in null zero urandom random stpgps stpgps2 gps_emi; do
+	[ -e "/dev/$n" ] || continue
+	touch "$ROOT/dev/$n"
+	mount --bind "/dev/$n" "$ROOT/dev/$n"
+done
+mkdir "$ROOT/dev/socket"
+mount --bind "$RUN/socket" "$ROOT/dev/socket"
+touch "$ROOT/dev/__properties__"
+mount --bind -o ro "$RUN/properties" "$ROOT/dev/__properties__"
+mount -t proc proc "$ROOT/proc"
+mount -t sysfs sysfs "$ROOT/sys"
+mount --bind "$STATE" "$ROOT/data/vendor/gps"
+export LD_LIBRARY_PATH=/system/lib64
+exec chroot "$ROOT" /system/bin/linker64 /vendor/bin/mnld

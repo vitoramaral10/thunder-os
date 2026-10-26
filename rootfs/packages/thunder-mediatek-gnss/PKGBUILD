@@ -1,0 +1,35 @@
+# GNSS da MediaTek sem Android: o papel do HAL de GNSS, do init e do logd para o mnld da
+# ROM (thunder-gnss), com as units do systemd. Os blobs (mnld e o fecho de libs Bionic)
+# nao vem neste pacote: sao da ROM de fabrica do usuario e entram na imagem em
+# /usr/lib/thunder/gnss/root; sem eles as units nao sobem. O que muda por aparelho
+# (propriedades do Android) fica em /etc/thunder/gnss.props, no overlay do aparelho.
+#
+# Fontes locais (esta pasta): o hash da receita no tools/build-rootfs.sh ja cobre a
+# integridade, por isso SKIP.
+pkgname=thunder-mediatek-gnss
+pkgver=1.0.0
+pkgrel=2
+pkgdesc='Thunder OS: MediaTek GNSS (mnld from the factory ROM, NMEA for gpsd and GeoClue)'
+arch=(any)
+url='https://github.com/vitoramaral10/thunder-os'
+license=(GPL-3.0-or-later)
+# kmod: modprobe do gps_drv.
+depends=(python kmod thunder-mediatek-wmt)
+optdepends=('gpsd: le o NMEA de /run/thunder-gnss/nmea'
+	'geoclue: localizacao para os apps, pelo nmea-socket')
+source=(thunder_gnss.py test_thunder_gnss.py thunder-gnss-mnld thunder-gnss.service
+	thunder-gnss-mnld.service 90-thunder-gnss.conf)
+sha256sums=(SKIP SKIP SKIP SKIP SKIP SKIP)
+
+check() {
+	cd "$srcdir"
+	python -m unittest -v test_thunder_gnss
+}
+
+package() {
+	install -Dm755 "$srcdir/thunder_gnss.py" "$pkgdir/usr/lib/thunder/gnss/thunder-gnss"
+	install -Dm755 "$srcdir/thunder-gnss-mnld" "$pkgdir/usr/lib/thunder/gnss/thunder-gnss-mnld"
+	install -Dm644 -t "$pkgdir/usr/lib/systemd/system" \
+		"$srcdir/thunder-gnss.service" "$srcdir/thunder-gnss-mnld.service"
+	install -Dm644 "$srcdir/90-thunder-gnss.conf" "$pkgdir/etc/geoclue/conf.d/90-thunder-gnss.conf"
+}

@@ -1,0 +1,35 @@
+# GNSS da MediaTek (o GPS divide o CONNSYS com Wi-Fi e Bluetooth): faz o papel do HAL de
+# GNSS e do logd do Android para o mnld, que roda no chroot da thunder-gnss-mnld. Liga o
+# GPS enquanto ativa (o radio fica ligado: parar a unit desliga) e publica o NMEA em
+# /run/thunder-gnss/nmea (pty: gpsd, cat) e /run/thunder-gnss/nmea.sock (GeoClue).
+# Sem os blobs da ROM em /usr/lib/thunder/gnss/root a unit nao sobe (condicao).
+[Unit]
+Description=MediaTek GNSS (HAL bridge: NMEA for gpsd and GeoClue)
+Documentation=file:/usr/lib/thunder/gnss/thunder-gnss
+ConditionPathExists=/usr/lib/thunder/gnss/root/vendor/bin/mnld
+ConditionPathExists=/etc/thunder/gnss.props
+# O gps_drv depende do wmt_drv inicializado (Android: insmod em vendor.connsys.driver.ready).
+Requires=thunder-wmt-connsys.service
+After=thunder-wmt-connsys.service
+Wants=thunder-gnss-mnld.service
+
+[Service]
+Type=simple
+# Netns proprio, compartilhado so com a thunder-gnss-mnld (JoinsNamespaceOf la): os sockets
+# abstratos mtk_hal2mnl/mtk_mnl2hal vivem no netns, entao nenhum outro processo os alcanca
+# nem os ocupa antes. nmea.sock e o pty sao caminhos de arquivo e seguem visiveis.
+PrivateNetwork=yes
+ExecStartPre=/usr/bin/modprobe gps_drv
+ExecStartPre=/usr/lib/thunder/gnss/thunder-gnss props /run/thunder-gnss/properties @/etc/thunder/gnss.props
+ExecStart=/usr/lib/thunder/gnss/thunder-gnss bridge /run/thunder-gnss
+RuntimeDirectory=thunder-gnss
+StateDirectory=thunder-gnss
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
