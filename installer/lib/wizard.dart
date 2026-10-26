@@ -1,5 +1,6 @@
 // Assistente em passos, no jeito dos instaladores de desktop: lista de etapas a
 // esquerda, conteudo a direita, Voltar/Continuar embaixo.
+import 'dart:io' show Platform;
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
@@ -65,6 +66,9 @@ class StepContext {
   DeviceInfo? get device => catalogue.device(config.device);
 }
 
+// No Windows o app so grava imagens prontas: as escolhas da imagem nao aparecem.
+bool _buildsImage(StepContext c) => !Platform.isWindows;
+
 final steps = <WizardStep>[
   WizardStep(
     title: 'Aparelho',
@@ -77,7 +81,7 @@ final steps = <WizardStep>[
     icon: Icons.inventory_2_outlined,
     build: (c) => RomStep(ctx: c),
     valid: (c) => c.config.romPath != null,
-    visible: (c) => c.device?.needsRom ?? true,
+    visible: (c) => !Platform.isWindows && (c.device?.needsRom ?? true),
   ),
   WizardStep(
     title: 'Interface',
@@ -86,18 +90,21 @@ final steps = <WizardStep>[
     valid: (c) =>
         c.catalogue.profile(c.config.profile) != null &&
         c.config.packagesError() == null,
+    visible: _buildsImage,
   ),
   WizardStep(
     title: 'Usuarios',
     icon: Icons.person_outline,
     build: (c) => UsersStep(ctx: c),
     valid: (c) => c.config.usersValid,
+    visible: _buildsImage,
   ),
   WizardStep(
     title: 'Regiao',
     icon: Icons.public,
     build: (c) => RegionStep(ctx: c),
     valid: (c) => true,
+    visible: _buildsImage,
   ),
   WizardStep(
     title: 'Resumo',

@@ -35,6 +35,10 @@ for d in "$repo"/devices/*/device.sh; do
 		printf '"fastboot_products":%s,"android_devices":%s,"root_partition":%s,' \
 			"$(jarr "${FASTBOOT_PRODUCTS[@]}")" "$(jarr "${ANDROID_DEVICES[@]}")" "$(js "$ROOT_PARTITION")"
 		printf '"wifi_interface":%s,' "$(js "$WIFI_INTERFACE")"
+		# Para a gravacao feita pelo proprio app (Windows): o mesmo que o flash.sh le.
+		printf '"fastboot_ab":%s,"fastboot_slot":%s,"disable_vbmeta":%s,' \
+			"$([ "$FASTBOOT_AB" = 1 ] && echo true || echo false)" "$(js "$FASTBOOT_SLOT")" \
+			"$([ "$FASTBOOT_DISABLE_VBMETA" = 1 ] && echo true || echo false)"
 		printf '"needs_rom":%s,"kernel_built":%s,"profiles":%s}' \
 			"$([ ${#FIRMWARE_FILES[@]} -gt 0 ] && echo true || echo false)" \
 			"$([ -d "$KERNEL_OUT/lib/modules/$KVER" ] && echo true || echo false)" \

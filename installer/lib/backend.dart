@@ -1,11 +1,16 @@
-// Ponte com os scripts de tools/: o app nao sabe montar imagem nem falar com o
-// aparelho, so chama tools/installer-info.sh, detect-device.py, to-fastboot.sh e
-// install.sh e le o que eles imprimem.
+// Ponte com os scripts de tools/: o app nao sabe montar imagem, so chama
+// tools/installer-info.sh e install.sh e le o que eles imprimem. O aparelho no cabo
+// (deteccao, reinicio no fastboot, SSH) e falado daqui, sem shell, para rodar igual
+// no Linux e no Windows. No Windows nao ha bash: o catalogo vem de catalogue.json
+// (saida do installer-info.sh) e a instalacao so grava imagens ja montadas.
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+
+import 'fastboot.dart';
+import 'platform_tools.dart';
 
 class DeviceInfo {
   DeviceInfo.fromJson(Map<String, dynamic> j)
@@ -16,6 +21,12 @@ class DeviceInfo {
       soc = j['soc'] as String? ?? '',
       status = j['status'] as String? ?? 'bring-up',
       rootPartition = j['root_partition'] as String? ?? 'userdata',
+      fastbootProducts = List<String>.from(
+        j['fastboot_products'] as List? ?? const [],
+      ),
+      fastbootAb = j['fastboot_ab'] as bool? ?? true,
+      fastbootSlot = j['fastboot_slot'] as String? ?? '',
+      disableVbmeta = j['disable_vbmeta'] as bool? ?? true,
       needsRom = j['needs_rom'] as bool? ?? false,
       kernelBuilt = j['kernel_built'] as bool? ?? false,
       profiles = List<String>.from(j['profiles'] as List? ?? const []),
@@ -26,7 +37,17 @@ class DeviceInfo {
 
   final String id, name, vendor, codename, soc, status, rootPartition;
   final bool needsRom, kernelBuilt;
-  final List<String> profiles, androidDevices;
+  final List<String> profiles, androidDevices, fastbootProducts;
+  final bool fastbootAb, disableVbmeta;
+  final String fastbootSlot;
+
+  FlashTarget get flashTarget => FlashTarget(
+    products: fastbootProducts,
+    rootPartition: rootPartition,
+    ab: fastbootAb,
+    slot: fastbootSlot,
+    disableVbmeta: disableVbmeta,
+  );
 
   /// Interface Wi-Fi de estacao; vazia = aparelho sem Wi-Fi na imagem.
   final String wifiInterface;
@@ -126,18 +147,19 @@ class Catalogue {
       profiles.where((p) => p.id == id).firstOrNull;
 }
 
-/// O que tools/detect-device.py encontrou no cabo.
+/// O que [Backend.detect] encontrou no cabo.
 class Detection {
-  Detection.fromJson(Map<String, dynamic> j)
-    : mode = j['mode'] as String? ?? 'none',
-      serial = j['serial'] as String? ?? '',
-      product = j['product'] as String? ?? '',
-      model = j['model'] as String? ?? '',
-      vendor = j['vendor'] as String? ?? '',
-      slot = j['slot'] as String? ?? '',
-      detail = j['detail'] as String? ?? '',
-      unlocked = j['unlocked'] as bool?,
-      device = j['device'] as String?;
+  const Detection._(
+    this.mode, {
+    this.serial = '',
+    this.product = '',
+    this.model = '',
+    this.vendor = '',
+    this.slot = '',
+    this.detail = '',
+    this.unlocked,
+    this.device,
+  });
 
   const Detection.none()
     : mode = 'none',
@@ -205,16 +227,12 @@ String exitMessage(int code) {
 }
 
 class InstallRun {
-  InstallRun._(this._process, this.events);
+  InstallRun._(this.events, this.cancel);
 
-  final Process _process;
   final Stream<InstallEvent> events;
 
-  /// Para a instalacao inteira: o script roda num grupo de processos proprio
-  /// (setsid), e o sinal vai para o grupo, nao so para o bash.
-  void cancel() {
-    Process.runSync('kill', ['-TERM', '-${_process.pid}']);
-  }
+  /// Para a instalacao inteira.
+  final void Function() cancel;
 }
 
 class Backend {
@@ -223,7 +241,8 @@ class Backend {
   final String repo;
 
   /// Raiz do repositorio: THUNDER_OS_REPO, ou subindo a partir do executavel e do
-  /// diretorio atual ate achar tools/install.sh e devices/.
+  /// diretorio atual ate achar tools/install.sh e devices/ (no Windows,
+  /// catalogue.json).
   static Backend? locate() {
     final env = Platform.environment['THUNDER_OS_REPO'];
     final starts = [
@@ -234,8 +253,10 @@ class Backend {
     for (final start in starts) {
       var dir = Directory(start).absolute;
       for (var i = 0; i < 8; i++) {
-        if (File('${dir.path}/tools/install.sh').existsSync() &&
-            Directory('${dir.path}/devices').existsSync()) {
+        if (Platform.isWindows
+            ? File('${dir.path}/catalogue.json').existsSync()
+            : File('${dir.path}/tools/install.sh').existsSync() &&
+                  Directory('${dir.path}/devices').existsSync()) {
           return Backend(dir.path);
         }
         final parent = dir.parent;
@@ -257,7 +278,10 @@ class Backend {
   }
 
   Future<Catalogue> catalogue() async {
-    final j = await _json(tool('installer-info.sh'), const []);
+    final j = Platform.isWindows
+        ? jsonDecode(await File('$repo/catalogue.json').readAsString())
+              as Map<String, dynamic>
+        : await _json(tool('installer-info.sh'), const []);
     return Catalogue(
       [for (final d in j['devices'] as List) DeviceInfo.fromJson(d)],
       [for (final p in j['profiles'] as List) ProfileInfo.fromJson(p)]
@@ -265,19 +289,135 @@ class Backend {
     );
   }
 
-  Future<Detection> detect() async =>
-      Detection.fromJson(await _json(tool('detect-device.py'), const []));
+  /// Procura o aparelho no fastboot, no adb (Android de fabrica) e no SSH (Thunder
+  /// OS rodando), nessa ordem, e casa com o catalogo. Nunca escreve no aparelho.
+  Future<Detection> detect(Catalogue cat) async {
+    final fb = PlatformTools.exe('fastboot');
+    final serials = parseFastbootDevices((await runTool(fb, ['devices'])).$2);
+    if (serials.isNotEmpty) {
+      final s = serials.first;
+      final product = await getvar('product', serial: s);
+      return Detection._(
+        'fastboot',
+        serial: s,
+        product: product,
+        unlocked: await getvar('unlocked', serial: s) == 'yes',
+        slot: await getvar('current-slot', serial: s),
+        device: cat.devices
+            .where((d) => d.fastbootProducts.contains(product))
+            .firstOrNull
+            ?.id,
+      );
+    }
 
-  /// Reinicia o aparelho no fastboot pelo adb ou pelo SSH. Devolve o log.
-  Future<String> toFastboot() async {
-    final r = await Process.run(
-      tool('to-fastboot.sh'),
-      const [],
-      workingDirectory: repo,
+    final adb = PlatformTools.exe('adb');
+    final row = parseAdbDevices(
+      (await runTool(adb, ['devices'])).$2,
+    ).firstOrNull;
+    if (row != null) {
+      final (s, state) = row;
+      // unauthorized/offline: a depuracao USB precisa ser aceita no aparelho.
+      if (state != 'device') {
+        return Detection._('adb', serial: s, detail: state);
+      }
+      Future<String> prop(String n) async =>
+          (await runTool(adb, ['-s', s, 'shell', 'getprop', n])).$2.trim();
+      final product = await prop('ro.product.device');
+      return Detection._(
+        'adb',
+        serial: s,
+        product: product,
+        model: await prop('ro.product.model'),
+        vendor: await prop('ro.product.manufacturer'),
+        device: cat.devices
+            .where((d) => d.androidDevices.contains(product))
+            .firstOrNull
+            ?.id,
+      );
+    }
+
+    if (!await thunderReachable()) return const Detection.none();
+    final (code, out) = await runTool('ssh', [
+      ..._sshOpts,
+      '-o',
+      'StrictHostKeyChecking=accept-new',
+      'root@$thunderAddr',
+      'cat /etc/thunder/device',
+    ], timeout: const Duration(seconds: 8));
+    if (code != 0) {
+      return const Detection._(
+        'thunder',
+        serial: thunderAddr,
+        detail: 'ssh sem acesso (chave?)',
+      );
+    }
+    final info = parseDeviceFile(out);
+    return Detection._(
+      'thunder',
+      serial: thunderAddr,
+      product: info['DEVICE_CODENAME'] ?? '',
+      model: info['DEVICE_NAME'] ?? '',
+      vendor: info['DEVICE_VENDOR'] ?? '',
+      device: cat.device(info['DEVICE'])?.id,
     );
-    final out = '${r.stdout}${r.stderr}'.trim();
-    if (r.exitCode != 0) throw ProcessException('to-fastboot.sh', [], out);
-    return out;
+  }
+
+  /// Thunder OS no cabo: a porta do SSH responde em 172.16.42.1 (no lugar do ping,
+  /// que muda de opcoes entre Linux e Windows).
+  static Future<bool> thunderReachable() async {
+    try {
+      final s = await Socket.connect(
+        thunderAddr,
+        22,
+        timeout: const Duration(seconds: 1),
+      );
+      s.destroy();
+      return true;
+    } on SocketException {
+      return false;
+    }
+  }
+
+  /// Reinicia o aparelho no fastboot pelo adb ou pelo SSH, sem botao (o mesmo que o
+  /// tools/to-fastboot.sh). Devolve o log.
+  Future<String> toFastboot() async {
+    final adb = PlatformTools.exe('adb');
+    // Com dois Android prontos no cabo nao da para saber qual vai receber o sistema.
+    final ready = [
+      for (final (s, state) in parseAdbDevices(
+        (await runTool(adb, ['devices'])).$2,
+      ))
+        if (state == 'device') s,
+    ];
+    if (ready.length > 1) {
+      throw 'mais de um aparelho no adb (${ready.join(', ')}): deixe so o que '
+          'vai receber o Thunder OS no cabo';
+    }
+    if (ready.isNotEmpty) {
+      final (code, out) = await runTool(adb, [
+        '-s',
+        ready.single,
+        'reboot',
+        'bootloader',
+      ]);
+      if (code != 0) throw 'adb reboot bootloader falhou: ${out.trim()}';
+      return 'adb: reboot bootloader';
+    }
+    if (await thunderReachable()) {
+      // O aparelho cai antes de responder: limite de tempo, senao o ssh espera minutos,
+      // e o codigo de saida nao diz nada (como o `|| true` do to-fastboot.sh).
+      await runTool('ssh', [
+        ..._sshOpts,
+        '-o',
+        'ServerAliveInterval=2',
+        '-o',
+        'ServerAliveCountMax=3',
+        'root@$thunderAddr',
+        'thunder-reboot bootloader',
+      ], timeout: const Duration(seconds: 15));
+      return 'ssh: thunder-reboot bootloader';
+    }
+    throw 'nenhum aparelho no adb nem no SSH: entre no fastboot pelos botoes';
   }
 
   static const thunderAddr = '172.16.42.1';
@@ -363,7 +503,9 @@ class Backend {
   }
 
   static String hostLocale() {
-    final lang = Platform.environment['LANG'] ?? '';
+    // No Windows nao ha LANG; o localeName vem como "pt-BR".
+    final lang = (Platform.environment['LANG'] ?? Platform.localeName)
+        .replaceAll('-', '_');
     final m = RegExp(r'^([a-z]{2,3}_[A-Z]{2})').firstMatch(lang);
     return m == null ? 'en_US.UTF-8' : '${m.group(1)}.UTF-8';
   }
@@ -380,7 +522,8 @@ class Backend {
   }
 
   static String? defaultSshKey() {
-    final home = Platform.environment['HOME'];
+    final home =
+        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
     if (home == null) return null;
     for (final name in ['id_ed25519.pub', 'id_ecdsa.pub', 'id_rsa.pub']) {
       final f = File('$home/.ssh/$name');
@@ -395,7 +538,12 @@ class Backend {
   /// A saida passa por `tee -p` antes de chegar ao app: o log em [logPath] e
   /// gravado pelo tee, e se o app morrer (o cano para ele fecha), o tee segue
   /// gravando e a instalacao nao morre de SIGPIPE no meio de uma etapa.
-  Future<InstallRun> install(Map<String, String> env, String logPath) async {
+  Future<InstallRun> install(
+    DeviceInfo device,
+    Map<String, String> env,
+    String logPath,
+  ) async {
+    if (Platform.isWindows) return _flashOnly(device, logPath);
     final p = await Process.start(
       'setsid',
       [
@@ -445,6 +593,69 @@ class Backend {
 
     pipe(p.stdout);
     pipe(p.stderr);
-    return InstallRun._(p, controller.stream.asBroadcastStream());
+    // O script roda num grupo de processos proprio (setsid): o sinal vai para o
+    // grupo, nao so para o bash.
+    return InstallRun._(
+      controller.stream.asBroadcastStream(),
+      () => Process.runSync('kill', ['-TERM', '-${p.pid}']),
+    );
+  }
+
+  /// Windows: so a etapa de gravacao, com as imagens ja em `build/<aparelho>/out`.
+  /// shortcut: nao monta a imagem; quando a decisao (baixar pronta ou WSL2) sair,
+  /// as etapas de montagem entram antes desta.
+  Future<InstallRun> _flashOnly(DeviceInfo d, String logPath) async {
+    final controller = StreamController<InstallEvent>();
+    final logFile = File(logPath).openWrite(mode: FileMode.append);
+    var cancelled = false;
+    void log(String line) {
+      logFile.writeln(line);
+      controller.add(LogLine(line));
+    }
+
+    () async {
+      controller.add(StepStarted('flash', 'Gravacao no aparelho'));
+      try {
+        if (!await PlatformTools.available()) {
+          log(
+            'Baixando o platform-tools ${PlatformTools.version} da Google...',
+          );
+          await PlatformTools.download();
+        }
+        if ((await getvar('product')).isEmpty) {
+          try {
+            log(await toFastboot());
+          } catch (_) {
+            log('entre no fastboot pelos botoes do aparelho; esperando...');
+          }
+        }
+        await flash(
+          d.flashTarget,
+          '$repo/build/${d.id}/out',
+          log,
+          cancelled: () => cancelled,
+        );
+        controller.add(InstallDone());
+      } catch (e) {
+        logFile.writeln('::error $e');
+        controller.add(InstallFailed('$e'));
+      }
+      await logFile.close();
+      await controller.close();
+    }();
+    return InstallRun._(
+      controller.stream.asBroadcastStream(),
+      () => cancelled = true,
+    );
   }
 }
+
+/// /etc/thunder/device (VAR='valor' por linha) em mapa.
+Map<String, String> parseDeviceFile(String out) => {
+  for (final l in const LineSplitter().convert(out))
+    if (l.contains('='))
+      l.substring(0, l.indexOf('=')): l
+          .substring(l.indexOf('=') + 1)
+          .trim()
+          .replaceAll(RegExp(r"^'|'$"), ''),
+};

@@ -1,8 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import '../backend.dart';
+import '../platform_tools.dart';
 import '../wizard.dart';
 import 'common.dart';
 import 'wifi_card.dart';
@@ -30,6 +32,10 @@ class _DeviceStepState extends State<DeviceStep> {
   String? error;
   Timer? timer;
 
+  /// Windows: fastboot/adb ainda nao baixados (null = conferindo).
+  bool? tools = Platform.isWindows ? null : true;
+  double? downloading;
+
   @override
   void initState() {
     super.initState();
@@ -44,8 +50,14 @@ class _DeviceStepState extends State<DeviceStep> {
 
   // Detecta, e de novo 3 s depois de terminar (nunca duas deteccoes ao mesmo tempo).
   Future<void> _poll() async {
+    tools ??= await PlatformTools.available();
+    if (!mounted) return;
+    if (tools == false) {
+      setState(() => checking = false);
+      return;
+    }
     try {
-      final d = await widget.ctx.backend.detect();
+      final d = await widget.ctx.backend.detect(widget.ctx.catalogue);
       if (!mounted) return;
       setState(() {
         detection = d;
@@ -64,6 +76,26 @@ class _DeviceStepState extends State<DeviceStep> {
       });
     }
     timer = Timer(const Duration(seconds: 3), _poll);
+  }
+
+  Future<void> _download() async {
+    setState(() {
+      downloading = 0;
+      error = null;
+    });
+    try {
+      await PlatformTools.download(
+        progress: (p) => mounted ? setState(() => downloading = p) : null,
+      );
+      if (!mounted) return;
+      tools = true;
+      setState(() => checking = true);
+      _poll();
+    } catch (e) {
+      if (mounted) setState(() => error = '$e');
+    } finally {
+      if (mounted) setState(() => downloading = null);
+    }
   }
 
   Future<void> _toFastboot() async {
@@ -160,8 +192,41 @@ class _DeviceStepState extends State<DeviceStep> {
             ),
           ),
         ),
+        if (tools == false) ...[
+          const Notice(
+            icon: Icons.download_outlined,
+            text:
+                'Para falar com o aparelho, o instalador usa o fastboot e o adb do '
+                'Android SDK Platform-Tools, da Google (cerca de 8 MB, baixado de '
+                'dl.google.com e conferido pelo SHA-256, sob os termos do Android '
+                'SDK).',
+          ),
+          const SizedBox(height: 12),
+          if (downloading != null)
+            LinearProgressIndicator(value: downloading)
+          else
+            FilledButton.icon(
+              onPressed: _download,
+              icon: const Icon(Icons.download),
+              label: const Text('Baixar o Platform-Tools'),
+            ),
+        ],
         if (error != null)
           Notice(text: 'Falha na deteccao: $error', error: true),
+        // O bootloader nao traz driver para o Windows; o adb do Android e a rede
+        // RNDIS do Thunder OS costumam funcionar sem nada.
+        if (Platform.isWindows && tools == true && !detection.connected)
+          const Notice(
+            icon: Icons.usb_outlined,
+            text:
+                'No fastboot, o Windows precisa de um driver USB. Se o aparelho '
+                'esta no fastboot e nao aparece aqui: abra o Gerenciador de '
+                'Dispositivos, clique com o botao direito no aparelho com o aviso '
+                'amarelo (Android ou "fastboot"), Atualizar driver, Procurar no '
+                'computador, Escolher de uma lista, "Android Device" e "Android '
+                'Bootloader Interface". Se essa opcao nao existir, instale antes o '
+                'Google USB Driver (developer.android.com/studio/run/win-usb).',
+          ),
         if (detection.mode == 'adb' && detection.detail.isNotEmpty)
           Notice(
             text:

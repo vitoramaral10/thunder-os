@@ -1,0 +1,44 @@
+# Build do instalador para Windows: o Flutter so compila para Windows num host
+# Windows. O pacote leva o catalogue.json (saida do tools/installer-info.sh), que e o
+# que o app le no lugar dos scripts.
+name: installer-windows
+
+on:
+  push:
+    paths: &paths
+      - installer/**
+      - tools/installer-info.sh
+      - tools/common.sh
+      - devices/**
+      - rootfs/profiles/**
+      - .github/workflows/installer-windows.yml
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: installer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.47.7
+      - run: flutter pub get
+      - run: flutter test
+      - run: flutter build windows --release
+      - name: catalogue.json
+        shell: bash
+        working-directory: .
+        run: tools/installer-info.sh > installer/build/windows/x64/runner/Release/catalogue.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thunder-os-installer-windows
+          path: installer/build/windows/x64/runner/Release

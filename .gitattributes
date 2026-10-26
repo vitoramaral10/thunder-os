@@ -1,0 +1,2 @@
+# Scripts do build rodam em bash, inclusive no Git Bash do CI de Windows.
+*.sh text eol=lf

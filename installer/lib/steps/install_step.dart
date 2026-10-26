@@ -31,9 +31,13 @@ class InstallStep extends StatefulWidget {
 }
 
 class _InstallStepState extends State<InstallStep> {
+  // No Windows o app so grava (Backend.install): as etapas de montagem nao aparecem.
   late final List<(String, String)> plan = [
     for (final p in _plan)
-      if (p.$1 != 'flash' || widget.ctx.config.flash) p,
+      if (Platform.isWindows
+          ? p.$1 == 'flash'
+          : p.$1 != 'flash' || widget.ctx.config.flash)
+        p,
   ];
   final states = <String, _State>{};
   final titles = <String, String>{};
@@ -88,7 +92,7 @@ class _InstallStepState extends State<InstallStep> {
       ..createSync(recursive: true);
     logPath = '${dir.path}/install-$stamp.log';
     try {
-      run = await ctx.backend.install(ctx.config.environment(d), logPath!);
+      run = await ctx.backend.install(d, ctx.config.environment(d), logPath!);
       activeInstall.value = run;
     } catch (e) {
       setState(() => failure = 'Nao consegui iniciar o tools/install.sh: $e');
@@ -321,7 +325,7 @@ class _InstallStepState extends State<InstallStep> {
             icon: Icons.celebration_outlined,
             text:
                 'O aparelho esta reiniciando no Thunder OS. Com o cabo ligado: '
-                'ssh ${cfg.user}@172.16.42.1 (o primeiro boot demora mais, porque o '
+                'ssh ${Platform.isWindows ? '<usuario da imagem>' : cfg.user}@172.16.42.1 (o primeiro boot demora mais, porque o '
                 'sistema cresce ate ocupar a particao).',
           ),
         if (finished && !cfg.flash)
