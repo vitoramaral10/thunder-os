@@ -42,7 +42,7 @@ fi
 # O pacote do kernel (linux-<aparelho>) e rapido de refazer e e o que a imagem instala.
 "$t/package-kernel.sh"
 
-step firmware "Firmware da ROM de fabrica"
+step firmware "Firmware do aparelho"
 if [ ${#FIRMWARE_FILES[@]} -eq 0 ]; then
 	echo "::skip"; echo "o aparelho nao precisa"
 elif [ -n "${THUNDER_ROM:-}" ]; then
@@ -56,11 +56,10 @@ elif [ -n "${THUNDER_ROM:-}" ]; then
 		"$t/extract-firmware.sh" "$THUNDER_ROM"
 		echo "$rom_stamp" > "$WORK/firmware.stamp"
 	fi
-else
-	for f in "${FIRMWARE_REQUIRED[@]}" "${INITRAMFS_FIRMWARE[@]}"; do
-		[ -s "$FIRMWARE/$f" ] || { echo "sem ROM (THUNDER_ROM) e sem $f em $FIRMWARE" >&2; exit 1; }
-	done
+elif [ -n "$(ls -A "$FIRMWARE" 2>/dev/null)" ]; then
 	echo "usando o que ja esta em $FIRMWARE"
+else
+	echo "::skip"; echo "sem ROM: o aparelho copia o firmware da particao super no 1o boot"
 fi
 
 step rootfs "Sistema (Arch Linux ARM)"

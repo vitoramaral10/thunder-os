@@ -100,6 +100,23 @@ echo "$THUNDER_HOSTNAME" > /etc/hostname
 # boot.img da imagem e montado no PC (tools/build-boot.sh).
 mkdir -p /usr/lib/firmware
 cp -a "$S/firmware/." /usr/lib/firmware/
+# O aparelho copia o firmware (e o chroot do GPS) da super de fabrica no 1o boot
+# (thunder-firmware-seed): a imagem sem firmware e distribuivel; numa feita com a ROM, a
+# copia do proprio aparelho substitui a do build.
+if [ ${#FIRMWARE_FILES[@]} -gt 0 ] || [ ${#GNSS_ROM_FILES[@]} -gt 0 ]; then
+	{
+		echo "# Gerado pelo rootfs/configure.sh (do device.sh). Lido pelo firmware-seed."
+		declare -p FIRMWARE_ROM_PARTITION FIRMWARE_ROM_DIRS FIRMWARE_FILES FIRMWARE_REQUIRED \
+			MODEM_ROM_TREES GNSS_ROM_FILES
+	} > /usr/lib/thunder/firmware-seed.conf
+	systemctl enable thunder-firmware-seed.service
+fi
+# Dados so leitura do modem da ROM (MODEM_ROM_TREES; thunder-modemd MODEM_RO_ROOT).
+if [ -d "$S/modem-ro" ]; then
+	mkdir -p /usr/share/thunder-modem/vendor
+	cp -a "$S/modem-ro/." /usr/share/thunder-modem/vendor/
+	chown -R root:root /usr/share/thunder-modem
+fi
 THUNDER_IMAGE_BUILD=1 pacman -U --noconfirm --disable-sandbox "$S"/packages/kernel/*.pkg.tar.*
 
 # Usuarios: root e $THUNDER_USER com a senha provisoria (trocar com passwd), chave SSH.

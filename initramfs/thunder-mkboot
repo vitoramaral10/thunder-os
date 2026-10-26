@@ -32,8 +32,15 @@ install -Dm644 "$root/etc/thunder/device" "$stage/etc/thunder/device"
 # Estatico: no resgate, "thunder-reboot bootloader" volta ao fastboot sem botao.
 install -Dm755 "$root/usr/local/bin/thunder-reboot" "$stage/bin/thunder-reboot"
 # Driver built-in que pede firmware no probe, antes do switch_root.
+# Na imagem sem firmware ele ainda nao existe: o driver o pede de novo depois que o
+# thunder-firmware-seed o copia (o NT36672C recarrega a cada resume), e o proximo
+# boot.img feito no aparelho ja o leva.
 for f in "${INITRAMFS_FIRMWARE[@]}"; do
-	install -Dm644 "$root/usr/lib/firmware/$f" "$stage/lib/firmware/$f"
+	if [ -s "$root/usr/lib/firmware/$f" ]; then
+		install -Dm644 "$root/usr/lib/firmware/$f" "$stage/lib/firmware/$f"
+	else
+		echo "aviso: sem $f no initramfs" >&2
+	fi
 done
 mkdir -p "$stage"/{dev,proc,sys,run,tmp,newroot}
 # cpio newc escrito aqui mesmo (Python, que o mkbootimg ja exige): o conteudo vem dos

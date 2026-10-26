@@ -42,9 +42,15 @@ pac="pacman --noconfirm --needed --disable-sandbox"
 
 KERNEL_PKG=$OUT/linux-$DEVICE.pkg.tar.zst
 [ -s "$KERNEL_PKG" ] || { echo "sem o pacote do kernel: rode tools/build-kernel.sh e tools/package-kernel.sh" >&2; exit 1; }
-for f in "${FIRMWARE_REQUIRED[@]}" "${INITRAMFS_FIRMWARE[@]}"; do
-	[ -s "$FIRMWARE/$f" ] || { echo "sem $f em $FIRMWARE (devices/$DEVICE/docs)" >&2; exit 1; }
-done
+# Sem firmware nenhum a imagem e distribuivel: o aparelho copia o da super de fabrica no
+# 1o boot (thunder-firmware-seed). Com firmware, ele tem de estar completo.
+if [ -n "$(ls -A "$FIRMWARE" 2>/dev/null)" ]; then
+	for f in "${FIRMWARE_REQUIRED[@]}" "${INITRAMFS_FIRMWARE[@]}"; do
+		[ -s "$FIRMWARE/$f" ] || { echo "sem $f em $FIRMWARE (devices/$DEVICE/docs)" >&2; exit 1; }
+	done
+elif [ ${#FIRMWARE_FILES[@]} -gt 0 ]; then
+	echo "sem firmware em $FIRMWARE: o aparelho copia o da super de fabrica no 1o boot"
+fi
 [ -z "$AUTHORIZED_KEYS" ] || [ -s "$AUTHORIZED_KEYS" ] || { echo "sem chave SSH em $AUTHORIZED_KEYS" >&2; exit 1; }
 [[ $THUNDER_USER =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] && [ "$THUNDER_USER" != root ] ||
 	{ echo "usuario invalido: $THUNDER_USER" >&2; exit 1; }
@@ -200,7 +206,7 @@ stage_config=$(
 		THUNDER_PASSWORD THUNDER_ROOT_PASSWORD THUNDER_LOCALE THUNDER_TIMEZONE \
 		THUNDER_HOSTNAME THUNDER_PROFILE WIFI_INTERFACE THUNDER_WIFI_SSID \
 		THUNDER_WIFI_PASSWORD WMT_HIF WMT_WIFI_NVRAM WMT_BT_ADDR ZRAM_SIZE ZRAM_ALGORITHM \
-		SWAPFILE_SIZE; do
+		SWAPFILE_SIZE FIRMWARE_ROM_PARTITION; do
 		echo "$v=$(q "${!v}")"
 	done
 	qa() { local x; for x in "$@"; do printf '%s ' "$(q "$x")"; done; }
@@ -215,9 +221,12 @@ stage_config=$(
 	echo "WMT_WIFI_MODULES=($(qa "${WMT_WIFI_MODULES[@]}"))"
 	echo "WMT_ROM_PATCHES=($(qa "${WMT_ROM_PATCHES[@]}"))"
 	echo "WMT_BT_MODULES=($(qa "${WMT_BT_MODULES[@]}"))"
+	for a in FIRMWARE_ROM_DIRS FIRMWARE_FILES FIRMWARE_REQUIRED MODEM_ROM_TREES GNSS_ROM_FILES; do
+		declare -n arr=$a; echo "$a=($(qa "${arr[@]}"))"; unset -n arr
+	done
 )
 LOCAL_DIRS=$(for p in "${LOCAL_PACKAGES[@]}"; do printf '%s=%s\n' "$p" "${PKG_DIR[$p]}"; done)
-export stage_config THUNDER_PROFILE LOCAL_DIRS REBOOT_DIR repo KVER KERNEL_PKG FIRMWARE AUTHORIZED_KEYS DEVICE_DIR
+export stage_config THUNDER_PROFILE LOCAL_DIRS REBOOT_DIR repo KVER KERNEL_PKG FIRMWARE MODEM_RO AUTHORIZED_KEYS DEVICE_DIR
 userns bash -c 'set -e
 	rm -rf "${S:?}"; mkdir -p "$S/packages/kernel" "$S/firmware"
 	cp -a "$repo/rootfs/overlay" "$S/overlay"

@@ -90,6 +90,23 @@ this repository.
 
 ## Installing them
 
+**From the phone itself (the default):** the installation only writes `boot`,
+`vbmeta` and `userdata`, so the factory `super` partition stays intact. On the
+first boot `thunder-firmware-seed` maps the active slot's `vendor` out of
+`super` (a read-only dm-linear from the `lpdump` extents), mounts it
+`ro,noload` in a private namespace and copies the same files to the same
+places as below, plus the GPS chroot (`GNSS_ROM_FILES`: `mnld`, its config and
+the closure of its libraries, from `vendor`, `system` and two APEX images). An
+image built without firmware carries none, so it can be distributed. Checked
+on the phone on 2026-10-26: the 17 firmware files, the 189 modem files and the
+48 files of the GPS chroot came out byte-identical to the ones taken from the
+factory ROM.
+The touch firmware is not in that first initramfs; the driver requests it again
+after the copy (14 s after probe, and on every resume), and the next boot.img
+built on the phone carries it.
+
+**From a factory ROM on the PC:**
+
 [`tools/build-rootfs.sh`](../../../tools/build-rootfs.sh) takes the files from
 `$FIRMWARE` (default `build/xiaomi-thunder/firmware`) and installs them in
 `/usr/lib/firmware` of the root filesystem. The touch firmware is also staged

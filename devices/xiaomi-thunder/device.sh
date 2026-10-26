@@ -80,6 +80,26 @@ MODEM_ROM_TREES=(/etc/mdota:mdota /etc/md:etc_md)
 # GPS: thunder-mediatek-gnss (mnld da ROM num chroot, NMEA para gpsd e GeoClue). Fora de
 # DEVICE_SERVICES de proposito: o radio fica ligado enquanto a unit roda, entao liga sob
 # demanda (systemctl start thunder-gnss). Propriedades em overlay/etc/thunder/gnss.props.
+# O chroot do mnld (/usr/lib/thunder/gnss/root) vem da super no 1o boot (firmware-seed):
+# "<origem> <pasta de destino> <caminhos...>", origem = particao ou particao:<apex dentro
+# dela>. Fecho das libs do mnld nesta ROM (build/xiaomi-thunder/gps-research/resolve.py):
+# vendor > VNDK v31 > bionic do runtime > system.
+GNSS_ROM_FILES=(
+	"vendor /vendor/bin /bin/mnld"
+	"vendor /vendor/etc /etc/MNL_Config.xml /etc/gnss"
+	"system:/system/apex/com.android.runtime.apex /system/bin /bin/linker64"
+	"system:/system/apex/com.android.runtime.apex /system/lib64 /lib64/bionic/libc.so
+		/lib64/bionic/libm.so /lib64/bionic/libdl.so /lib64/bionic/libdl_android.so"
+	"vendor /system/lib64 /lib64/libmnl.so /lib64/libnvram.so /lib64/libladder.so /lib64/libDR.so
+		/lib64/android.frameworks.sensorservice@1.0.so /lib64/android.hardware.sensors@1.0.so
+		/lib64/libhidltransport.so /lib64/libsensorndkbridge.so /lib64/libnvram_sec.so"
+	"system_ext:/apex/com.android.vndk.v31.apex /system/lib64 /lib64/libcurl.so /lib64/libcutils.so
+		/lib64/libcrypto.so /lib64/libssl.so /lib64/libz.so /lib64/libhardware.so /lib64/libutils.so
+		/lib64/libhidlbase.so /lib64/libc++.so /lib64/libbase.so /lib64/libprocessgroup.so
+		/lib64/libunwindstack.so /lib64/liblzma.so"
+	"system /system/lib64 /system/lib64/liblog.so /system/lib64/libvndksupport.so
+		/system/lib64/libcgrouprc.so"
+)
 DEVICE_LOCAL_PACKAGES=(thunder-mediatek-wmt thunder-modemd thunder-mediatek-gnss)
 # Audio: o UCM do cartao (overlay/usr/share/alsa/ucm2/conf.d/mt6833-mt6359) e as regras
 # do WirePlumber (overlay/usr/share/wireplumber). alsa-utils: a regra do udev roda o
