@@ -148,16 +148,27 @@ kernel_inputs() {
 }
 
 # Baixa um pacote do Arch do host pelo nome (o host precisa ser Arch ou derivado:
-# usa `pacman -Sp` so para resolver a URL; nada e instalado).
+# usa `pacman -Sp` so para resolver a URL; nada e instalado). O mirror nao e confiavel: o
+# que autentica o pacote e a assinatura do empacotador, conferida no chaveiro do pacman do
+# host com a mesma exigencia de confianca do pacman (pacman-key --verify). Sem ela, o
+# arquivo e apagado e a funcao falha: quem chama executa o conteudo (qemu, gcc).
 fetch_host_pkg() {
-	local name=$1 url
+	local name=$1 url f got
 	# -dd: so o pacote pedido (sem -dd o -p lista as dependencias antes dele).
-	url=$(pacman -Sddp --print-format '%l' "$name" 2>/dev/null | grep -E '^(https?|ftp)://' | head -n 1)
-	[ -n "$url" ] || { echo "nao achei a URL do pacote $name" >&2; return 1; }
+	url=$(pacman -Sddp --print-format '%l' "$name" 2>/dev/null | grep -E '^https://' | head -n 1)
+	[ -n "$url" ] || { echo "nao achei a URL https do pacote $name" >&2; return 1; }
+	f=$BUILD/dl/${url##*/}
+	rm -f "$f" "$f.sig"
 	# Alguns mirrors recusam (HTTP 418) quem nao se apresenta como pacman.
-	curl -fsSL -A 'pacman/7.0.0 (Linux x86_64) libalpm/15.0.0' \
-		-o "$BUILD/dl/${url##*/}" "$url" || return 1
-	echo "$BUILD/dl/${url##*/}"
+	curl -fsSL --proto '=https' --proto-redir '=https' -A 'pacman/7.0.0 (Linux x86_64) libalpm/15.0.0' \
+		-o "$f" "$url" -o "$f.sig" "$url.sig" || { rm -f "$f" "$f.sig"; return 1; }
+	got=$(bsdtar -xOf "$f" .PKGINFO 2>/dev/null | sed -n 's/^pkgname = //p')
+	if ! pacman-key --verify "$f.sig" "$f" >/dev/null 2>&1 || [ "$got" != "$name" ]; then
+		rm -f "$f" "$f.sig"
+		echo "pacote $name sem assinatura valida no chaveiro do pacman (ou e outro pacote: '$got')" >&2
+		return 1
+	fi
+	echo "$f"
 }
 
 # Root do user namespace, com o mapa de subuid completo, sem sudo.

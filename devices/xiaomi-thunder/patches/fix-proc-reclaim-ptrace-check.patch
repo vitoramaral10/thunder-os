@@ -1,0 +1,42 @@
+From: thunder
+Subject: [PATCH] proc: require ptrace access to write /proc/<pid>/reclaim
+
+CONFIG_PROCESS_RECLAIM (selected by the MediaTek ANDROID_DEFAULT_SETTING
+bundle) creates /proc/<pid>/reclaim with mode 0222, and reclaim_write() walks
+the target's VMAs and swaps out its anonymous pages without checking who is
+writing. On Android only the SELinux policy limited the node to lmkd and
+system_server; Thunder OS loads no policy, so any uid could evict the memory
+of root daemons, PID 1 and other users' processes (security audit run 1:
+uid 1000 moved 67 MiB of a root process to swap with one write).
+
+Make the node owner-writable only and require PTRACE_MODE_ATTACH_FSCREDS on
+the target, the rule upstream uses for process_madvise(MADV_PAGEOUT). The
+in-kernel RTMM user calls the reclaim helpers directly and is not affected.
+Thunder-specific; no upstream equivalent (the interface never went upstream).
+
+--- a/fs/proc/base.c
++++ b/fs/proc/base.c
+@@ -3018,7 +3018,7 @@
+ 	REG("mountinfo",  S_IRUGO, proc_mountinfo_operations),
+ 	REG("mountstats", S_IRUSR, proc_mountstats_operations),
+ #ifdef CONFIG_PROCESS_RECLAIM
+-	REG("reclaim", 0222, proc_reclaim_operations),
++	REG("reclaim", S_IWUSR, proc_reclaim_operations),
+ #endif
+ #ifdef CONFIG_PROC_PAGE_MONITOR
+ 	REG("clear_refs", S_IWUSR, proc_clear_refs_operations),
+--- a/fs/proc/task_mmu.c
++++ b/fs/proc/task_mmu.c
+@@ -1850,6 +1850,12 @@
+ 	if (!task)
+ 		return -ESRCH;
+ 
++	/* Mesma regra do process_madvise() upstream: quem escreve precisa poder ptrace o alvo. */
++	if (!ptrace_may_access(task, PTRACE_MODE_ATTACH_FSCREDS)) {
++		put_task_struct(task);
++		return -EACCES;
++	}
++
+ 	mm = get_task_mm(task);
+ 	if (mm) {
+ 		struct mm_walk reclaim_walk = {

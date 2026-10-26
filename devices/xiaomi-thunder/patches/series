@@ -69,3 +69,7 @@ fix-ccci-md1-power-off-unused.patch
 fix-ccci-mem-dump-iomem.patch
 # thunder modem: ttyC0 (canal AT) como TTY de verdade, para o ModemManager
 add-ccci-tty-at-port.patch
+# thunder seguranca (auditoria run 1): /proc/<pid>/reclaim so com acesso de ptrace
+fix-proc-reclaim-ptrace-check.patch
+# thunder seguranca (auditoria run 1): FE hostless sem acesso a memif fora do vetor
+fix-mtk-afe-hostless-memif-bounds.patch

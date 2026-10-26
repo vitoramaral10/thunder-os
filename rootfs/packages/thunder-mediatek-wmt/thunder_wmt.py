@@ -114,6 +114,11 @@ DRIVER_FALLBACK_OUI = b"\x00\x08\x22"   # wlanUpdateNetworkAddress: 00:08:22 + s
 # --- ethtool (MAC permanente: o gen4m copia o MAC do probe em perm_addr) ------------
 SIOCETHTOOL = 0x8946
 ETHTOOL_GPERMADDR = 0x20
+SIOCGIFFLAGS = 0x8913
+SIOCSIFFLAGS = 0x8914
+IFF_UP = 0x1
+IFREQ_FLAGS = struct.Struct("16sH22x")     # struct ifreq: ifr_name + ifr_flags (40 bytes)
+SYS_NET = "/sys/class/net"
 
 # mgmt do BlueZ (doc/mgmt-api.txt): socket HCI no canal de controle.
 BTPROTO_HCI = 1
@@ -781,7 +786,8 @@ def cmd_wifi_on(cfg: Config) -> int:
     wait_for_path(DEV_WIFI, NODE_TIMEOUT, "wmt_chrdev_wifi")
     sysfs = f"/sys/class/net/{cfg.wifi_interface}"
     expected = None
-    if os.path.exists(sysfs):
+    registered = os.path.exists(sysfs)
+    if registered:
         # O gen4m registra o netdev no 1o probe e o mantem entre power-off/on (so fica
         # dormant): a interface existir nao quer dizer radio ligado. A NVRAM e enviada
         # sempre (fica no driver para o proximo probe) e o veredito sai sempre: ele le o
@@ -815,9 +821,55 @@ def cmd_wifi_on(cfg: Config) -> int:
         raise Failure(EX_IOERR, f"Wi-Fi powered on but {cfg.wifi_interface} never appeared") from None
     log(LOG_INFO, f"Wi-Fi on: {cfg.wifi_interface} present "
                   f"{(time.monotonic() - start) * 1000:.0f} ms after the power-on request")
+    if registered:
+        # Religamento: o wifi-off derrubou o link, e o NetworkManager nao levanta de novo
+        # uma interface que outro derrubou. No 1o probe ela nasce e o NM a levanta.
+        interface_up(cfg.wifi_interface)
     if expected is not None:
         verify_nvram(cfg.wifi_interface, expected)
     return EX_OK
+
+
+def wireless_interfaces(sys_net: str = SYS_NET) -> list[str]:
+    try:
+        names = sorted(os.listdir(sys_net))
+    except OSError:
+        return []
+    return [n for n in names if os.path.exists(os.path.join(sys_net, n, "wireless"))]
+
+
+def _ifreq_flags(sock: socket.socket, iface: str, flags: int | None = None) -> int:
+    req = IFREQ_FLAGS.pack(iface.encode(), flags or 0)
+    out = fcntl.ioctl(sock.fileno(), SIOCGIFFLAGS if flags is None else SIOCSIFFLAGS, req)
+    return IFREQ_FLAGS.unpack(out)[1]
+
+
+def interfaces_down(ifaces: list[str]) -> None:
+    # O gen4m guarda o netdev entre power cycles, mas o func_off libera o adaptador por
+    # baixo dele: um "link down" depois disso (o NetworkManager, um ip link) entra no
+    # wlanStop -> aisFsmStateAbort_SCAN com o adaptador solto e da oops (visto em
+    # 2026-10-13, no pstore). Derrubar antes, com o radio ainda ligado, e o caminho que o
+    # driver conhece. Sem ordem com o NetworkManager no desligamento, so isso cobre.
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        for iface in ifaces:
+            try:
+                flags = _ifreq_flags(sock, iface)
+                if flags & IFF_UP:
+                    _ifreq_flags(sock, iface, flags & ~IFF_UP)
+                    log(LOG_INFO, f"{iface} down before the power-off")
+            except OSError as e:
+                log(LOG_WARNING, f"cannot bring {iface} down: {e.strerror}")
+
+
+def interface_up(iface: str) -> None:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        try:
+            flags = _ifreq_flags(sock, iface)
+            if not flags & IFF_UP:
+                _ifreq_flags(sock, iface, flags | IFF_UP)
+                log(LOG_INFO, f"{iface} up again")
+        except OSError as e:
+            log(LOG_WARNING, f"cannot bring {iface} up: {e.strerror}")
 
 
 def cmd_wifi_off(_cfg: Config | None) -> int:
@@ -825,6 +877,7 @@ def cmd_wifi_off(_cfg: Config | None) -> int:
     if not os.path.exists(DEV_WIFI):
         log(LOG_INFO, f"{DEV_WIFI} absent; nothing to power off")
         return EX_OK
+    interfaces_down(wireless_interfaces())
     wifi_power(False)
     # A interface fica (o gen4m registra o netdev uma vez e so o poe em dormant).
     log(LOG_INFO, "Wi-Fi off")
@@ -1005,10 +1058,38 @@ def cmd_bt_on(cfg: Config) -> int:
     return EX_OK
 
 
+def radio_serialized(cmd):
+    """wifi-on e wifi-off um de cada vez, tambem fora do systemd (que ja serializa os jobs
+    da unit): um wifi-on que levante o link entre o link down e o func_off de um wifi-off
+    poria um scan no adaptador que o func_off libera, o oops que o wifi-off evita. O lock
+    e no proprio script, so leitura: funciona sob ProtectSystem=strict. O script e 0700
+    (PKGBUILD): flock nao olha o modo de abertura, entao um arquivo legivel por outro uid
+    deixaria esse uid segurar o lock e travar o radio. A espera tem prazo (RADIO_WAIT),
+    abaixo do TimeoutStopSec da unit, para falhar com codigo claro em vez de ser morta."""
+    def run(cfg):
+        with open(RADIO_LOCK, "rb") as f:
+            deadline = time.monotonic() + RADIO_WAIT
+            while True:
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        log(LOG_ERR, f"radio lock busy for {RADIO_WAIT:g} s; giving up")
+                        return EX_UNAVAILABLE
+                    time.sleep(0.2)
+            return cmd(cfg)
+    return run
+
+
+RADIO_LOCK = os.path.realpath(__file__)
+# Abaixo do TimeoutStopSec=30 da thunder-wmt-wifi.
+RADIO_WAIT = 25.0
+
 COMMANDS = {
     "connsys": cmd_connsys,
-    "wifi-on": cmd_wifi_on,
-    "wifi-off": cmd_wifi_off,
+    "wifi-on": radio_serialized(cmd_wifi_on),
+    "wifi-off": radio_serialized(cmd_wifi_off),
     "nvram-check": cmd_nvram_check,
     "bt-on": cmd_bt_on,
 }

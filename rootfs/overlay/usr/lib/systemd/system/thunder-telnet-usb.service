@@ -1,6 +1,7 @@
 # Saida de emergencia: telnet COM login (/usr/bin/login, PAM "login"), preso ao endereco
-# do cabo USB (172.16.42.1); nunca escuta no Wi-Fi. Existe porque o SSH pelo RNDIS ja
-# falhou neste tipo de enlace. Mesmas garantias do thunder-usb-network.service (ver la).
+# do cabo USB (172.16.42.1) e filtrado por IPAddressAllow= (so pares do cabo). Existe
+# porque o SSH pelo RNDIS ja falhou neste tipo de enlace. Mesmas garantias do
+# thunder-usb-network.service (ver la).
 # So sobe no emergency e no rescue, ou pelo thunder-telnet-fallback quando o SSH fica fora
 # do ar: no boot normal a porta 23 fica fechada. Sem IgnoreOnIsolate: voltar ao
 # multi-user (isolate) derruba o telnet junto.
@@ -19,6 +20,12 @@ ExecStart=/usr/bin/busybox telnetd -F -b 172.16.42.1:23 -l /usr/bin/login
 Restart=always
 RestartSec=3
 OOMScoreAdjust=-900
+# So o cabo: o bind em 172.16.42.1 nao basta (o Linux entrega pacote para qualquer endereco
+# local vindo de qualquer interface, e um host da LAN do Wi-Fi alcancaria a porta com uma
+# rota para 172.16.42.1). O filtro BPF por cgroup (CONFIG_CGROUP_BPF) aceita so pares do
+# cabo; para TCP isso basta, porque a resposta a um endereco forjado sai pelo cabo.
+IPAddressDeny=any
+IPAddressAllow=172.16.42.0/24
 
 [Install]
 WantedBy=emergency.target rescue.target
