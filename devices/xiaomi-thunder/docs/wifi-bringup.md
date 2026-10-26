@@ -604,5 +604,5 @@ off.
   powered off; DEVAPC flagged it and WMT ran a whole-chip reset. It recovers
   on its own when the launcher is up; the audio side is not fixed.
 - Iterating on a module-only change does **not** need a flash: the `.ko` can be
-  taken from `build/xiaomi-thunder/kernel/lib/modules/4.19.191-perf` and copied onto the
+  taken from `build/xiaomi-thunder/kernel/lib/modules/$KVER` and copied onto the
   device, as long as vermagic matches. See [building.md](../../../docs/building.md).

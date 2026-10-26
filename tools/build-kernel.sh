@@ -53,7 +53,11 @@ prepare() {
 		grep -v '^#' "$DEVICE_DIR/patches/series" | while read -r p; do
 			[ -n "$p" ] || continue
 			echo "patch: $p"
-			patch -p1 -d "$src" < "$DEVICE_DIR/patches/$p"
+			# .xz: patch grande demais para o repo sem compressao (atualizacao do ACK).
+			case $p in
+			*.xz) xz -dc "$DEVICE_DIR/patches/$p" | patch -p1 -s -d "$src" ;;
+			*) patch -p1 -d "$src" < "$DEVICE_DIR/patches/$p" ;;
+			esac
 		done
 	fi
 

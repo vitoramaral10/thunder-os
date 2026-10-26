@@ -13,7 +13,7 @@ DEVICE_STATUS=boots
 # Kernel: 4.19 da Xiaomi no commit fixado, com o enxerto de conectividade e os patches.
 KERNEL_URL=https://github.com/MiCode/Xiaomi_Kernel_OpenSource/archive/a40ceab8943703f33e935cb0b86d0f69aa2044dd.tar.gz
 KERNEL_SHA512=d0aa0cd26632a4ce272eea248c3db0003ba61c525814bc1d7aa83f14860f55a7b7e6cb15153154be6319936bcb4171aaed3de913e09d577623a1c5c55893a1df
-KERNEL_VERSION=4.19.191-perf
+KERNEL_VERSION=4.19.325-perf
 KERNEL_CONFIG=kernel-config
 # O LK deste aparelho so aceita kernel comprimido.
 KERNEL_IMAGE=Image.gz

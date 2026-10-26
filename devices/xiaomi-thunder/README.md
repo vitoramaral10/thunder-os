@@ -4,7 +4,7 @@
 |---|---|
 | Codename | `thunder` (also sold as `light`) |
 | SoC | MediaTek MT6833 (Dimensity 700), Mali-G57 MC2 |
-| Kernel | Xiaomi vendor 4.19.191 with our patches ([docs/kernel.md](docs/kernel.md)) |
+| Kernel | Xiaomi vendor 4.19.191 brought to 4.19.325, with our patches ([docs/kernel.md](docs/kernel.md)) |
 | Boot | boot.img header v2, A/B, fastboot, AVB disabled |
 | Root partition | `userdata` (ext4 written directly, no nested GPT) |
 | Status | **boots** with systemd; SSH over USB; on-screen profiles `console` and `phosh` are experimental |
