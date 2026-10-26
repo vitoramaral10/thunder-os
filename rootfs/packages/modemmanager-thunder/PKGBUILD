@@ -99,9 +99,9 @@ build() {
 }
 
 check() {
-	# So os testes do plugin novo e das regras do udev: a suite inteira sobe o daemon
-	# num D-Bus de teste, lento e fragil no chroot emulado.
-	meson test -C build --print-errorlogs test-plugin-mtk-ccci test-udev-rules
+	# So os testes do plugin novo, dos parsers (CEREG modo 3) e das regras do udev: a
+	# suite inteira sobe o daemon num D-Bus de teste, lento e fragil no chroot emulado.
+	meson test -C build --print-errorlogs test-plugin-mtk-ccci test-modem-helpers test-udev-rules
 }
 
 package() {
