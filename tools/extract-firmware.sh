@@ -76,9 +76,11 @@ if [ ${#MODEM_ROM_TREES[@]} -gt 0 ]; then
 			debugfs -R "rdump \"$src\" \"$tmp/trees\"" "$tmp/part.img" >/dev/null 2>&1 || true
 			got=$tmp/trees/$(basename "$src") ;;
 		*)
-			got=$tmp/tree$src ;;
+			# Mesma contencao do get(): um componente do meio que e link nao sai da arvore.
+			got=$(realpath -e -- "$tmp/tree$src" 2>/dev/null) || got=
+			case $got in "$tree"/*) ;; *) got= ;; esac ;;
 		esac
-		[ -d "$got" ] && [ ! -L "$got" ] || { echo "aviso: $src ausente na ROM" >&2; continue; }
+		[ -n "$got" ] && [ -d "$got" ] && [ ! -L "$got" ] || { echo "aviso: $src ausente na ROM" >&2; continue; }
 		cp -r --no-dereference -- "$got" "$MODEM_RO/$name"
 		find "$MODEM_RO/$name" -type l -delete
 		echo "  $src -> modem-ro/$name ($(find "$MODEM_RO/$name" -type f | wc -l) arquivos)"
