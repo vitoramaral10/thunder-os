@@ -284,12 +284,33 @@ class WifiOffTest(unittest.TestCase):
                 mock.patch.object(t, "DEV_WIFI", node.name), \
                 mock.patch.object(t, "wireless_interfaces", return_value=["wlan0"]), \
                 mock.patch.object(t, "interfaces_down",
-                                  side_effect=lambda i: order.append(("down", i))), \
+                                  side_effect=lambda i: order.append(("down", i)) or []), \
                 mock.patch.object(t, "wifi_power",
                                   side_effect=lambda on: order.append(("power", on))), \
                 mock.patch.object(t, "log"):
             self.assertEqual(t.cmd_wifi_off(None), t.EX_OK)
         self.assertEqual(order, [("down", ["wlan0"]), ("power", False)])
+
+    def test_radio_stays_on_while_an_interface_is_stuck_up(self):
+        def ioctl(_fd, req, buf):
+            name, _ = t.IFREQ_FLAGS.unpack(buf)
+            if req == t.SIOCSIFFLAGS:
+                raise OSError(16, "busy")
+            return t.IFREQ_FLAGS.pack(name, 0x1203)
+
+        with mock.patch.object(t.fcntl, "ioctl", side_effect=ioctl), \
+                mock.patch.object(t, "log"):
+            self.assertEqual(t.interfaces_down(["wlan0"]), ["wlan0"])
+        power = []
+        with tempfile.NamedTemporaryFile() as node, \
+                mock.patch.object(t, "DEV_WIFI", node.name), \
+                mock.patch.object(t, "wireless_interfaces", return_value=["wlan0"]), \
+                mock.patch.object(t, "interfaces_down", return_value=["wlan0"]), \
+                mock.patch.object(t, "wifi_power", side_effect=power.append), \
+                mock.patch.object(t, "log"):
+            with self.assertRaises(t.Failure):
+                t.cmd_wifi_off(None)
+        self.assertEqual(power, [])
 
     def test_radio_commands_hold_the_lock(self):
         seen = []

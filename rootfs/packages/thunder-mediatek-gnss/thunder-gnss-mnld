@@ -13,7 +13,8 @@ for n in null zero urandom random stpgps stpgps2 gps_emi; do
 	touch "$ROOT/dev/$n"
 	mount --bind "/dev/$n" "$ROOT/dev/$n"
 done
-mkdir "$ROOT/dev/socket"
+# A ponte (thunder-gnss, Type=simple) cria o socket depois dos imports: aqui pode chegar antes.
+mkdir -p "$RUN/socket" "$ROOT/dev/socket"
 mount --bind "$RUN/socket" "$ROOT/dev/socket"
 touch "$ROOT/dev/__properties__"
 mount --bind -o ro "$RUN/properties" "$ROOT/dev/__properties__"

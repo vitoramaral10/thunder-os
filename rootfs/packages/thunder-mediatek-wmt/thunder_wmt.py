@@ -844,12 +844,14 @@ def _ifreq_flags(sock: socket.socket, iface: str, flags: int | None = None) -> i
     return IFREQ_FLAGS.unpack(out)[1]
 
 
-def interfaces_down(ifaces: list[str]) -> None:
+def interfaces_down(ifaces: list[str]) -> list[str]:
     # O gen4m guarda o netdev entre power cycles, mas o func_off libera o adaptador por
     # baixo dele: um "link down" depois disso (o NetworkManager, um ip link) entra no
     # wlanStop -> aisFsmStateAbort_SCAN com o adaptador solto e da oops (visto em
     # 2026-10-13, no pstore). Derrubar antes, com o radio ainda ligado, e o caminho que o
     # driver conhece. Sem ordem com o NetworkManager no desligamento, so isso cobre.
+    # Devolve as que continuam de pe: com elas, desligar o radio e o caminho do oops.
+    stuck = []
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         for iface in ifaces:
             try:
@@ -859,6 +861,12 @@ def interfaces_down(ifaces: list[str]) -> None:
                     log(LOG_INFO, f"{iface} down before the power-off")
             except OSError as e:
                 log(LOG_WARNING, f"cannot bring {iface} down: {e.strerror}")
+                try:
+                    if _ifreq_flags(sock, iface) & IFF_UP:
+                        stuck.append(iface)
+                except OSError:
+                    pass    # sumiu: nada a derrubar
+    return stuck
 
 
 def interface_up(iface: str) -> None:
@@ -877,7 +885,9 @@ def cmd_wifi_off(_cfg: Config | None) -> int:
     if not os.path.exists(DEV_WIFI):
         log(LOG_INFO, f"{DEV_WIFI} absent; nothing to power off")
         return EX_OK
-    interfaces_down(wireless_interfaces())
+    stuck = interfaces_down(wireless_interfaces())
+    if stuck:
+        raise Failure(EX_IOERR, f"{', '.join(stuck)} still up; radio left on (retry the stop)")
     wifi_power(False)
     # A interface fica (o gen4m registra o netdev uma vez e so o poe em dormant).
     log(LOG_INFO, "Wi-Fi off")

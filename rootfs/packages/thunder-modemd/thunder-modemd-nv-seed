@@ -8,6 +8,8 @@ src=/run/thunder-modemd-seed
 for p in nvdata protect1 protect2 nvcfg; do
 	dev=/dev/disk/by-partlabel/$p
 	mkdir -p "$src/$p"
+	# No primeiro boot o udev pode nao ter criado o link ainda; o nvcfg e opcional.
+	[ "$p" = nvcfg ] || udevadm wait --timeout=30 "$dev" || true
 	if [ -e "$dev" ]; then
 		mount -t ext4 -o ro,noload,nodev,nosuid,noexec "$dev" "$src/$p"
 	elif [ "$p" != nvcfg ]; then

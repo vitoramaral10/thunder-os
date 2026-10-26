@@ -44,18 +44,20 @@ charger_online() {
 
 # Conexao TCP estabelecida no sshd: cobre tambem o que nao abre sessao no logind.
 remote_session() {
-	local out s
+	local out s r rc=1
 	out=$(timeout 5 ss -Htn state established '( sport = :22 )') || return 2
 	[ -n "$out" ] && return 0
 	out=$(timeout 5 loginctl list-sessions --no-legend) || return 2
 	for s in $(awk '{print $1}' <<< "$out"); do
-		[ "$(timeout 5 loginctl show-session "$s" -p Remote --value)" = yes ] && return 0
+		# Consulta que falhou nao e "nao remota": 2 mantem o inibidor como esta.
+		r=$(timeout 5 loginctl show-session "$s" -p Remote --value) || { rc=2; continue; }
+		[ "$r" = yes ] && return 0
 	done
-	return 1
+	return $rc
 }
 
 audio_playing() {
-	local out o d
+	local out o d st rc=1
 	# PCM "Hostless_*" (sem buffer; a da voz e a Hostless_Speech): ler o status dela com o
 	# stream rodando chama o pointer do AFE da MediaTek, que indexa afe->memif fora do vetor
 	# e derruba o kernel (thunder-speechd, VOICE-AUDIO.md). O info e seguro. A chamada ja
@@ -68,10 +70,11 @@ audio_playing() {
 	timeout 5 busctl --system status org.bluez >/dev/null 2>&1 || return 1
 	out=$(timeout 5 busctl --system --list tree org.bluez) || return 2
 	for o in $(grep -E '/fd[0-9]+$' <<< "$out"); do
-		timeout 5 busctl --system get-property org.bluez "$o" \
-			org.bluez.MediaTransport1 State 2>/dev/null | grep -q '"active"' && return 0
+		st=$(timeout 5 busctl --system get-property org.bluez "$o" \
+			org.bluez.MediaTransport1 State 2>/dev/null) || { rc=2; continue; }
+		[[ $st == *'"active"'* ]] && return 0
 	done
-	return 1
+	return $rc
 }
 
 pacman_running() { [ -e /var/lib/pacman/db.lck ]; }
