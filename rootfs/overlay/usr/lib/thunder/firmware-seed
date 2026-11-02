@@ -11,8 +11,11 @@ FIRMWARE_ROM_PARTITION=vendor FIRMWARE_ROM_DIRS=() FIRMWARE_FILES=() FIRMWARE_RE
 MODEM_ROM_TREES=() GNSS_ROM_FILES=()
 . /usr/lib/thunder/firmware-seed.conf
 dest=${DESTDIR:-}
-super=/dev/disk/by-partlabel/super
-[ -e "$super" ] || { echo "<3>$super ausente: sem ROM de fabrica para copiar" >&2; exit 66; }
+# Roda antes do coldplug do udev, entao ainda nao ha /dev/disk/by-partlabel: a particao
+# vem do sysfs, e o no em /dev do devtmpfs.
+super=$(grep -l '^PARTNAME=super$' /sys/class/block/*/uevent 2>/dev/null | head -n 1)
+super=/dev/$(sed -n 's/^DEVNAME=//p' "${super:-/dev/null}")
+[ -b "$super" ] || { echo "<3>sem a particao super: sem ROM de fabrica para copiar" >&2; exit 66; }
 
 suffix=$(sed -n 's/.*androidboot\.slot_suffix=\(_[ab]\).*/\1/p' /proc/cmdline)
 suffix=${suffix:-_a}
@@ -47,7 +50,9 @@ mount_src() {
 		dir=$work/$part; mkdir -p "$dir"
 		# shortcut: so ext4 (e o desta ROM); EROFS pede fsck.erofs --extract como no
 		# extract-firmware.sh, o kernel 4.19 nao tem EROFS.
-		mount -t ext4 -o ro,noload,nodev,nosuid,noexec "/dev/mapper/$name" "$dir"
+		# /dev/dm-N (devtmpfs), nao /dev/mapper: o link do udev pode nao existir ainda
+		mount -t ext4 -o ro,noload,nodev,nosuid,noexec \
+			"/dev/dm-$(dmsetup info -c --noheadings -o minor "$name")" "$dir"
 		at[$part]=$(realpath -e "$dir")
 	fi
 	if [ -n "$apex" ]; then

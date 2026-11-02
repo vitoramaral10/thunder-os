@@ -1,12 +1,14 @@
-# Copia o firmware proprietario da super de fabrica uma vez, antes de quem o usa.
-# A imagem distribuida nao traz firmware nenhum.
+# Copia o firmware proprietario da super de fabrica uma vez, antes de quem o usa. Antes
+# do coldplug do udev: um driver built-in que pede firmware num evento de coldplug (o
+# toque, pela regra do fb0) ja o encontra no 1o boot. Depois do udevd, que sincroniza o
+# dmsetup. A imagem distribuida nao traz firmware nenhum.
 [Unit]
 Description=Copy the device firmware from the factory super partition
 ConditionPathExists=!/var/lib/thunder/firmware-seeded
 ConditionPathExists=/usr/lib/thunder/firmware-seed.conf
 DefaultDependencies=no
-After=local-fs.target systemd-udevd.service
-Before=sysinit.target thunder-wmt-connsys.service thunder-modemd-nv-seed.service thunder-modemd.service thunder-gnss-mnld.service
+After=systemd-remount-fs.service systemd-udevd.service
+Before=systemd-udev-trigger.service sysinit.target thunder-wmt-connsys.service thunder-modemd-nv-seed.service thunder-modemd.service thunder-gnss-mnld.service
 
 [Service]
 Type=oneshot
